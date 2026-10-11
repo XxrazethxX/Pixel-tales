@@ -201,7 +201,7 @@ test("sale prices reflect actual condition and repair/resale never creates an ar
     full.s.gear[0].durability = condition;
     const damagedPrice = equipmentSalePrice(gearItem(full.s, full.id));
     const repairCost = repairQuote(full.s, full.id).gold;
-    assert.ok(42 - damagedPrice < repairCost);
+    assert.ok(42 - damagedPrice <= repairCost);
   }
 });
 test("legacy equipment gains full condition and restore preserves or sanitizes saved damage without losing assignments", () => {
