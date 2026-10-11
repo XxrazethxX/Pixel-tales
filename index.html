@@ -9,7 +9,10 @@
   </head>
   <body>
     <header>
-      <div class="brand">✦ PIXEL TALES <small>THE ASHEN COMPANY</small></div>
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">✦</span> PIXEL TALES
+        <small>THE ASHEN COMPANY</small>
+      </div>
       <div id="resources"></div>
     </header>
     <main>
@@ -40,6 +43,10 @@
       </section>
       <aside id="drawer" hidden>
         <button id="close-drawer" aria-label="Close panel">Close ×</button>
+        <div class="drawer-heading">
+          <span id="panel-kicker" class="eyebrow"></span>
+          <h2 id="panel-title"></h2>
+        </div>
         <div id="panel"></div>
         <div id="journal" class="journal" hidden>
           <h2>Company journal</h2>

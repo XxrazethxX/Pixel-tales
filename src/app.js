@@ -56,11 +56,25 @@ import {
   companyStanding,
   contractDifficulty,
 } from "./game.js";
+import {
+  worldArtwork,
+  fogArtwork,
+  drawLandmark,
+  drawCharacter,
+  drawMapLabel,
+  drawWagon,
+  drawBattlefield,
+  pixelIcon,
+  portraitArtwork,
+  venueArtwork,
+  partyCoats,
+} from "./art.js";
 let s = fresh();
 try {
   s = restore(JSON.parse(localStorage.getItem("pixel-tales")));
 } catch {}
 const heldKeys = new Set();
+let renderedTab = null;
 let observedLocation = null,
   pendingVillage = null;
 let drawerOpen = false,
@@ -88,7 +102,21 @@ function card(title, body) {
   d.className = "card";
   const heading = document.createElement("h3");
   heading.textContent = title;
-  d.append(heading);
+  const head = document.createElement("div");
+  head.className = "card-heading";
+  const kind = /market|quartermaster/i.test(title)
+    ? "market"
+    : /lantern|roof/i.test(title)
+      ? "tavern"
+      : /blacksmith|blade|forge|steel/i.test(title)
+        ? "sword"
+        : /armor/i.test(title)
+          ? "shield"
+          : /research|knowledge|road|trail|medicine/i.test(title)
+            ? "knowledge"
+            : "contract";
+  head.append(pixelIcon(kind), heading);
+  d.append(head);
   const content = document.createElement("div");
   content.innerHTML = body;
   d.append(content);
@@ -150,6 +178,12 @@ function render() {
   }
   $("resources").innerHTML =
     `<span>◈ ${s.gold} crowns</span><span>▧ ${s.food} rations</span><span>✦ ${s.knowledge} knowledge</span><span>☀ Day ${s.day}</span>${s.battle ? `<span>◆ Valor ${s.battle.valor}/5</span>` : ""}`;
+  [...$("resources").children].forEach((el, i) => {
+    el.textContent = el.textContent.replace(/^[◈▧✦☀◆]\s*/, "");
+    el.prepend(
+      pixelIcon(["crown", "food", "knowledge", "sun", "shield"][i], 16),
+    );
+  });
   if (!s.battle || s.battle.units.find((u) => u.id === selected)?.acted)
     abilityMode = false;
   $("objective").textContent = objective();
@@ -163,6 +197,24 @@ function render() {
       return b;
     }),
   );
+  $("panel-title").textContent =
+    tab === "Town"
+      ? places[s.location].name
+      : {
+          Company: "The Ashen Company",
+          Market: "Market square",
+          Blacksmith: "The forge",
+          Tavern: "The Crooked Lantern",
+          Contracts: "Contract board",
+          Research: "Discoveries",
+          Workshop: "Company stores",
+          Journal: "Road journal",
+        }[tab] || tab;
+  $("panel-kicker").textContent =
+    inVillage &&
+    ["Town", "Market", "Blacksmith", "Tavern", "Contracts"].includes(tab)
+      ? `${places[s.location].name} · SETTLEMENT`
+      : "THE ASHEN COMPANY";
   const panel = $("panel");
   panel.replaceChildren();
   if (tab === "Company") {
@@ -178,6 +230,8 @@ function render() {
         `${p.name} · Level ${p.level}`,
         `<p>${p.role} · ${rankNames[professionRank(p)]} ${p.profession} (${p.professionXP} practice${professionRank(p) < 3 ? ` / ${[3, 8, 15][professionRank(p)]} for next rank` : " · mastered"}) ${p.injury ? "· INJURED" : ""}</p><div class="row"><span class="hint">HP ${p.hp}/${p.max}</span><span class="hint">ATK ${attackPower(s, p)} · Armor ${p.armor}</span></div><div class="bar"><i style="width:${(p.hp / p.max) * 100}%"></i></div><p>XP ${p.xp}/${p.level * 30} · ${p.points} training points</p>`,
       );
+      c.classList.add("companion-card");
+      c.querySelector(".pixel-icon").replaceWith(portraitArtwork(p));
       if (p.points)
         c.append(
           button(
@@ -396,6 +450,8 @@ function render() {
         ],
       ]) {
         const c = card(venue, `<p>${description}</p>`);
+        c.classList.add("venue-card");
+        c.prepend(venueArtwork(destination));
         c.append(
           button(
             `Visit ${venue}`,
@@ -696,30 +752,18 @@ function render() {
       return p;
     }),
   );
+  if (renderedTab !== tab) {
+    $("drawer").scrollTop = 0;
+    renderedTab = tab;
+  }
   draw();
 }
 function rect(x, y, w, h, c) {
   ctx.fillStyle = c;
   ctx.fillRect(x, y, w, h);
 }
-function tree(x, y) {
-  rect(x + 5, y + 14, 4, 12, "#594d35");
-  rect(x, y + 6, 15, 12, "#2c4433");
-  rect(x + 3, y, 9, 12, "#37523c");
-}
-function person(x, y, c, step = 0, role = "") {
-  rect(x - 8, y + 15, 18, 4, "#364b35");
-  rect(x - 5, y - 11, 10, 9, "#c4aa78");
-  rect(x - 7, y - 2, 14, 13, c);
-  rect(x - 6, y + 11 + step, 4, 6, "#202729");
-  rect(x + 2, y + 11 - step, 4, 6, "#202729");
-  if (role === "Shieldbearer") rect(x - 11, y, 5, 12, "#a0a09a");
-  if (role === "Spearman") rect(x + 10, y - 17, 2, 29, "#c5bb89");
-  if (role === "Archer") {
-    rect(x + 9, y - 4, 2, 14, "#bd9560");
-    rect(x + 11, y - 1, 2, 8, "#bd9560");
-  }
-  rect(x - 5, y - 13, 10, 4, "#4c4639");
+function person(x, y, c, step = 0, role = "", variant = 0) {
+  drawCharacter(ctx, x, y, c, step, role, variant);
 }
 const view = { x: 0, y: 0, scale: 1 };
 function draw() {
@@ -731,6 +775,7 @@ function draw() {
     canvas.height = h;
   }
   ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.imageSmoothingEnabled = false;
   ctx.fillStyle = "#25362a";
   ctx.fillRect(0, 0, w, h);
   view.scale = s.battle
@@ -765,17 +810,9 @@ function draw() {
     -view.x * view.scale,
     -view.y * view.scale,
   );
-  rect(-768, -432, WORLD.width + 1536, WORLD.height + 864, "#657454");
-  for (let i = 0; i < 1800; i++) {
-    const x = (i * 137 + 31) % WORLD.width,
-      y = (i * 83 + 17) % WORLD.height;
-    rect(x, y, 2, 2, i % 2 ? "#73805a" : "#596e4c");
-  }
+  rect(-768, -432, WORLD.width + 1536, WORLD.height + 864, "#a3a775");
   if (s.battle) {
-    rect(0, 0, 768, 432, "#3b4937");
-    for (let y = 0; y < 7; y++)
-      for (let x = 0; x < 9; x++)
-        rect(105 + x * 62, y * 60, 60, 58, (x + y) % 2 ? "#526044" : "#59664a");
+    drawBattlefield(ctx);
     const active = s.battle.units.find((u) => u.id === selected);
     if (active && !active.acted) {
       const p = s.party[selected],
@@ -800,9 +837,9 @@ function draw() {
           ) {
             ctx.strokeStyle = enemy
               ? abilityMode
-                ? "#e8c87e"
-                : "#d9a07e"
-              : "#a3b578";
+                ? "#967442"
+                : "#aa6349"
+              : "#657a4d";
             ctx.lineWidth = 2;
             ctx.strokeRect(109 + x * 62, 4 + y * 60, 51, 49);
           }
@@ -824,9 +861,9 @@ function draw() {
             ? "Archer"
             : e.kind === "brute"
               ? "Shieldbearer"
-              : "",
+              : "Swordswoman",
         );
-        ctx.fillStyle = "#e5d8bb";
+        ctx.fillStyle = "#4c4935";
         ctx.font = "9px monospace";
         ctx.textAlign = "center";
         ctx.fillText(
@@ -834,16 +871,37 @@ function draw() {
           136 + e.x * 62,
           12 + e.y * 60,
         );
-        rect(118 + e.x * 62, 50 + e.y * 60, (36 * e.hp) / e.max, 3, "#b97560");
+        rect(117 + e.x * 62, 49 + e.y * 60, 38, 5, "#777451");
+        rect(118 + e.x * 62, 50 + e.y * 60, 36, 3, "#c5b78a");
+        rect(
+          118 + e.x * 62,
+          50 + e.y * 60,
+          Math.round((36 * e.hp) / e.max),
+          3,
+          "#a65f49",
+        );
       });
     s.battle.units
       .filter((u) => s.party[u.id].hp > 0)
       .forEach((u) => {
         if (selected === u.id) {
-          ctx.strokeStyle = "#dfc588";
+          ctx.strokeStyle = "#5b6541";
           ctx.strokeRect(108 + u.x * 62, 3 + u.y * 60, 54, 52);
         }
-        person(136 + u.x * 62, 28 + u.y * 60, u.acted ? "#69746a" : "#bca168");
+        person(
+          136 + u.x * 62,
+          28 + u.y * 60,
+          u.acted ? "#889079" : partyCoats[u.id],
+          0,
+          s.party[u.id].role,
+          u.id,
+        );
+        ctx.font = "bold 9px monospace";
+        ctx.textAlign = "center";
+        ctx.fillStyle = "#474b33";
+        ctx.fillText(s.party[u.id].name, 136 + u.x * 62, 12 + u.y * 60);
+        rect(117 + u.x * 62, 49 + u.y * 60, 38, 5, "#777451");
+        rect(118 + u.x * 62, 50 + u.y * 60, 36, 3, "#c5b78a");
         rect(
           118 + u.x * 62,
           50 + u.y * 60,
@@ -854,58 +912,20 @@ function draw() {
       });
     return;
   }
-  ctx.strokeStyle = "#456775";
-  ctx.lineWidth = 24;
-  ctx.beginPath();
-  for (let y = 0; y <= WORLD.height; y += 4) {
-    const x = 475 + Math.sin(y / 65) * 38;
-    if (y === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  }
-  ctx.stroke();
-  for (let i = 0; i < 260; i++) {
-    let x = (i * 71 + 50) % (WORLD.width - 28),
-      y = (i * 43 + 25) % (WORLD.height - 52);
-    if (places.every((p) => Math.hypot(p.x - x, p.y - y) > 48)) tree(x, y);
-  }
-  for (let i = 0; i < 12; i++) {
-    const x = 40 + i * 29,
-      y = 35 + (i % 3) * 14;
-    rect(x, y, 24, 26, "#596452");
-    rect(x + 5, y - 8, 14, 12, "#7a8269");
-  }
-  const cols = Math.ceil(WORLD.width / 64),
-    charted = new Set(s.charted);
-  for (let row = 0; row < Math.ceil(WORLD.height / 64); row++)
-    for (let col = 0; col < cols; col++)
-      if (!charted.has(row * cols + col))
-        rect(col * 64, row * 64, 64, 64, "#142c28b8");
+  ctx.drawImage(worldArtwork(), 0, 0);
+  ctx.drawImage(fogArtwork(s.charted), 0, 0);
   places.forEach((p, i) => {
     if (!s.discovered.includes(i) && s.contract?.target !== i) return;
-    if (p.type === "town") {
-      rect(p.x - 17, p.y - 14, 34, 28, "#baad7e");
-      rect(p.x - 21, p.y - 22, 42, 12, "#704b39");
-      rect(p.x - 4, p.y + 1, 8, 13, "#3e4030");
-    } else if (p.type === "ruin") {
-      rect(p.x - 18, p.y - 17, 10, 32, "#92937a");
-      rect(p.x + 8, p.y - 17, 10, 32, "#92937a");
-      rect(p.x - 18, p.y - 20, 36, 8, "#a0a184");
-    } else if (p.type === "mine") {
-      rect(p.x - 20, p.y - 18, 40, 32, "#7d806a");
-      rect(p.x - 9, p.y - 5, 18, 20, "#27352c");
-      rect(p.x - 23, p.y + 12, 46, 4, "#a19a77");
-    } else if (p.type === "cache") {
-      rect(p.x - 12, p.y - 7, 24, 16, "#9e7850");
-      rect(p.x - 12, p.y - 9, 24, 5, "#c4ac74");
-      rect(p.x - 2, p.y - 6, 4, 8, "#d2bd7e");
-    } else tree(p.x - 7, p.y - 16);
-    ctx.font = "12px monospace";
-    ctx.textAlign = "center";
-    ctx.fillStyle = "#16251b";
-    ctx.fillText(p.name, p.x, p.y + 35);
+    drawLandmark(ctx, p, i);
+    drawMapLabel(ctx, p.name, p.x, p.y + (p.type === "town" ? 58 : 39));
     if (s.contract?.target === i) {
-      ctx.fillStyle = "#f4d484";
-      ctx.fillText("⚑ CONTRACT", p.x, p.y - 35);
+      drawMapLabel(
+        ctx,
+        "CONTRACT",
+        p.x,
+        p.y - (p.type === "town" ? 53 : 37),
+        true,
+      );
     }
   });
   s.patrols
@@ -916,24 +936,27 @@ function draw() {
           (s.research.includes("scouting") ? 210 : 140),
     )
     .forEach((p) => {
-      const color = p.kind === "bandits" ? "#a85f49" : "#d3b46e";
+      const hostile = p.kind === "bandits" || p.hostile;
+      const color = hostile ? "#a16c54" : "#b39d69";
+      if (p.kind === "merchant") drawWagon(ctx, p.x - 9, p.y - 8, p.hostile);
+      else
+        person(
+          p.x - 17,
+          p.y - 8,
+          color,
+          Math.sin(performance.now() / 150) > 0 ? 1 : -1,
+          "Shieldbearer",
+          1,
+        );
       person(
-        p.x - 17,
-        p.y - 8,
-        color,
-        Math.sin(performance.now() / 150) > 0 ? 1 : -1,
-      );
-      person(
-        p.x,
+        p.x + (p.kind === "merchant" ? 24 : 0),
         p.y,
         color,
         Math.sin(performance.now() / 150) > 0 ? -1 : 1,
-        p.kind === "bandits" ? "Spearman" : "",
+        hostile ? "Spearman" : "",
+        3,
       );
-      ctx.font = "10px monospace";
-      ctx.fillStyle = p.kind === "bandits" ? "#f6b39b" : "#f4dc91";
-      ctx.textAlign = "center";
-      ctx.fillText(p.name, p.x, p.y - 30);
+      drawMapLabel(ctx, p.name, p.x, p.y - 37, hostile);
     });
   drawAtlas();
   if (s.destination) {
@@ -946,14 +969,6 @@ function draw() {
     rect(goal.x - 1, goal.y - 14, 2, 6, "#e2cd8e");
     rect(goal.x - 1, goal.y + 9, 2, 6, "#e2cd8e");
   }
-  const colors = [
-    "#e0c47f",
-    "#8e9b98",
-    "#8ca46e",
-    "#ab8265",
-    "#9d88ac",
-    "#b6aa8a",
-  ];
   partyPositions(s)
     .map((point, i) => ({ ...point, i }))
     .sort((a, b) => a.y - b.y)
@@ -963,7 +978,7 @@ function draw() {
           ? 2
           : -2
         : 0;
-      person(p.x, p.y, colors[p.i], step, s.party[p.i].role);
+      person(p.x, p.y, partyCoats[p.i], step, s.party[p.i].role, p.i);
     });
 }
 canvas.onclick = (e) => {
@@ -1122,19 +1137,18 @@ window.addEventListener("blur", () => {
 function drawAtlas() {
   const atlas = $("atlas"),
     a = atlas.getContext("2d");
-  a.fillStyle = "#20362e";
-  a.fillRect(0, 0, atlas.width, atlas.height);
+  a.imageSmoothingEnabled = false;
+  a.drawImage(worldArtwork(), 0, 0, atlas.width, atlas.height);
   const sx = atlas.width / WORLD.width,
     sy = atlas.height / WORLD.height,
     cols = Math.ceil(WORLD.width / 64);
-  a.fillStyle = "#657454";
-  for (const cell of s.charted)
-    a.fillRect(
-      (cell % cols) * 64 * sx,
-      Math.floor(cell / cols) * 64 * sy,
-      64 * sx + 1,
-      64 * sy + 1,
-    );
+  const known = new Set(s.charted);
+  a.fillStyle = "#3e513cdd";
+  for (let row = 0; row < Math.ceil(WORLD.height / 64); row++)
+    for (let col = 0; col < cols; col++) {
+      if (!known.has(row * cols + col))
+        a.fillRect(col * 64 * sx, row * 64 * sy, 64 * sx + 1, 64 * sy + 1);
+    }
   places.forEach((p, i) => {
     if (s.discovered.includes(i) || s.contract?.target === i) {
       a.fillStyle =
