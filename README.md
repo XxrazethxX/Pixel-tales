@@ -366,7 +366,7 @@ These unique items cannot be bought or crafted. Each bounty pays once and record
 
 Morale at 85+ grants +1 attack. Injuries impose −1 attack. Armor absorbs damage. Profession practice now unlocks ranks and company bonuses. Explorable sites have one-time rewards. Contracts are repeatable. Defeat rescues the company in Greyhaven at a cost; starvation deaths are permanent and cannot be reversed by medicine or resting. Fallen companions leave company equipment in stores and can be replaced at taverns while survivors remain. If everyone starves, start a new company.
 
-Progress automatically saves in browser local storage during play. **New Company** asks before replacing the autosave when you begin the adventure. Version-one through version-ten saves migrate, preserving permanent equipment improvements; an unreadable autosave disables Continue and is kept until you choose a replacement. Browser storage is specific to your browser and origin; moving from a local file to a hosted site does not transfer progress.
+Progress automatically saves in browser local storage during play. **New Company** asks before replacing the autosave when you begin the adventure. Version-one through version-eleven saves migrate, preserving permanent equipment improvements; an unreadable autosave disables Continue and is kept until you choose a replacement. Browser storage is specific to your browser and origin; moving from a local file to a hosted site does not transfer progress.
 
 ## Validate and develop
 
@@ -431,3 +431,23 @@ The tavern-rumor smoke test checks local leads, landmark discovery without terra
 The company-menu smoke test checks the title screen, customization and starting tradeoffs, paused time, manual slots, cancellation, replacement and loading, Continue, persisted settings, corrupt saves, blocked storage, and mobile controls. Existing gameplay smoke tests enter through the title menu using the shared helper.
 
 The sites-and-avatars smoke test covers founder appearance, stash searching and lockpicking, saved pins and one-time loot, mine rooms and rewards, mobile interiors, and roaming wolf combat.
+
+
+### Campaign expansion (0.24)
+
+- **Playable dungeons:** use Explore dungeon at mines and ruins, then move through the interior grid. Inspect the concealed door, disarm traps, reinforce unstable passages, and mine deposits with a Miner. Defeat the guards before opening the vault; deposits, secrets, and treasure are saved and cannot be repeatedly looted.
+- **Tactical actions:** Archers can set overwatch, Shieldbearers can protect adjacent allies with a shield wall, and companions can spend valor to push adjacent enemies into difficult terrain for extra damage. Preparing an ambush costs food and time and improves the next battle's opening.
+- **Companion stories:** camp conversations offer personal goals with resource costs and permanent rewards. Support or refusal changes loyalty and relationships. Disloyal companions can be released, and refused companions may leave when wages remain unpaid.
+- **Camp furnishing:** build and reposition a shared table, drying rack, and brazier across six spaces. They improve healing, staffed forge output, and storm shelter. Cooking, smithing, and treatment have visible camp activity.
+- **Crime and pursuit:** attacking caravans creates witnesses and a wanted level. Stolen cargo sales increase attention, and pursuing Wardens can intercept the company. Village fines clear the warrant and surrender carried trade cargo; faction reputation still remembers your attacks.
+- **Weather and seasons:** rain and storms reduce discovery and enemy visibility, storms increase fatigue unless camp shelter protects you, and cold weather or winter raises daily food needs. Seasons change every seven days in a repeating calendar.
+
+Existing companies migrate automatically. Dungeon position, furniture placement, personal decisions, crime, and ambush preparation persist through saves.
+
+The campaign-expansion browser smoke test checks dungeon movement and guarded treasure, camp furniture and personal support, guard fines, tactical controls, weather, save/reload, and mobile layouts:
+
+```sh
+GAME_URL=http://127.0.0.1:3002/ PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/campaign-expansion-smoke.mjs
+```
+
+![Playable dungeon on mobile](docs/screenshots/dungeon-mobile.png)

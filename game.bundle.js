@@ -149,6 +149,9 @@ function fresh() {
     lessonLedger: {},
     rumors: {},
     siteProgress: {},
+    crime: { wanted: 0, stolen: false },
+    campFurniture: {},
+    ambushReady: false,
     cargo: { grain: 0, cloth: 0, salt: 0, iron: 0 },
     markets: {},
     reputation: { guild: 0, wardens: 0, freefolk: 0 },
@@ -234,6 +237,7 @@ function camp(s) {
   const cook = professional(s, "Cook");
   const recovery =
     (s.research.includes("medicine") ? 18 : 10) +
+    (s.campFurniture?.table !== undefined ? 2 : 0) +
     professionBonus(s, "Herbalist") * 2 +
     (s.campUpgrades.tents || 0) * 5 +
     (s.campUpgrades.infirmary || 0) * 6;
@@ -311,6 +315,7 @@ function startBattle(s, patrolId = null) {
   s.destination = null;
   if (patrol?.kind === "merchant" && !patrol.hostile) {
     patrol.hostile = true;
+    registerCrime(s, false);
     s.morale = Math.max(0, s.morale - 10);
     s.renown = Math.max(0, s.renown - 5);
     changeReputation(s, "guild", -12);
@@ -411,6 +416,11 @@ function startBattle(s, patrolId = null) {
   }
   deployBattle(s, patrol);
   if (!patrol) deployAdversary(s);
+  if (s.ambushReady) {
+    s.battle.valor = Math.min(5, s.battle.valor + 1);
+    s.battle.enemies[0].stun = 1;
+    s.ambushReady = false;
+  }
   note(
     s,
     "Steel drawn. Select a companion, then a neighboring tile to move or an enemy to attack.",
@@ -471,6 +481,7 @@ function act(s, id, x, y) {
   return true;
 }
 function win(s) {
+  const dungeonReturn = s.battle.dungeonReturn;
   wearBattleEquipment(s);
   const patrolFight = s.battle.kind === "patrol";
   const bossFight = !patrolFight && s.contract?.kind === "boss";
@@ -490,6 +501,10 @@ function win(s) {
     s.food += 6;
     s.inventory.pelts += 2;
   }
+  if (raid) {
+    if (!s.crime.wanted) registerCrime(s);
+    s.crime.stolen = true;
+  }
   if (raid)
     lootCaravanCargo(
       s,
@@ -504,7 +519,9 @@ function win(s) {
   } else if (s.contract.kind !== "story") s.completed++;
   if (!raid) {
     s.renown += difficulty.renown;
-    changeReputation(s, wildlife ? "freefolk" : "wardens", 1);
+    const resisting = s.battle.patrolId === "warden-pursuit";
+    changeReputation(s, wildlife ? "freefolk" : "wardens", resisting ? -3 : 1);
+    if (resisting) s.crime.wanted = Math.min(10, s.crime.wanted + 1);
   }
   s.inventory.ore += difficulty.salvage;
   s.inventory.wood += difficulty.salvage;
@@ -545,6 +562,10 @@ function win(s) {
   }
   if (!patrolFight && !storyBattleWon(s)) s.contract = null;
   s.battle = null;
+  if (dungeonReturn) {
+    s.siteProgress[`guard-${dungeonReturn.site}`] = true;
+    s.event = dungeonReturn;
+  }
 }
 function endTurn(s) {
   const b = s.battle;
@@ -642,6 +663,7 @@ function endTurn(s) {
         [e.x, e.y] = options[0];
       }
     }
+    triggerOverwatch(s, e);
     if (e.hp > 0 && dist() <= range && hasLineOfSight(s, e, t)) {
       const p = s.party[t.id];
       const power =
@@ -709,8 +731,10 @@ function endTurn(s) {
       u.cooldown = Math.max(0, (u.cooldown || 0) - 1);
       u.reacted = false;
       u.safeMove = false;
+      u.overwatch = false;
     });
   }
+  if (s.battle && s.battle.enemies.every((e) => e.hp <= 0)) win(s);
   return true;
 }
 
@@ -756,10 +780,51 @@ function restore(raw) {
       result.lessonLedger[id] = day;
   }
   result.siteProgress = Object.fromEntries(
-    [4, 9]
-      .filter((id) => raw.siteProgress?.[`cart-${id}`] === true)
-      .map((id) => [`cart-${id}`, true]),
+    Object.entries(raw.siteProgress || {}).filter(
+      ([k, v]) =>
+        v === true &&
+        /^(cart|secret|shore|guard|vault)-\d+$|^(hazard|deposit)-\d+-[135]$/.test(
+          k,
+        ),
+    ),
   );
+  result.crime = {
+    wanted: Number.isInteger(raw.crime?.wanted)
+      ? Math.max(0, Math.min(10, raw.crime.wanted))
+      : 0,
+    stolen: raw.crime?.stolen === true,
+  };
+  result.campFurniture = Object.fromEntries(
+    campFurniture
+      .filter(
+        (f) =>
+          Number.isInteger(raw.campFurniture?.[f.id]) &&
+          raw.campFurniture[f.id] >= 0 &&
+          raw.campFurniture[f.id] < 6,
+      )
+      .map((f) => [f.id, raw.campFurniture[f.id]]),
+  );
+  result.ambushReady = raw.ambushReady === true;
+  if (result.event?.kind === "dungeon") {
+    const e = result.event;
+    result.event =
+      ["mine", "ruin"].includes(places[e.site]?.type) &&
+      e.site === raw.location &&
+      Number.isInteger(e.x) &&
+      e.x >= 0 &&
+      e.x <= 8 &&
+      Number.isInteger(e.y) &&
+      e.y >= 0 &&
+      e.y <= 6
+        ? {
+            kind: "dungeon",
+            site: e.site,
+            x: e.x,
+            y: e.y,
+            message: safeCompanyName(e.message, "", 180),
+          }
+        : null;
+  }
   if (result.event?.kind === "site") {
     const e = result.event;
     result.event =
@@ -787,6 +852,20 @@ function restore(raw) {
         : null;
     if (result.event?.site === 10 && result.explored.includes(10))
       result.event.stage = "opened";
+  }
+  if (result.battle?.dungeonReturn) {
+    const e = result.battle.dungeonReturn;
+    if (
+      e.kind !== "dungeon" ||
+      !["mine", "ruin"].includes(places[e.site]?.type) ||
+      !Number.isInteger(e.x) ||
+      e.x < 0 ||
+      e.x > 8 ||
+      !Number.isInteger(e.y) ||
+      e.y < 0 ||
+      e.y > 6
+    )
+      delete result.battle.dungeonReturn;
   }
   result.companyName = safeCompanyName(raw.companyName);
   result.banner = companyBanners.some((b) => b.id === raw.banner)
@@ -895,6 +974,22 @@ function restore(raw) {
         }
       : p;
   });
+  if (result.crime.wanted >= 3) {
+    const saved = raw.patrols?.find((p) => p.id === "warden-pursuit");
+    const base = initialPatrols().find((p) => p.kind === "bandits");
+    result.patrols.push({
+      ...base,
+      id: "warden-pursuit",
+      name: "Warden pursuit",
+      x: Number.isFinite(saved?.x)
+        ? Math.max(12, Math.min(WORLD.width - 12, saved.x))
+        : Math.max(12, result.position.x - 100),
+      y: Number.isFinite(saved?.y)
+        ? Math.max(18, Math.min(WORLD.height - 18, saved.y))
+        : result.position.y,
+      cleared: saved?.cleared === true,
+    });
+  }
   discoverNearby(result, false);
   result.party = result.party.map((p, id) => ({
     ...base.party[0],
@@ -1903,7 +1998,8 @@ function initialChart() {
 function discoverNearby(s, reward = true) {
   const radius =
       (s.research.includes("scouting") ? 210 : 140) +
-      (s.campUpgrades.watchpost ? 40 : 0),
+      (s.campUpgrades.watchpost ? 40 : 0) -
+      weatherInfo(s).visibility,
     known = new Set(s.charted),
     cols = Math.ceil(WORLD.width / 64);
   const cx = Math.floor(s.position.x / 64),
@@ -2039,6 +2135,10 @@ function advancePatrols(s, seconds) {
   )
     return false;
   for (const p of s.patrols.filter((p) => !p.cleared)) {
+    if (p.id === "warden-pursuit") {
+      p.route = [{ ...s.position }];
+      p.waypoint = 0;
+    }
     let budget =
       Math.min(seconds, 5) *
       (p.kind === "merchant" ? 14 : p.kind === "wolves" ? 24 : 20);
@@ -2071,6 +2171,14 @@ function advancePatrols(s, seconds) {
       if (step === length) p.waypoint = (p.waypoint + 1) % p.route.length;
     }
   }
+  const pursuer = s.patrols.find(
+    (p) => p.id === "warden-pursuit" && !p.cleared,
+  );
+  if (
+    pursuer &&
+    Math.hypot(pursuer.x - s.position.x, pursuer.y - s.position.y) <= 36
+  )
+    startBattle(s, pursuer.id);
   return true;
 }
 function nearbyPatrols(s) {
@@ -2195,7 +2303,7 @@ function campCost(s) {
           (s.research.includes("preservation") ? 1 : 0) -
           (s.campUpgrades.cookpot || 0) -
           (s.campOpen && campWorker(s, "cook") ? 1 : 0),
-      )
+      ) + weatherInfo(s).food
     : 0;
 }
 function healAmount(s) {
@@ -3032,6 +3140,13 @@ function settleDay(s, mealsProvided = false) {
     s,
     `Daily upkeep: ${mealsProvided ? "inn meals" : `${supplied} rations`} and ${paid} crowns paid. ${s.wageDebt ? `${s.wageDebt} crowns still owed.` : "Wages settled."}`,
   );
+  for (const p of livingParty(s))
+    if (
+      s.wageDebt > 0 &&
+      (p.resolve ?? 65) <= 10 &&
+      p.storyComplete === "refused"
+    )
+      departCompanion(s, p);
   if (companyLost(s)) {
     s.destination = null;
     s.campOpen = false;
@@ -3053,7 +3168,12 @@ function spendHours(s, hours, options = {}) {
           (p.fatigue || 0) +
             amount *
               (hasTrait(p, "tireless") ? 1.5 : 2) *
-              (s.research.includes("endurance") ? 0.75 : 1),
+              (s.research.includes("endurance") ? 0.75 : 1) +
+            amount *
+              (s.campOpen &&
+              (s.campUpgrades.tent || s.campFurniture?.brazier !== undefined)
+                ? 0
+                : weatherInfo(s).fatigue),
         );
     s.timeOfDay += amount;
     remaining -= amount;
@@ -3315,7 +3435,10 @@ function finishCampJobs(s, restHours) {
   }
   if (smith) {
     if (s.inventory.wood >= 1) {
-      const ore = 2 + professionRank(smith);
+      const ore =
+        2 +
+        professionRank(smith) +
+        (s.campFurniture?.rack !== undefined ? 1 : 0);
       s.inventory.wood--;
       s.inventory.ore += ore;
       practice(s, smith, 2);
@@ -4372,6 +4495,11 @@ function tradeGoodsAtVillage(s, good, quantity = 1, side = "buy") {
     s,
     `${side === "buy" ? "Bought" : "Sold"} ${quantity} ${good} for ${quote} crowns in ${places[s.location].name}.`,
   );
+  if (side === "sell" && s.crime?.stolen) {
+    s.crime.wanted = Math.min(10, s.crime.wanted + 1);
+    if (!cargoLoad(s)) s.crime.stolen = false;
+    note(s, "A buyer recognizes stolen cargo. Wanted level rises.");
+  }
   return true;
 }
 function caravanCargoPrice(s, good) {
@@ -5778,6 +5906,404 @@ function siteAction(s, action, value) {
   return false;
 }
 
+function weatherInfo(s) {
+  const season = ["Spring", "Summer", "Autumn", "Winter"][
+      Math.floor((s.day - 1) / 7) % 4
+    ],
+    kind = ["clear", "rain", "storm", "cold"][(s.day - 1) % 4];
+  return {
+    season,
+    kind,
+    label: `${season} · ${kind}`,
+    food: kind === "cold" || season === "Winter" ? 1 : 0,
+    fatigue: kind === "storm" ? 0.5 : 0,
+    visibility: kind === "rain" ? 30 : kind === "storm" ? 60 : 0,
+  };
+}
+function prepareAmbush(s) {
+  if (
+    s.battle ||
+    s.event ||
+    s.campOpen ||
+    s.destination ||
+    companyLost(s) ||
+    s.food < 1 ||
+    s.ambushReady
+  )
+    return false;
+  s.food--;
+  spendHours(s, 2);
+  if (companyLost(s)) return false;
+  s.ambushReady = true;
+  note(
+    s,
+    "Ambush prepared: +1 opening valor and the first enemy misses its first turn.",
+  );
+  return true;
+}
+function tacticalAction(s, id, action) {
+  const b = s.battle,
+    u = b?.units.find((u) => u.id === id),
+    p = s.party[id];
+  if (!u || u.acted || p.hp <= 0) return false;
+  if (action === "overwatch" && p.role === "Archer") {
+    u.overwatch = true;
+    u.acted = true;
+    note(s, `${p.name} watches a firing lane until the next round.`);
+    return true;
+  }
+  if (action === "wall" && p.role === "Shieldbearer") {
+    u.guard = true;
+    u.acted = true;
+    for (const ally of b.units)
+      if (
+        s.party[ally.id].hp > 0 &&
+        Math.abs(ally.x - u.x) + Math.abs(ally.y - u.y) <= 1
+      )
+        ally.guard = true;
+    note(s, "Shield wall: adjacent companions brace together.");
+    return true;
+  }
+  if (action === "push" && b.valor >= 1) {
+    const e = b.enemies.find(
+      (e) => e.hp > 0 && Math.abs(e.x - u.x) + Math.abs(e.y - u.y) === 1,
+    );
+    if (!e) return false;
+    const x = e.x + (e.x - u.x),
+      y = e.y + (e.y - u.y);
+    if (
+      x < 0 ||
+      x > 8 ||
+      y < 0 ||
+      y > 6 ||
+      terrainCell(s, x, y).blocked ||
+      b.enemies.some((v) => v !== e && v.hp > 0 && v.x === x && v.y === y) ||
+      b.units.some((v) => s.party[v.id].hp > 0 && v.x === x && v.y === y)
+    )
+      return false;
+    e.x = x;
+    e.y = y;
+    hitEnemy(
+      s,
+      e,
+      2 + (e.armor || 0) + (terrainCell(s, x, y).cost > 1 ? 3 : 0),
+    );
+    b.valor--;
+    u.acted = true;
+    if (b.enemies.every((e) => e.hp <= 0)) win(s);
+    return true;
+  }
+  return false;
+}
+function payCrimeFine(s) {
+  const fee = (s.crime?.wanted || 0) * 20;
+  if (
+    !fee ||
+    s.gold < fee ||
+    s.battle ||
+    s.event ||
+    places[s.location]?.type !== "town"
+  )
+    return false;
+  s.gold -= fee;
+  s.crime = { wanted: 0, stolen: false };
+  s.patrols = s.patrols.filter((p) => p.id !== "warden-pursuit");
+  note(s, `Paid ${fee} crowns in fines. Stolen goods surrendered.`);
+  s.cargo = Object.fromEntries(tradeGoods.map((g) => [g.id, 0]));
+  return true;
+}
+function registerCrime(s, stolen = true) {
+  s.crime ||= { wanted: 0, stolen: false };
+  s.crime.wanted = Math.min(10, s.crime.wanted + 3);
+  s.crime.stolen = s.crime.stolen || stolen;
+  note(
+    s,
+    "Surviving witnesses report the raid. Warden patrols pursue the company; villages demand a fine.",
+  );
+  if (!s.patrols.some((p) => p.id === "warden-pursuit" && !p.cleared)) {
+    s.patrols = s.patrols.filter((p) => p.id !== "warden-pursuit");
+    const base = initialPatrols().find((p) => p.kind === "bandits");
+    s.patrols.push({
+      ...base,
+      id: "warden-pursuit",
+      name: "Warden pursuit",
+      kind: "bandits",
+      x: Math.max(20, s.position.x - 120),
+      y: s.position.y,
+      cleared: false,
+      hostile: true,
+    });
+  }
+}
+function personalGoal(p) {
+  return p.profession === "Smith"
+    ? "A weapon worthy of the company"
+    : p.profession === "Herbalist"
+      ? "Supplies for a sick family"
+      : "A place to belong";
+}
+function companionStory(s, id, choice) {
+  const p = s.party[id];
+  if (
+    !s.campOpen ||
+    s.battle ||
+    s.event ||
+    !p ||
+    p.dead ||
+    (p.storyComplete && choice !== "release")
+  )
+    return false;
+  if (choice === "support") {
+    const cost = p.profession === "Smith" ? 3 : 0;
+    if (s.gold < 20 || s.inventory.ore < cost) return false;
+    s.gold -= 20;
+    s.inventory.ore -= cost;
+    changeResolve(p, 20);
+    if (cost) p.weapon = Math.min(4, (p.weapon || 0) + 1);
+    else s.morale = Math.min(100, s.morale + 5);
+    for (const q of livingParty(s))
+      if (q !== p)
+        s.bonds[bondKey(p.id, q.id)] = Math.min(
+          100,
+          bondValue(s, p.id, q.id) + 1,
+        );
+    p.storyComplete = "supported";
+  } else if (choice === "refuse") {
+    changeResolve(p, -15);
+    p.storyComplete = "refused";
+    for (const q of livingParty(s))
+      if (q !== p)
+        s.bonds[bondKey(p.id, q.id)] = Math.max(
+          0,
+          bondValue(s, p.id, q.id) - 3,
+        );
+  } else if (choice === "release") {
+    if ((p.resolve ?? 65) > 25) return false;
+    p.departed = true;
+    p.dead = true;
+    p.equipment = {};
+    for (const role of campRoles)
+      if (s.campJobs[role.id] === id) delete s.campJobs[role.id];
+    p.storyComplete = "left";
+    note(
+      s,
+      `${p.name} leaves the company alive. Their equipment stays in stores.`,
+    );
+    return true;
+  } else return false;
+  note(s, `${p.name}: ${personalGoal(p)} — ${p.storyComplete}.`);
+  return true;
+}
+const campFurniture = [
+  { id: "table", name: "Shared table", wood: 4, gold: 15 },
+  { id: "rack", name: "Tool rack", wood: 3, gold: 12 },
+  { id: "brazier", name: "Sheltered brazier", wood: 5, gold: 20 },
+];
+function placeFurniture(s, id, slot) {
+  const f = campFurniture.find((f) => f.id === id);
+  if (
+    !s.campOpen ||
+    s.battle ||
+    s.event ||
+    !f ||
+    !Number.isInteger(slot) ||
+    slot < 0 ||
+    slot > 5
+  )
+    return false;
+  s.campFurniture ||= {};
+  if (
+    Object.entries(s.campFurniture).some(([key, v]) => key !== id && v === slot)
+  ) {
+    note(s, "That camp space is occupied. Choose another space.");
+    return false;
+  }
+  if (s.campFurniture[id] === undefined) {
+    if (s.gold < f.gold || s.inventory.wood < f.wood) return false;
+    s.gold -= f.gold;
+    s.inventory.wood -= f.wood;
+  }
+  s.campFurniture[id] = slot;
+  note(s, `${f.name} placed in camp space ${slot + 1}.`);
+  return true;
+}
+function enterDungeon(s) {
+  if (
+    s.battle ||
+    s.event ||
+    s.campOpen ||
+    s.destination ||
+    companyLost(s) ||
+    !["mine", "ruin"].includes(places[s.location]?.type)
+  )
+    return false;
+  s.event = {
+    kind: "dungeon",
+    site: s.location,
+    x: 0,
+    y: 5,
+    message:
+      "Explore the tunnels. Inspect walls for secrets; reinforce unstable ground before crossing.",
+  };
+  return true;
+}
+function dungeonWalls(s) {
+  return [
+    [2, 1],
+    [2, 2],
+    [2, 3],
+    [6, 4],
+    ...(!s.siteProgress[`secret-${s.event.site}`] ? [[4, 1]] : []),
+  ];
+}
+function dungeonAction(s, action, x, y) {
+  const e = s.event;
+  if (e?.kind !== "dungeon") return false;
+  if (action === "leave") {
+    s.event = null;
+    return true;
+  }
+  if (action === "inspect") {
+    if (
+      Math.abs(e.x - 4) + Math.abs(e.y - 1) <= 1 &&
+      !s.siteProgress[`secret-${e.site}`]
+    ) {
+      s.siteProgress[`secret-${e.site}`] = true;
+      s.inventory.herbs += 4;
+      e.message = "A secret passage! Four herbs recovered.";
+    } else
+      e.message =
+        "Scratched stone hints at a hidden door near the northern center.";
+    return true;
+  }
+  if (action === "shore") {
+    if (s.inventory.wood < 2 || s.siteProgress[`shore-${e.site}`]) return false;
+    s.inventory.wood -= 2;
+    s.siteProgress[`shore-${e.site}`] = true;
+    e.message = "Timbers secure the unstable passage.";
+    return true;
+  }
+  if (action === "mine") {
+    if (
+      !["mine"].includes(places[e.site]?.type) ||
+      e.y !== 1 ||
+      ![1, 5].includes(e.x)
+    )
+      return false;
+    const key = `deposit-${e.site}-${e.x}`,
+      maker = professional(s, "Miner");
+    if (s.siteProgress[key] || !maker) return false;
+    s.siteProgress[key] = true;
+    s.inventory.ore += 3 + professionRank(maker);
+    practice(s, maker, 1);
+    spendHours(s, 1);
+    e.message = "Mined the deposit. Ore recovered and Miner practice gained.";
+    return true;
+  }
+  if (action === "disarm") {
+    if (
+      Math.abs(e.x - 3) + Math.abs(e.y - 3) > 1 ||
+      s.inventory.wood < 1 ||
+      s.siteProgress[`hazard-${e.site}-3`]
+    )
+      return false;
+    s.inventory.wood--;
+    s.siteProgress[`hazard-${e.site}-3`] = true;
+    spendHours(s, 1);
+    e.message = "The dart mechanism is disabled.";
+    return true;
+  }
+  if (action === "vault") {
+    if (
+      e.x !== 8 ||
+      e.y !== 5 ||
+      !s.siteProgress[`guard-${e.site}`] ||
+      s.siteProgress[`vault-${e.site}`]
+    )
+      return false;
+    s.siteProgress[`vault-${e.site}`] = true;
+    s.gold += 50;
+    s.knowledge += 2;
+    e.message = "Recovered 50 crowns and two knowledge from the guarded vault.";
+    return true;
+  }
+  if (
+    action !== "move" ||
+    !Number.isInteger(x) ||
+    !Number.isInteger(y) ||
+    x < 0 ||
+    x > 8 ||
+    y < 0 ||
+    y > 6 ||
+    Math.abs(x - e.x) + Math.abs(y - e.y) !== 1 ||
+    dungeonWalls(s).some(([a, b]) => a === x && b === y)
+  )
+    return false;
+  e.x = x;
+  e.y = y;
+  e.message = "";
+  if (
+    (x === 3 && y === 3) ||
+    (x === 5 && y === 3 && !s.siteProgress[`shore-${e.site}`])
+  ) {
+    const key = `hazard-${e.site}-${x}`;
+    if (!s.siteProgress[key]) {
+      s.siteProgress[key] = true;
+      for (const p of livingParty(s)) p.hp = Math.max(1, p.hp - 3);
+      e.message =
+        x === 3
+          ? "A dart trap deals 3 damage to each companion."
+          : "A cave-in deals 3 damage. Reinforce the passage next time.";
+    }
+  }
+  if (x === 7 && y === 5 && !s.siteProgress[`guard-${e.site}`]) {
+    const contract = s.contract;
+    s.event = null;
+    s.contract = { target: e.site, tier: 2, reward: 40 };
+    if (!startBattle(s)) {
+      s.contract = contract;
+      s.event = e;
+      return false;
+    }
+    s.contract = contract;
+    s.battle.kind = "patrol";
+    s.battle.dungeonReturn = { ...e };
+    note(
+      s,
+      "Sentries guard the treasure chamber. Defeat them to open the vault.",
+    );
+  }
+  return true;
+}
+
+function triggerOverwatch(s, e) {
+  for (const u of s.battle.units) {
+    const p = s.party[u.id];
+    if (
+      u.overwatch &&
+      p.hp > 0 &&
+      e.hp > 0 &&
+      Math.abs(u.x - e.x) + Math.abs(u.y - e.y) <= attackRange(p, false, s) &&
+      hasLineOfSight(s, u, e)
+    ) {
+      u.overwatch = false;
+      hitEnemy(s, e, attackPower(s, p));
+      note(s, `${p.name} fires an overwatch shot.`);
+    }
+  }
+}
+function departCompanion(s, p) {
+  p.departed = true;
+  p.dead = true;
+  p.equipment = {};
+  for (const role of campRoles)
+    if (s.campJobs[role.id] === p.id) delete s.campJobs[role.id];
+  note(
+    s,
+    `${p.name} leaves alive after losing faith in the company. Their equipment stays in stores.`,
+  );
+}
+
 // Original, hand-built pixel artwork. All coordinates are logical pixels.
 const artPalette = {
   meadow: "#a3a775",
@@ -6855,6 +7381,27 @@ function drawCampScene(c, s) {
           point.y + 20,
         );
     });
+  for (const [id, slot] of Object.entries(s.campFurniture || {})) {
+    const x = 230 + (slot % 3) * 70,
+      y = 155 + Math.floor(slot / 3) * 45;
+    pixel(
+      c,
+      x,
+      y,
+      32,
+      14,
+      id === "brazier" ? "#b47d44" : id === "rack" ? "#737967" : "#8f7350",
+    );
+    pixel(c, x + 3, y + 14, 3, 9, "#5c5038");
+    pixel(c, x + 26, y + 14, 3, 9, "#5c5038");
+  }
+  const pulse = Math.floor(performance.now() / 400) % 2;
+  if (campWorker(s, "cook")) pixel(c, 270, 182 - pulse * 3, 4, 8, "#e0d6b2");
+  if (campWorker(s, "smith")) pixel(c, 167 + pulse * 4, 197, 3, 4, "#e0b45f");
+  if (campWorker(s, "medic")) {
+    pixel(c, 445, 182 - pulse * 2, 10, 3, "#ded9b8");
+    pixel(c, 449, 179, 3, 9, "#ded9b8");
+  }
   drawLighting(c, s, c.canvas.width, c.canvas.height);
   // The campfire remains bright after the night overlay.
   pixel(c, 319, 240, 11, 13, "#c8773d");
@@ -6945,6 +7492,31 @@ function drawSiteInterior(c, s) {
         s.party[i],
       );
   drawMapLabel(c, places[e.site].name, 384, 22);
+}
+function drawDungeonInterior(c, s) {
+  pixel(c, 0, 0, 768, 432, "#393e35");
+  for (let y = 0; y < 7; y++)
+    for (let x = 0; x < 9; x++) {
+      const wall = dungeonWalls(s).some(([a, b]) => a === x && b === y);
+      pixel(c, 105 + x * 62, y * 60, 58, 56, wall ? "#555947" : "#92856b");
+      if ([1, 5].includes(x) && y === 1)
+        pixel(c, 125 + x * 62, 15 + y * 60, 14, 14, "#c2bca9");
+      if (x === 8 && y === 5)
+        pixel(c, 120 + x * 62, 15 + y * 60, 25, 17, "#b89960");
+      if ((x === 3 || x === 5) && y === 3)
+        pixel(c, 130 + x * 62, 23 + y * 60, 8, 8, "#633e31");
+    }
+  const p = s.party.find((p) => !p.dead);
+  drawCharacter(
+    c,
+    136 + s.event.x * 62,
+    28 + s.event.y * 60,
+    p.coat || partyCoats[0],
+    0,
+    p.role,
+    p.id,
+    p,
+  );
 }
 
 let gameActive = false;
@@ -7129,7 +7701,10 @@ function render() {
   )
     tab = "Company";
 
-  document.body.classList.toggle("in-site", s.event?.kind === "site");
+  document.body.classList.toggle(
+    "in-site",
+    ["site", "dungeon"].includes(s.event?.kind),
+  );
   document.body.classList.toggle("drawer-open", drawerOpen);
   document.body.classList.toggle("encounter", !!s.event);
   document.body.classList.toggle("in-battle", !!s.battle);
@@ -7210,6 +7785,13 @@ function render() {
   const panel = $("panel");
   panel.replaceChildren();
   if (tab === "Company") {
+    if (s.crime.wanted)
+      panel.append(
+        card(
+          "Wanted company",
+          `<p>Wanted ${s.crime.wanted}/10 · ${s.crime.stolen ? "Cargo marked stolen" : "No marked stolen cargo"}. Warden patrols pursue you. Village guards accept fines.</p>`,
+        ),
+      );
     const standing = companyStanding(s);
     panel.append(
       card(
@@ -7291,7 +7873,7 @@ function render() {
     s.party.forEach((p) => {
       if (p.dead) {
         const memorial = card(
-          `${p.name} · Fallen`,
+          `${p.name} · ${p.departed ? "Left company" : "Fallen"}`,
           "<p>Died of starvation. Starvation deaths are permanent; medicine and rest cannot revive this companion.</p>",
         );
         memorial.classList.add("fallen");
@@ -7543,6 +8125,59 @@ function render() {
     secondSelect.onchange = updateConversation;
     social.append(firstSelect, secondSelect, conversation);
     panel.append(social);
+    const furnishings = card(
+      "Camp furnishings",
+      "<p>Place furnishings in one of six camp spaces. Table: +2 rest healing. Rack: +1 staffed forge ore. Brazier: shelter from storm fatigue.</p>",
+    );
+    for (const f of campFurniture) {
+      const slot = document.createElement("select");
+      slot.setAttribute("aria-label", `${f.name} space`);
+      for (let i = 0; i < 6; i++) {
+        const option = document.createElement("option");
+        option.value = i;
+        option.textContent = `Space ${i + 1}`;
+        slot.append(option);
+      }
+      const cost = document.createElement("p");
+      cost.textContent = `${f.name}: ${f.wood} wood, ${f.gold} crowns to build; relocation is free.`;
+      furnishings.append(cost);
+      slot.value = s.campFurniture[f.id] ?? 0;
+      furnishings.append(
+        slot,
+        button(
+          `${s.campFurniture[f.id] === undefined ? "Build" : "Move"} ${f.name}`,
+          () => placeFurniture(s, f.id, Number(slot.value)),
+        ),
+      );
+    }
+    panel.append(furnishings);
+    for (const p of livingParty(s).filter(
+      (p) => !p.storyComplete || (p.resolve ?? 65) <= 25,
+    )) {
+      const c = card(
+        `${p.name}’s goal`,
+        `<p>${personalGoal(p)}. Resolve ${Math.round(p.resolve ?? 65)}. Support costs 20 crowns${p.profession === "Smith" ? " and 3 ore; improves their weapon" : "; builds loyalty and morale"}.</p>`,
+      );
+      c.append(
+        button(
+          `Support ${p.name}`,
+          () => companionStory(s, p.id, "support"),
+          !!p.storyComplete ||
+            s.gold < 20 ||
+            (p.profession === "Smith" && s.inventory.ore < 3),
+        ),
+        button(
+          `Refuse ${p.name}`,
+          () => companionStory(s, p.id, "refuse"),
+          !!p.storyComplete,
+        ),
+      );
+      if ((p.resolve ?? 65) <= 25)
+        c.append(
+          button(`Release ${p.name}`, () => companionStory(s, p.id, "release")),
+        );
+      panel.append(c);
+    }
     const duties = card(
       "Camp duties",
       "<p>Choose one job per conscious companion. Build its station first. Jobs use current professions and operate on fed rests of at least six hours, once per day. Workers recover 3 fatigue per hour; resting companions recover 5.</p>",
@@ -7918,6 +8553,20 @@ function render() {
         }),
       );
     if (tab === "Town") {
+      if (s.crime.wanted) {
+        const c = card(
+          "Village guard",
+          `<p>Wanted ${s.crime.wanted}/10. Witnesses reported your raids. Pay ${s.crime.wanted * 20} crowns and surrender carried trade goods to stop pursuit.</p>`,
+        );
+        c.append(
+          button(
+            "Pay fine and surrender cargo",
+            () => payCrimeFine(s),
+            s.gold < s.crime.wanted * 20,
+          ),
+        );
+        panel.append(c);
+      }
       if (
         s.contract?.kind === "story" &&
         s.contract.phase === "return" &&
@@ -8300,7 +8949,72 @@ function render() {
   } else if (s.event) {
     const c = card(s.event.title, `<p>${s.event.text}</p>`);
     c.id = "event";
-    if (s.event.kind === "site") {
+    if (s.event.kind === "dungeon") {
+      const e = s.event,
+        c = card(
+          `${places[e.site].name} dungeon`,
+          `<p>${e.message}</p><p>Company position ${e.x + 1},${e.y + 1}. Arrow tiles move one square. Inspect walls for secrets. Unstable ground and traps hurt the party. Sentries guard the eastern vault.</p>`,
+        );
+      c.id = "event";
+      const grid = document.createElement("div");
+      grid.className = "dungeon-grid";
+      for (let y = 0; y < 7; y++)
+        for (let x = 0; x < 9; x++) {
+          const blocked = dungeonWalls(s).some(([a, b]) => a === x && b === y);
+          grid.append(
+            button(
+              e.x === x && e.y === y
+                ? "Party"
+                : blocked
+                  ? "Wall"
+                  : x === 8 && y === 5
+                    ? "Vault"
+                    : x === 7 && y === 5
+                      ? "Guard"
+                      : [1, 5].includes(x) &&
+                          y === 1 &&
+                          places[e.site].type === "mine"
+                        ? "Ore"
+                        : (x === 3 || x === 5) && y === 3
+                          ? "Trap"
+                          : "·",
+              () => dungeonAction(s, "move", x, y),
+              blocked || Math.abs(x - e.x) + Math.abs(y - e.y) !== 1,
+            ),
+          );
+          grid.lastChild.setAttribute(
+            "aria-label",
+            `Dungeon tile ${x + 1},${y + 1}`,
+          );
+        }
+      c.append(
+        grid,
+        button(
+          "Mine deposit · 1 hour",
+          () => dungeonAction(s, "mine"),
+          places[e.site].type !== "mine" ||
+            e.y !== 1 ||
+            ![1, 5].includes(e.x) ||
+            !professional(s, "Miner") ||
+            !!s.siteProgress[`deposit-${e.site}-${e.x}`],
+        ),
+        button("Disarm darts · 1 wood / 1 hour", () =>
+          dungeonAction(s, "disarm"),
+        ),
+        button("Inspect nearby walls", () => dungeonAction(s, "inspect")),
+        button("Reinforce passage · 2 wood", () => dungeonAction(s, "shore")),
+        button(
+          "Open guarded vault",
+          () => dungeonAction(s, "vault"),
+          e.x !== 8 ||
+            e.y !== 5 ||
+            !s.siteProgress[`guard-${e.site}`] ||
+            !!s.siteProgress[`vault-${e.site}`],
+        ),
+        button("Leave dungeon", () => dungeonAction(s, "leave")),
+      );
+      a.append(c);
+    } else if (s.event.kind === "site") {
       const e = s.event;
       $("objective").textContent =
         `Inside ${places[e.site].name} · ${e.stage}. ${e.message}`;
@@ -8446,8 +9160,21 @@ function render() {
         button("Walk away", () => resolveEvent(s, "leave")),
       );
     }
-    if (s.event.kind !== "site") a.append(c);
+    if (!["site", "dungeon"].includes(s.event.kind)) a.append(c);
   } else if (s.battle) {
+    if (s.party[selected].role === "Archer")
+      a.append(
+        button("Overwatch", () => tacticalAction(s, selected, "overwatch")),
+      );
+    if (s.party[selected].role === "Shieldbearer")
+      a.append(
+        button("Shield wall", () => tacticalAction(s, selected, "wall")),
+      );
+    a.append(
+      button("Push adjacent enemy · 1 valor", () =>
+        tacticalAction(s, selected, "push"),
+      ),
+    );
     a.append(
       button(
         `End round ${s.battle.turn}`,
@@ -8524,6 +9251,17 @@ function render() {
     a.lastChild.title =
       scoutLock(s) ||
       `Scout the ${trailRegion(s)} for a terrain-based encounter. Once per region each day; scouting takes one hour.`;
+    a.append(
+      button(
+        s.ambushReady
+          ? "Ambush prepared"
+          : "Prepare ambush · 1 ration / 2 hours",
+        () => prepareAmbush(s),
+        !!s.ambushReady,
+      ),
+    );
+    if (["mine", "ruin"].includes(places[s.location]?.type))
+      a.append(button("Explore dungeon", () => enterDungeon(s)));
     if (places[s.location]?.type === "town")
       a.append(
         button(`Enter ${places[s.location].name}`, () => {
@@ -8708,7 +9446,7 @@ function draw() {
     view.x = 325 - w / view.scale / 2;
     view.y = 225 - Math.max(160, h - 180) / view.scale / 2;
   }
-  if (s.event?.kind === "site") {
+  if (["site", "dungeon"].includes(s.event?.kind)) {
     view.scale = Math.min(w / 768, Math.max(160, h - 160) / 432);
     view.x = (768 - w / view.scale) / 2;
     view.y = (432 - Math.max(160, h - 160) / view.scale) / 2;
@@ -8720,7 +9458,8 @@ function draw() {
       -view.x * view.scale,
       -view.y * view.scale,
     );
-    drawSiteInterior(ctx, s);
+    if (s.event.kind === "dungeon") drawDungeonInterior(ctx, s);
+    else drawSiteInterior(ctx, s);
     return;
   }
   canvas.dataset.viewX = view.x;
@@ -8875,6 +9614,7 @@ function draw() {
         );
       });
     drawLighting(ctx, s, canvas.width, canvas.height);
+    drawWeather(ctx, s);
     return;
   }
   ctx.drawImage(worldArtwork(), 0, 0);
@@ -8905,7 +9645,11 @@ function draw() {
       (p) =>
         !p.cleared &&
         Math.hypot(p.x - s.position.x, p.y - s.position.y) <
-          (s.research.includes("scouting") ? 210 : 140),
+          Math.max(
+            60,
+            (s.research.includes("scouting") ? 210 : 140) -
+              weatherInfo(s).visibility,
+          ),
     )
     .forEach((p) => {
       const hostile = p.kind !== "merchant" || p.hostile;
@@ -8970,6 +9714,7 @@ function draw() {
       drawLoadout(ctx, s, s.party[p.i], p.x, p.y);
     });
   drawLighting(ctx, s, canvas.width, canvas.height);
+  drawWeather(ctx, s);
 }
 canvas.onclick = (e) => {
   if (s.campOpen || companyLost(s)) return;
@@ -9020,8 +9765,16 @@ $("close-drawer").onclick = () => {
   render();
 };
 let previousFrame = 0,
-  lastSave = 0;
+  lastSave = 0,
+  lastCampDraw = 0;
 function updateClockUI() {
+  let weather = $("weather-label");
+  if (!weather) {
+    weather = document.createElement("span");
+    weather.id = "weather-label";
+    $("resources").append(weather);
+  }
+  weather.textContent = weatherInfo(s).label;
   const info = clockInfo(s);
   const label = `Day ${s.day} · ${info.time} · ${info.period}`;
   if ($("clock-label").textContent !== label)
@@ -9119,6 +9872,15 @@ function animate(time) {
       } catch {}
       lastSave = time;
     }
+  }
+  if (
+    s.campOpen &&
+    !document.hidden &&
+    !menuSettings.reduceMotion &&
+    time - lastCampDraw > 400
+  ) {
+    draw();
+    lastCampDraw = time;
   }
   requestAnimationFrame(animate);
 }
@@ -9667,6 +10429,28 @@ function showCompanyCreator() {
     beginPlaying(company);
   };
   root.append(form);
+}
+
+function drawWeather(c, s) {
+  const w = weatherInfo(s);
+  if (!["rain", "storm", "cold"].includes(w.kind)) return;
+  c.save();
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.strokeStyle = w.kind === "cold" ? "#e4e2c370" : "#b9c7ca50";
+  c.lineWidth = 1;
+  for (let i = 0; i < 35; i++) {
+    const x = (i * 97 + s.day * 13) % c.canvas.width,
+      y = (i * 73 + s.day * 31) % c.canvas.height;
+    c.beginPath();
+    c.moveTo(x, y);
+    c.lineTo(x + (w.kind === "cold" ? 1 : 4), y + (w.kind === "cold" ? 2 : 12));
+    c.stroke();
+  }
+  if (w.kind === "storm") {
+    c.fillStyle = "#303f4828";
+    c.fillRect(0, 0, c.canvas.width, c.canvas.height);
+  }
+  c.restore();
 }
 
 })();

@@ -1,5 +1,6 @@
 // Original, hand-built pixel artwork. All coordinates are logical pixels.
 import {
+  dungeonWalls,
   WORLD,
   places,
   terrainAt,
@@ -1085,6 +1086,27 @@ export function drawCampScene(c, s) {
           point.y + 20,
         );
     });
+  for (const [id, slot] of Object.entries(s.campFurniture || {})) {
+    const x = 230 + (slot % 3) * 70,
+      y = 155 + Math.floor(slot / 3) * 45;
+    pixel(
+      c,
+      x,
+      y,
+      32,
+      14,
+      id === "brazier" ? "#b47d44" : id === "rack" ? "#737967" : "#8f7350",
+    );
+    pixel(c, x + 3, y + 14, 3, 9, "#5c5038");
+    pixel(c, x + 26, y + 14, 3, 9, "#5c5038");
+  }
+  const pulse = Math.floor(performance.now() / 400) % 2;
+  if (campWorker(s, "cook")) pixel(c, 270, 182 - pulse * 3, 4, 8, "#e0d6b2");
+  if (campWorker(s, "smith")) pixel(c, 167 + pulse * 4, 197, 3, 4, "#e0b45f");
+  if (campWorker(s, "medic")) {
+    pixel(c, 445, 182 - pulse * 2, 10, 3, "#ded9b8");
+    pixel(c, 449, 179, 3, 9, "#ded9b8");
+  }
   drawLighting(c, s, c.canvas.width, c.canvas.height);
   // The campfire remains bright after the night overlay.
   pixel(c, 319, 240, 11, 13, "#c8773d");
@@ -1175,4 +1197,29 @@ export function drawSiteInterior(c, s) {
         s.party[i],
       );
   drawMapLabel(c, places[e.site].name, 384, 22);
+}
+export function drawDungeonInterior(c, s) {
+  pixel(c, 0, 0, 768, 432, "#393e35");
+  for (let y = 0; y < 7; y++)
+    for (let x = 0; x < 9; x++) {
+      const wall = dungeonWalls(s).some(([a, b]) => a === x && b === y);
+      pixel(c, 105 + x * 62, y * 60, 58, 56, wall ? "#555947" : "#92856b");
+      if ([1, 5].includes(x) && y === 1)
+        pixel(c, 125 + x * 62, 15 + y * 60, 14, 14, "#c2bca9");
+      if (x === 8 && y === 5)
+        pixel(c, 120 + x * 62, 15 + y * 60, 25, 17, "#b89960");
+      if ((x === 3 || x === 5) && y === 3)
+        pixel(c, 130 + x * 62, 23 + y * 60, 8, 8, "#633e31");
+    }
+  const p = s.party.find((p) => !p.dead);
+  drawCharacter(
+    c,
+    136 + s.event.x * 62,
+    28 + s.event.y * 60,
+    p.coat || partyCoats[0],
+    0,
+    p.role,
+    p.id,
+    p,
+  );
 }

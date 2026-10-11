@@ -902,3 +902,24 @@ nav button[data-count]::after {
 .in-site .atlas-frame {
   display: none;
 }
+
+.dungeon-grid {
+  display: grid;
+  grid-template-columns: repeat(9, minmax(0, 1fr));
+  gap: 2px;
+  margin: 8px 0;
+}
+.dungeon-grid button {
+  min-width: 0;
+  margin: 0;
+  padding: 7px 2px;
+  font-size: 9px;
+}
+
+.in-site #actions {
+  width: calc(100% - 36px);
+}
+.in-site #actions .card {
+  width: 100%;
+  min-width: 0;
+}

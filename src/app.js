@@ -1,4 +1,15 @@
 import {
+  weatherInfo,
+  prepareAmbush,
+  tacticalAction,
+  payCrimeFine,
+  personalGoal,
+  companionStory,
+  campFurniture,
+  placeFurniture,
+  enterDungeon,
+  dungeonAction,
+  dungeonWalls,
   avatarSkins,
   avatarHair,
   avatarAppearance,
@@ -178,6 +189,7 @@ import {
   drawCampScene,
   drawWolf,
   drawSiteInterior,
+  drawDungeonInterior,
   drawLighting,
   drawLoadout,
 } from "./art.js";
@@ -363,7 +375,10 @@ function render() {
   )
     tab = "Company";
 
-  document.body.classList.toggle("in-site", s.event?.kind === "site");
+  document.body.classList.toggle(
+    "in-site",
+    ["site", "dungeon"].includes(s.event?.kind),
+  );
   document.body.classList.toggle("drawer-open", drawerOpen);
   document.body.classList.toggle("encounter", !!s.event);
   document.body.classList.toggle("in-battle", !!s.battle);
@@ -444,6 +459,13 @@ function render() {
   const panel = $("panel");
   panel.replaceChildren();
   if (tab === "Company") {
+    if (s.crime.wanted)
+      panel.append(
+        card(
+          "Wanted company",
+          `<p>Wanted ${s.crime.wanted}/10 · ${s.crime.stolen ? "Cargo marked stolen" : "No marked stolen cargo"}. Warden patrols pursue you. Village guards accept fines.</p>`,
+        ),
+      );
     const standing = companyStanding(s);
     panel.append(
       card(
@@ -525,7 +547,7 @@ function render() {
     s.party.forEach((p) => {
       if (p.dead) {
         const memorial = card(
-          `${p.name} · Fallen`,
+          `${p.name} · ${p.departed ? "Left company" : "Fallen"}`,
           "<p>Died of starvation. Starvation deaths are permanent; medicine and rest cannot revive this companion.</p>",
         );
         memorial.classList.add("fallen");
@@ -777,6 +799,59 @@ function render() {
     secondSelect.onchange = updateConversation;
     social.append(firstSelect, secondSelect, conversation);
     panel.append(social);
+    const furnishings = card(
+      "Camp furnishings",
+      "<p>Place furnishings in one of six camp spaces. Table: +2 rest healing. Rack: +1 staffed forge ore. Brazier: shelter from storm fatigue.</p>",
+    );
+    for (const f of campFurniture) {
+      const slot = document.createElement("select");
+      slot.setAttribute("aria-label", `${f.name} space`);
+      for (let i = 0; i < 6; i++) {
+        const option = document.createElement("option");
+        option.value = i;
+        option.textContent = `Space ${i + 1}`;
+        slot.append(option);
+      }
+      const cost = document.createElement("p");
+      cost.textContent = `${f.name}: ${f.wood} wood, ${f.gold} crowns to build; relocation is free.`;
+      furnishings.append(cost);
+      slot.value = s.campFurniture[f.id] ?? 0;
+      furnishings.append(
+        slot,
+        button(
+          `${s.campFurniture[f.id] === undefined ? "Build" : "Move"} ${f.name}`,
+          () => placeFurniture(s, f.id, Number(slot.value)),
+        ),
+      );
+    }
+    panel.append(furnishings);
+    for (const p of livingParty(s).filter(
+      (p) => !p.storyComplete || (p.resolve ?? 65) <= 25,
+    )) {
+      const c = card(
+        `${p.name}’s goal`,
+        `<p>${personalGoal(p)}. Resolve ${Math.round(p.resolve ?? 65)}. Support costs 20 crowns${p.profession === "Smith" ? " and 3 ore; improves their weapon" : "; builds loyalty and morale"}.</p>`,
+      );
+      c.append(
+        button(
+          `Support ${p.name}`,
+          () => companionStory(s, p.id, "support"),
+          !!p.storyComplete ||
+            s.gold < 20 ||
+            (p.profession === "Smith" && s.inventory.ore < 3),
+        ),
+        button(
+          `Refuse ${p.name}`,
+          () => companionStory(s, p.id, "refuse"),
+          !!p.storyComplete,
+        ),
+      );
+      if ((p.resolve ?? 65) <= 25)
+        c.append(
+          button(`Release ${p.name}`, () => companionStory(s, p.id, "release")),
+        );
+      panel.append(c);
+    }
     const duties = card(
       "Camp duties",
       "<p>Choose one job per conscious companion. Build its station first. Jobs use current professions and operate on fed rests of at least six hours, once per day. Workers recover 3 fatigue per hour; resting companions recover 5.</p>",
@@ -1152,6 +1227,20 @@ function render() {
         }),
       );
     if (tab === "Town") {
+      if (s.crime.wanted) {
+        const c = card(
+          "Village guard",
+          `<p>Wanted ${s.crime.wanted}/10. Witnesses reported your raids. Pay ${s.crime.wanted * 20} crowns and surrender carried trade goods to stop pursuit.</p>`,
+        );
+        c.append(
+          button(
+            "Pay fine and surrender cargo",
+            () => payCrimeFine(s),
+            s.gold < s.crime.wanted * 20,
+          ),
+        );
+        panel.append(c);
+      }
       if (
         s.contract?.kind === "story" &&
         s.contract.phase === "return" &&
@@ -1534,7 +1623,72 @@ function render() {
   } else if (s.event) {
     const c = card(s.event.title, `<p>${s.event.text}</p>`);
     c.id = "event";
-    if (s.event.kind === "site") {
+    if (s.event.kind === "dungeon") {
+      const e = s.event,
+        c = card(
+          `${places[e.site].name} dungeon`,
+          `<p>${e.message}</p><p>Company position ${e.x + 1},${e.y + 1}. Arrow tiles move one square. Inspect walls for secrets. Unstable ground and traps hurt the party. Sentries guard the eastern vault.</p>`,
+        );
+      c.id = "event";
+      const grid = document.createElement("div");
+      grid.className = "dungeon-grid";
+      for (let y = 0; y < 7; y++)
+        for (let x = 0; x < 9; x++) {
+          const blocked = dungeonWalls(s).some(([a, b]) => a === x && b === y);
+          grid.append(
+            button(
+              e.x === x && e.y === y
+                ? "Party"
+                : blocked
+                  ? "Wall"
+                  : x === 8 && y === 5
+                    ? "Vault"
+                    : x === 7 && y === 5
+                      ? "Guard"
+                      : [1, 5].includes(x) &&
+                          y === 1 &&
+                          places[e.site].type === "mine"
+                        ? "Ore"
+                        : (x === 3 || x === 5) && y === 3
+                          ? "Trap"
+                          : "·",
+              () => dungeonAction(s, "move", x, y),
+              blocked || Math.abs(x - e.x) + Math.abs(y - e.y) !== 1,
+            ),
+          );
+          grid.lastChild.setAttribute(
+            "aria-label",
+            `Dungeon tile ${x + 1},${y + 1}`,
+          );
+        }
+      c.append(
+        grid,
+        button(
+          "Mine deposit · 1 hour",
+          () => dungeonAction(s, "mine"),
+          places[e.site].type !== "mine" ||
+            e.y !== 1 ||
+            ![1, 5].includes(e.x) ||
+            !professional(s, "Miner") ||
+            !!s.siteProgress[`deposit-${e.site}-${e.x}`],
+        ),
+        button("Disarm darts · 1 wood / 1 hour", () =>
+          dungeonAction(s, "disarm"),
+        ),
+        button("Inspect nearby walls", () => dungeonAction(s, "inspect")),
+        button("Reinforce passage · 2 wood", () => dungeonAction(s, "shore")),
+        button(
+          "Open guarded vault",
+          () => dungeonAction(s, "vault"),
+          e.x !== 8 ||
+            e.y !== 5 ||
+            !s.siteProgress[`guard-${e.site}`] ||
+            !!s.siteProgress[`vault-${e.site}`],
+        ),
+        button("Leave dungeon", () => dungeonAction(s, "leave")),
+      );
+      a.append(c);
+    } else if (s.event.kind === "site") {
       const e = s.event;
       $("objective").textContent =
         `Inside ${places[e.site].name} · ${e.stage}. ${e.message}`;
@@ -1680,8 +1834,21 @@ function render() {
         button("Walk away", () => resolveEvent(s, "leave")),
       );
     }
-    if (s.event.kind !== "site") a.append(c);
+    if (!["site", "dungeon"].includes(s.event.kind)) a.append(c);
   } else if (s.battle) {
+    if (s.party[selected].role === "Archer")
+      a.append(
+        button("Overwatch", () => tacticalAction(s, selected, "overwatch")),
+      );
+    if (s.party[selected].role === "Shieldbearer")
+      a.append(
+        button("Shield wall", () => tacticalAction(s, selected, "wall")),
+      );
+    a.append(
+      button("Push adjacent enemy · 1 valor", () =>
+        tacticalAction(s, selected, "push"),
+      ),
+    );
     a.append(
       button(
         `End round ${s.battle.turn}`,
@@ -1758,6 +1925,17 @@ function render() {
     a.lastChild.title =
       scoutLock(s) ||
       `Scout the ${trailRegion(s)} for a terrain-based encounter. Once per region each day; scouting takes one hour.`;
+    a.append(
+      button(
+        s.ambushReady
+          ? "Ambush prepared"
+          : "Prepare ambush · 1 ration / 2 hours",
+        () => prepareAmbush(s),
+        !!s.ambushReady,
+      ),
+    );
+    if (["mine", "ruin"].includes(places[s.location]?.type))
+      a.append(button("Explore dungeon", () => enterDungeon(s)));
     if (places[s.location]?.type === "town")
       a.append(
         button(`Enter ${places[s.location].name}`, () => {
@@ -1942,7 +2120,7 @@ function draw() {
     view.x = 325 - w / view.scale / 2;
     view.y = 225 - Math.max(160, h - 180) / view.scale / 2;
   }
-  if (s.event?.kind === "site") {
+  if (["site", "dungeon"].includes(s.event?.kind)) {
     view.scale = Math.min(w / 768, Math.max(160, h - 160) / 432);
     view.x = (768 - w / view.scale) / 2;
     view.y = (432 - Math.max(160, h - 160) / view.scale) / 2;
@@ -1954,7 +2132,8 @@ function draw() {
       -view.x * view.scale,
       -view.y * view.scale,
     );
-    drawSiteInterior(ctx, s);
+    if (s.event.kind === "dungeon") drawDungeonInterior(ctx, s);
+    else drawSiteInterior(ctx, s);
     return;
   }
   canvas.dataset.viewX = view.x;
@@ -2109,6 +2288,7 @@ function draw() {
         );
       });
     drawLighting(ctx, s, canvas.width, canvas.height);
+    drawWeather(ctx, s);
     return;
   }
   ctx.drawImage(worldArtwork(), 0, 0);
@@ -2139,7 +2319,11 @@ function draw() {
       (p) =>
         !p.cleared &&
         Math.hypot(p.x - s.position.x, p.y - s.position.y) <
-          (s.research.includes("scouting") ? 210 : 140),
+          Math.max(
+            60,
+            (s.research.includes("scouting") ? 210 : 140) -
+              weatherInfo(s).visibility,
+          ),
     )
     .forEach((p) => {
       const hostile = p.kind !== "merchant" || p.hostile;
@@ -2204,6 +2388,7 @@ function draw() {
       drawLoadout(ctx, s, s.party[p.i], p.x, p.y);
     });
   drawLighting(ctx, s, canvas.width, canvas.height);
+  drawWeather(ctx, s);
 }
 canvas.onclick = (e) => {
   if (s.campOpen || companyLost(s)) return;
@@ -2254,8 +2439,16 @@ $("close-drawer").onclick = () => {
   render();
 };
 let previousFrame = 0,
-  lastSave = 0;
+  lastSave = 0,
+  lastCampDraw = 0;
 function updateClockUI() {
+  let weather = $("weather-label");
+  if (!weather) {
+    weather = document.createElement("span");
+    weather.id = "weather-label";
+    $("resources").append(weather);
+  }
+  weather.textContent = weatherInfo(s).label;
   const info = clockInfo(s);
   const label = `Day ${s.day} · ${info.time} · ${info.period}`;
   if ($("clock-label").textContent !== label)
@@ -2353,6 +2546,15 @@ function animate(time) {
       } catch {}
       lastSave = time;
     }
+  }
+  if (
+    s.campOpen &&
+    !document.hidden &&
+    !menuSettings.reduceMotion &&
+    time - lastCampDraw > 400
+  ) {
+    draw();
+    lastCampDraw = time;
   }
   requestAnimationFrame(animate);
 }
@@ -2901,4 +3103,26 @@ function showCompanyCreator() {
     beginPlaying(company);
   };
   root.append(form);
+}
+
+function drawWeather(c, s) {
+  const w = weatherInfo(s);
+  if (!["rain", "storm", "cold"].includes(w.kind)) return;
+  c.save();
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.strokeStyle = w.kind === "cold" ? "#e4e2c370" : "#b9c7ca50";
+  c.lineWidth = 1;
+  for (let i = 0; i < 35; i++) {
+    const x = (i * 97 + s.day * 13) % c.canvas.width,
+      y = (i * 73 + s.day * 31) % c.canvas.height;
+    c.beginPath();
+    c.moveTo(x, y);
+    c.lineTo(x + (w.kind === "cold" ? 1 : 4), y + (w.kind === "cold" ? 2 : 12));
+    c.stroke();
+  }
+  if (w.kind === "storm") {
+    c.fillStyle = "#303f4828";
+    c.fillRect(0, 0, c.canvas.width, c.canvas.height);
+  }
+  c.restore();
 }

@@ -147,6 +147,9 @@ export function fresh() {
     lessonLedger: {},
     rumors: {},
     siteProgress: {},
+    crime: { wanted: 0, stolen: false },
+    campFurniture: {},
+    ambushReady: false,
     cargo: { grain: 0, cloth: 0, salt: 0, iron: 0 },
     markets: {},
     reputation: { guild: 0, wardens: 0, freefolk: 0 },
@@ -232,6 +235,7 @@ export function camp(s) {
   const cook = professional(s, "Cook");
   const recovery =
     (s.research.includes("medicine") ? 18 : 10) +
+    (s.campFurniture?.table !== undefined ? 2 : 0) +
     professionBonus(s, "Herbalist") * 2 +
     (s.campUpgrades.tents || 0) * 5 +
     (s.campUpgrades.infirmary || 0) * 6;
@@ -309,6 +313,7 @@ export function startBattle(s, patrolId = null) {
   s.destination = null;
   if (patrol?.kind === "merchant" && !patrol.hostile) {
     patrol.hostile = true;
+    registerCrime(s, false);
     s.morale = Math.max(0, s.morale - 10);
     s.renown = Math.max(0, s.renown - 5);
     changeReputation(s, "guild", -12);
@@ -409,6 +414,11 @@ export function startBattle(s, patrolId = null) {
   }
   deployBattle(s, patrol);
   if (!patrol) deployAdversary(s);
+  if (s.ambushReady) {
+    s.battle.valor = Math.min(5, s.battle.valor + 1);
+    s.battle.enemies[0].stun = 1;
+    s.ambushReady = false;
+  }
   note(
     s,
     "Steel drawn. Select a companion, then a neighboring tile to move or an enemy to attack.",
@@ -469,6 +479,7 @@ export function act(s, id, x, y) {
   return true;
 }
 function win(s) {
+  const dungeonReturn = s.battle.dungeonReturn;
   wearBattleEquipment(s);
   const patrolFight = s.battle.kind === "patrol";
   const bossFight = !patrolFight && s.contract?.kind === "boss";
@@ -488,6 +499,10 @@ function win(s) {
     s.food += 6;
     s.inventory.pelts += 2;
   }
+  if (raid) {
+    if (!s.crime.wanted) registerCrime(s);
+    s.crime.stolen = true;
+  }
   if (raid)
     lootCaravanCargo(
       s,
@@ -502,7 +517,9 @@ function win(s) {
   } else if (s.contract.kind !== "story") s.completed++;
   if (!raid) {
     s.renown += difficulty.renown;
-    changeReputation(s, wildlife ? "freefolk" : "wardens", 1);
+    const resisting = s.battle.patrolId === "warden-pursuit";
+    changeReputation(s, wildlife ? "freefolk" : "wardens", resisting ? -3 : 1);
+    if (resisting) s.crime.wanted = Math.min(10, s.crime.wanted + 1);
   }
   s.inventory.ore += difficulty.salvage;
   s.inventory.wood += difficulty.salvage;
@@ -543,6 +560,10 @@ function win(s) {
   }
   if (!patrolFight && !storyBattleWon(s)) s.contract = null;
   s.battle = null;
+  if (dungeonReturn) {
+    s.siteProgress[`guard-${dungeonReturn.site}`] = true;
+    s.event = dungeonReturn;
+  }
 }
 export function endTurn(s) {
   const b = s.battle;
@@ -640,6 +661,7 @@ export function endTurn(s) {
         [e.x, e.y] = options[0];
       }
     }
+    triggerOverwatch(s, e);
     if (e.hp > 0 && dist() <= range && hasLineOfSight(s, e, t)) {
       const p = s.party[t.id];
       const power =
@@ -707,8 +729,10 @@ export function endTurn(s) {
       u.cooldown = Math.max(0, (u.cooldown || 0) - 1);
       u.reacted = false;
       u.safeMove = false;
+      u.overwatch = false;
     });
   }
+  if (s.battle && s.battle.enemies.every((e) => e.hp <= 0)) win(s);
   return true;
 }
 
@@ -754,10 +778,51 @@ export function restore(raw) {
       result.lessonLedger[id] = day;
   }
   result.siteProgress = Object.fromEntries(
-    [4, 9]
-      .filter((id) => raw.siteProgress?.[`cart-${id}`] === true)
-      .map((id) => [`cart-${id}`, true]),
+    Object.entries(raw.siteProgress || {}).filter(
+      ([k, v]) =>
+        v === true &&
+        /^(cart|secret|shore|guard|vault)-\d+$|^(hazard|deposit)-\d+-[135]$/.test(
+          k,
+        ),
+    ),
   );
+  result.crime = {
+    wanted: Number.isInteger(raw.crime?.wanted)
+      ? Math.max(0, Math.min(10, raw.crime.wanted))
+      : 0,
+    stolen: raw.crime?.stolen === true,
+  };
+  result.campFurniture = Object.fromEntries(
+    campFurniture
+      .filter(
+        (f) =>
+          Number.isInteger(raw.campFurniture?.[f.id]) &&
+          raw.campFurniture[f.id] >= 0 &&
+          raw.campFurniture[f.id] < 6,
+      )
+      .map((f) => [f.id, raw.campFurniture[f.id]]),
+  );
+  result.ambushReady = raw.ambushReady === true;
+  if (result.event?.kind === "dungeon") {
+    const e = result.event;
+    result.event =
+      ["mine", "ruin"].includes(places[e.site]?.type) &&
+      e.site === raw.location &&
+      Number.isInteger(e.x) &&
+      e.x >= 0 &&
+      e.x <= 8 &&
+      Number.isInteger(e.y) &&
+      e.y >= 0 &&
+      e.y <= 6
+        ? {
+            kind: "dungeon",
+            site: e.site,
+            x: e.x,
+            y: e.y,
+            message: safeCompanyName(e.message, "", 180),
+          }
+        : null;
+  }
   if (result.event?.kind === "site") {
     const e = result.event;
     result.event =
@@ -785,6 +850,20 @@ export function restore(raw) {
         : null;
     if (result.event?.site === 10 && result.explored.includes(10))
       result.event.stage = "opened";
+  }
+  if (result.battle?.dungeonReturn) {
+    const e = result.battle.dungeonReturn;
+    if (
+      e.kind !== "dungeon" ||
+      !["mine", "ruin"].includes(places[e.site]?.type) ||
+      !Number.isInteger(e.x) ||
+      e.x < 0 ||
+      e.x > 8 ||
+      !Number.isInteger(e.y) ||
+      e.y < 0 ||
+      e.y > 6
+    )
+      delete result.battle.dungeonReturn;
   }
   result.companyName = safeCompanyName(raw.companyName);
   result.banner = companyBanners.some((b) => b.id === raw.banner)
@@ -893,6 +972,22 @@ export function restore(raw) {
         }
       : p;
   });
+  if (result.crime.wanted >= 3) {
+    const saved = raw.patrols?.find((p) => p.id === "warden-pursuit");
+    const base = initialPatrols().find((p) => p.kind === "bandits");
+    result.patrols.push({
+      ...base,
+      id: "warden-pursuit",
+      name: "Warden pursuit",
+      x: Number.isFinite(saved?.x)
+        ? Math.max(12, Math.min(WORLD.width - 12, saved.x))
+        : Math.max(12, result.position.x - 100),
+      y: Number.isFinite(saved?.y)
+        ? Math.max(18, Math.min(WORLD.height - 18, saved.y))
+        : result.position.y,
+      cleared: saved?.cleared === true,
+    });
+  }
   discoverNearby(result, false);
   result.party = result.party.map((p, id) => ({
     ...base.party[0],
@@ -1901,7 +1996,8 @@ export function initialChart() {
 export function discoverNearby(s, reward = true) {
   const radius =
       (s.research.includes("scouting") ? 210 : 140) +
-      (s.campUpgrades.watchpost ? 40 : 0),
+      (s.campUpgrades.watchpost ? 40 : 0) -
+      weatherInfo(s).visibility,
     known = new Set(s.charted),
     cols = Math.ceil(WORLD.width / 64);
   const cx = Math.floor(s.position.x / 64),
@@ -2037,6 +2133,10 @@ export function advancePatrols(s, seconds) {
   )
     return false;
   for (const p of s.patrols.filter((p) => !p.cleared)) {
+    if (p.id === "warden-pursuit") {
+      p.route = [{ ...s.position }];
+      p.waypoint = 0;
+    }
     let budget =
       Math.min(seconds, 5) *
       (p.kind === "merchant" ? 14 : p.kind === "wolves" ? 24 : 20);
@@ -2069,6 +2169,14 @@ export function advancePatrols(s, seconds) {
       if (step === length) p.waypoint = (p.waypoint + 1) % p.route.length;
     }
   }
+  const pursuer = s.patrols.find(
+    (p) => p.id === "warden-pursuit" && !p.cleared,
+  );
+  if (
+    pursuer &&
+    Math.hypot(pursuer.x - s.position.x, pursuer.y - s.position.y) <= 36
+  )
+    startBattle(s, pursuer.id);
   return true;
 }
 export function nearbyPatrols(s) {
@@ -2193,7 +2301,7 @@ export function campCost(s) {
           (s.research.includes("preservation") ? 1 : 0) -
           (s.campUpgrades.cookpot || 0) -
           (s.campOpen && campWorker(s, "cook") ? 1 : 0),
-      )
+      ) + weatherInfo(s).food
     : 0;
 }
 export function healAmount(s) {
@@ -3030,6 +3138,13 @@ function settleDay(s, mealsProvided = false) {
     s,
     `Daily upkeep: ${mealsProvided ? "inn meals" : `${supplied} rations`} and ${paid} crowns paid. ${s.wageDebt ? `${s.wageDebt} crowns still owed.` : "Wages settled."}`,
   );
+  for (const p of livingParty(s))
+    if (
+      s.wageDebt > 0 &&
+      (p.resolve ?? 65) <= 10 &&
+      p.storyComplete === "refused"
+    )
+      departCompanion(s, p);
   if (companyLost(s)) {
     s.destination = null;
     s.campOpen = false;
@@ -3051,7 +3166,12 @@ export function spendHours(s, hours, options = {}) {
           (p.fatigue || 0) +
             amount *
               (hasTrait(p, "tireless") ? 1.5 : 2) *
-              (s.research.includes("endurance") ? 0.75 : 1),
+              (s.research.includes("endurance") ? 0.75 : 1) +
+            amount *
+              (s.campOpen &&
+              (s.campUpgrades.tent || s.campFurniture?.brazier !== undefined)
+                ? 0
+                : weatherInfo(s).fatigue),
         );
     s.timeOfDay += amount;
     remaining -= amount;
@@ -3313,7 +3433,10 @@ function finishCampJobs(s, restHours) {
   }
   if (smith) {
     if (s.inventory.wood >= 1) {
-      const ore = 2 + professionRank(smith);
+      const ore =
+        2 +
+        professionRank(smith) +
+        (s.campFurniture?.rack !== undefined ? 1 : 0);
       s.inventory.wood--;
       s.inventory.ore += ore;
       practice(s, smith, 2);
@@ -4370,6 +4493,11 @@ export function tradeGoodsAtVillage(s, good, quantity = 1, side = "buy") {
     s,
     `${side === "buy" ? "Bought" : "Sold"} ${quantity} ${good} for ${quote} crowns in ${places[s.location].name}.`,
   );
+  if (side === "sell" && s.crime?.stolen) {
+    s.crime.wanted = Math.min(10, s.crime.wanted + 1);
+    if (!cargoLoad(s)) s.crime.stolen = false;
+    note(s, "A buyer recognizes stolen cargo. Wanted level rises.");
+  }
   return true;
 }
 export function caravanCargoPrice(s, good) {
@@ -5774,4 +5902,402 @@ export function siteAction(s, action, value) {
     return true;
   }
   return false;
+}
+
+export function weatherInfo(s) {
+  const season = ["Spring", "Summer", "Autumn", "Winter"][
+      Math.floor((s.day - 1) / 7) % 4
+    ],
+    kind = ["clear", "rain", "storm", "cold"][(s.day - 1) % 4];
+  return {
+    season,
+    kind,
+    label: `${season} · ${kind}`,
+    food: kind === "cold" || season === "Winter" ? 1 : 0,
+    fatigue: kind === "storm" ? 0.5 : 0,
+    visibility: kind === "rain" ? 30 : kind === "storm" ? 60 : 0,
+  };
+}
+export function prepareAmbush(s) {
+  if (
+    s.battle ||
+    s.event ||
+    s.campOpen ||
+    s.destination ||
+    companyLost(s) ||
+    s.food < 1 ||
+    s.ambushReady
+  )
+    return false;
+  s.food--;
+  spendHours(s, 2);
+  if (companyLost(s)) return false;
+  s.ambushReady = true;
+  note(
+    s,
+    "Ambush prepared: +1 opening valor and the first enemy misses its first turn.",
+  );
+  return true;
+}
+export function tacticalAction(s, id, action) {
+  const b = s.battle,
+    u = b?.units.find((u) => u.id === id),
+    p = s.party[id];
+  if (!u || u.acted || p.hp <= 0) return false;
+  if (action === "overwatch" && p.role === "Archer") {
+    u.overwatch = true;
+    u.acted = true;
+    note(s, `${p.name} watches a firing lane until the next round.`);
+    return true;
+  }
+  if (action === "wall" && p.role === "Shieldbearer") {
+    u.guard = true;
+    u.acted = true;
+    for (const ally of b.units)
+      if (
+        s.party[ally.id].hp > 0 &&
+        Math.abs(ally.x - u.x) + Math.abs(ally.y - u.y) <= 1
+      )
+        ally.guard = true;
+    note(s, "Shield wall: adjacent companions brace together.");
+    return true;
+  }
+  if (action === "push" && b.valor >= 1) {
+    const e = b.enemies.find(
+      (e) => e.hp > 0 && Math.abs(e.x - u.x) + Math.abs(e.y - u.y) === 1,
+    );
+    if (!e) return false;
+    const x = e.x + (e.x - u.x),
+      y = e.y + (e.y - u.y);
+    if (
+      x < 0 ||
+      x > 8 ||
+      y < 0 ||
+      y > 6 ||
+      terrainCell(s, x, y).blocked ||
+      b.enemies.some((v) => v !== e && v.hp > 0 && v.x === x && v.y === y) ||
+      b.units.some((v) => s.party[v.id].hp > 0 && v.x === x && v.y === y)
+    )
+      return false;
+    e.x = x;
+    e.y = y;
+    hitEnemy(
+      s,
+      e,
+      2 + (e.armor || 0) + (terrainCell(s, x, y).cost > 1 ? 3 : 0),
+    );
+    b.valor--;
+    u.acted = true;
+    if (b.enemies.every((e) => e.hp <= 0)) win(s);
+    return true;
+  }
+  return false;
+}
+export function payCrimeFine(s) {
+  const fee = (s.crime?.wanted || 0) * 20;
+  if (
+    !fee ||
+    s.gold < fee ||
+    s.battle ||
+    s.event ||
+    places[s.location]?.type !== "town"
+  )
+    return false;
+  s.gold -= fee;
+  s.crime = { wanted: 0, stolen: false };
+  s.patrols = s.patrols.filter((p) => p.id !== "warden-pursuit");
+  note(s, `Paid ${fee} crowns in fines. Stolen goods surrendered.`);
+  s.cargo = Object.fromEntries(tradeGoods.map((g) => [g.id, 0]));
+  return true;
+}
+export function registerCrime(s, stolen = true) {
+  s.crime ||= { wanted: 0, stolen: false };
+  s.crime.wanted = Math.min(10, s.crime.wanted + 3);
+  s.crime.stolen = s.crime.stolen || stolen;
+  note(
+    s,
+    "Surviving witnesses report the raid. Warden patrols pursue the company; villages demand a fine.",
+  );
+  if (!s.patrols.some((p) => p.id === "warden-pursuit" && !p.cleared)) {
+    s.patrols = s.patrols.filter((p) => p.id !== "warden-pursuit");
+    const base = initialPatrols().find((p) => p.kind === "bandits");
+    s.patrols.push({
+      ...base,
+      id: "warden-pursuit",
+      name: "Warden pursuit",
+      kind: "bandits",
+      x: Math.max(20, s.position.x - 120),
+      y: s.position.y,
+      cleared: false,
+      hostile: true,
+    });
+  }
+}
+export function personalGoal(p) {
+  return p.profession === "Smith"
+    ? "A weapon worthy of the company"
+    : p.profession === "Herbalist"
+      ? "Supplies for a sick family"
+      : "A place to belong";
+}
+export function companionStory(s, id, choice) {
+  const p = s.party[id];
+  if (
+    !s.campOpen ||
+    s.battle ||
+    s.event ||
+    !p ||
+    p.dead ||
+    (p.storyComplete && choice !== "release")
+  )
+    return false;
+  if (choice === "support") {
+    const cost = p.profession === "Smith" ? 3 : 0;
+    if (s.gold < 20 || s.inventory.ore < cost) return false;
+    s.gold -= 20;
+    s.inventory.ore -= cost;
+    changeResolve(p, 20);
+    if (cost) p.weapon = Math.min(4, (p.weapon || 0) + 1);
+    else s.morale = Math.min(100, s.morale + 5);
+    for (const q of livingParty(s))
+      if (q !== p)
+        s.bonds[bondKey(p.id, q.id)] = Math.min(
+          100,
+          bondValue(s, p.id, q.id) + 1,
+        );
+    p.storyComplete = "supported";
+  } else if (choice === "refuse") {
+    changeResolve(p, -15);
+    p.storyComplete = "refused";
+    for (const q of livingParty(s))
+      if (q !== p)
+        s.bonds[bondKey(p.id, q.id)] = Math.max(
+          0,
+          bondValue(s, p.id, q.id) - 3,
+        );
+  } else if (choice === "release") {
+    if ((p.resolve ?? 65) > 25) return false;
+    p.departed = true;
+    p.dead = true;
+    p.equipment = {};
+    for (const role of campRoles)
+      if (s.campJobs[role.id] === id) delete s.campJobs[role.id];
+    p.storyComplete = "left";
+    note(
+      s,
+      `${p.name} leaves the company alive. Their equipment stays in stores.`,
+    );
+    return true;
+  } else return false;
+  note(s, `${p.name}: ${personalGoal(p)} — ${p.storyComplete}.`);
+  return true;
+}
+export const campFurniture = [
+  { id: "table", name: "Shared table", wood: 4, gold: 15 },
+  { id: "rack", name: "Tool rack", wood: 3, gold: 12 },
+  { id: "brazier", name: "Sheltered brazier", wood: 5, gold: 20 },
+];
+export function placeFurniture(s, id, slot) {
+  const f = campFurniture.find((f) => f.id === id);
+  if (
+    !s.campOpen ||
+    s.battle ||
+    s.event ||
+    !f ||
+    !Number.isInteger(slot) ||
+    slot < 0 ||
+    slot > 5
+  )
+    return false;
+  s.campFurniture ||= {};
+  if (
+    Object.entries(s.campFurniture).some(([key, v]) => key !== id && v === slot)
+  ) {
+    note(s, "That camp space is occupied. Choose another space.");
+    return false;
+  }
+  if (s.campFurniture[id] === undefined) {
+    if (s.gold < f.gold || s.inventory.wood < f.wood) return false;
+    s.gold -= f.gold;
+    s.inventory.wood -= f.wood;
+  }
+  s.campFurniture[id] = slot;
+  note(s, `${f.name} placed in camp space ${slot + 1}.`);
+  return true;
+}
+export function enterDungeon(s) {
+  if (
+    s.battle ||
+    s.event ||
+    s.campOpen ||
+    s.destination ||
+    companyLost(s) ||
+    !["mine", "ruin"].includes(places[s.location]?.type)
+  )
+    return false;
+  s.event = {
+    kind: "dungeon",
+    site: s.location,
+    x: 0,
+    y: 5,
+    message:
+      "Explore the tunnels. Inspect walls for secrets; reinforce unstable ground before crossing.",
+  };
+  return true;
+}
+export function dungeonWalls(s) {
+  return [
+    [2, 1],
+    [2, 2],
+    [2, 3],
+    [6, 4],
+    ...(!s.siteProgress[`secret-${s.event.site}`] ? [[4, 1]] : []),
+  ];
+}
+export function dungeonAction(s, action, x, y) {
+  const e = s.event;
+  if (e?.kind !== "dungeon") return false;
+  if (action === "leave") {
+    s.event = null;
+    return true;
+  }
+  if (action === "inspect") {
+    if (
+      Math.abs(e.x - 4) + Math.abs(e.y - 1) <= 1 &&
+      !s.siteProgress[`secret-${e.site}`]
+    ) {
+      s.siteProgress[`secret-${e.site}`] = true;
+      s.inventory.herbs += 4;
+      e.message = "A secret passage! Four herbs recovered.";
+    } else
+      e.message =
+        "Scratched stone hints at a hidden door near the northern center.";
+    return true;
+  }
+  if (action === "shore") {
+    if (s.inventory.wood < 2 || s.siteProgress[`shore-${e.site}`]) return false;
+    s.inventory.wood -= 2;
+    s.siteProgress[`shore-${e.site}`] = true;
+    e.message = "Timbers secure the unstable passage.";
+    return true;
+  }
+  if (action === "mine") {
+    if (
+      !["mine"].includes(places[e.site]?.type) ||
+      e.y !== 1 ||
+      ![1, 5].includes(e.x)
+    )
+      return false;
+    const key = `deposit-${e.site}-${e.x}`,
+      maker = professional(s, "Miner");
+    if (s.siteProgress[key] || !maker) return false;
+    s.siteProgress[key] = true;
+    s.inventory.ore += 3 + professionRank(maker);
+    practice(s, maker, 1);
+    spendHours(s, 1);
+    e.message = "Mined the deposit. Ore recovered and Miner practice gained.";
+    return true;
+  }
+  if (action === "disarm") {
+    if (
+      Math.abs(e.x - 3) + Math.abs(e.y - 3) > 1 ||
+      s.inventory.wood < 1 ||
+      s.siteProgress[`hazard-${e.site}-3`]
+    )
+      return false;
+    s.inventory.wood--;
+    s.siteProgress[`hazard-${e.site}-3`] = true;
+    spendHours(s, 1);
+    e.message = "The dart mechanism is disabled.";
+    return true;
+  }
+  if (action === "vault") {
+    if (
+      e.x !== 8 ||
+      e.y !== 5 ||
+      !s.siteProgress[`guard-${e.site}`] ||
+      s.siteProgress[`vault-${e.site}`]
+    )
+      return false;
+    s.siteProgress[`vault-${e.site}`] = true;
+    s.gold += 50;
+    s.knowledge += 2;
+    e.message = "Recovered 50 crowns and two knowledge from the guarded vault.";
+    return true;
+  }
+  if (
+    action !== "move" ||
+    !Number.isInteger(x) ||
+    !Number.isInteger(y) ||
+    x < 0 ||
+    x > 8 ||
+    y < 0 ||
+    y > 6 ||
+    Math.abs(x - e.x) + Math.abs(y - e.y) !== 1 ||
+    dungeonWalls(s).some(([a, b]) => a === x && b === y)
+  )
+    return false;
+  e.x = x;
+  e.y = y;
+  e.message = "";
+  if (
+    (x === 3 && y === 3) ||
+    (x === 5 && y === 3 && !s.siteProgress[`shore-${e.site}`])
+  ) {
+    const key = `hazard-${e.site}-${x}`;
+    if (!s.siteProgress[key]) {
+      s.siteProgress[key] = true;
+      for (const p of livingParty(s)) p.hp = Math.max(1, p.hp - 3);
+      e.message =
+        x === 3
+          ? "A dart trap deals 3 damage to each companion."
+          : "A cave-in deals 3 damage. Reinforce the passage next time.";
+    }
+  }
+  if (x === 7 && y === 5 && !s.siteProgress[`guard-${e.site}`]) {
+    const contract = s.contract;
+    s.event = null;
+    s.contract = { target: e.site, tier: 2, reward: 40 };
+    if (!startBattle(s)) {
+      s.contract = contract;
+      s.event = e;
+      return false;
+    }
+    s.contract = contract;
+    s.battle.kind = "patrol";
+    s.battle.dungeonReturn = { ...e };
+    note(
+      s,
+      "Sentries guard the treasure chamber. Defeat them to open the vault.",
+    );
+  }
+  return true;
+}
+
+function triggerOverwatch(s, e) {
+  for (const u of s.battle.units) {
+    const p = s.party[u.id];
+    if (
+      u.overwatch &&
+      p.hp > 0 &&
+      e.hp > 0 &&
+      Math.abs(u.x - e.x) + Math.abs(u.y - e.y) <= attackRange(p, false, s) &&
+      hasLineOfSight(s, u, e)
+    ) {
+      u.overwatch = false;
+      hitEnemy(s, e, attackPower(s, p));
+      note(s, `${p.name} fires an overwatch shot.`);
+    }
+  }
+}
+function departCompanion(s, p) {
+  p.departed = true;
+  p.dead = true;
+  p.equipment = {};
+  for (const role of campRoles)
+    if (s.campJobs[role.id] === p.id) delete s.campJobs[role.id];
+  note(
+    s,
+    `${p.name} leaves alive after losing faith in the company. Their equipment stays in stores.`,
+  );
 }
