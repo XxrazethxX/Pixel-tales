@@ -84,7 +84,7 @@ test("old saves migrate and malformed saves recover", () => {
   s.gold = 99;
   const migrated = restore(s);
   assert.equal(migrated.gold, 99);
-  assert.equal(migrated.version, 6);
+  assert.equal(migrated.version, 7);
   assert.equal(migrated.inventory.medicine, 1);
   assert.equal(restore({ version: 1 }).party.length, 4);
   assert.equal(restore(null).day, 1);
@@ -736,4 +736,169 @@ test("elite contracts deploy five stronger enemies and legacy accepted work rema
   const migrated = restore(old);
   assert.ok(startBattle(migrated));
   assert.equal(migrated.battle.enemies.length, 3);
+});
+
+import {
+  equipmentCatalog,
+  grantEquipment,
+  gearItem,
+  gearOwner,
+  equippedItem,
+  armorPower,
+  equipEquipment,
+  unequipEquipment,
+  buyEquipment,
+  sellEquipment,
+  equipmentRecipe,
+  craftEquipment,
+} from "../src/game.js";
+test("gear slots apply real combat bonuses, respect classes, replace items and transfer without duplication", () => {
+  const s = fresh();
+  const sword = grantEquipment(s, "sword-1"),
+    mace = grantEquipment(s, "mace-1"),
+    armor = grantEquipment(s, "armor-1");
+  const attack = attackPower(s, s.party[0]);
+  assert.equal(equipEquipment(s, sword, 2), false);
+  assert.ok(equipEquipment(s, sword, 0));
+  assert.equal(attackPower(s, s.party[0]), attack + 2);
+  assert.equal(equipEquipment(s, sword, 0), false);
+  assert.ok(equipEquipment(s, armor, 0));
+  assert.equal(armorPower(s, s.party[0]), 1);
+  assert.ok(equipEquipment(s, armor, 1));
+  assert.equal(armorPower(s, s.party[0]), 0);
+  assert.equal(gearOwner(s, armor).id, 1);
+  assert.equal(s.gear.length, 3);
+  s.party[0].weapon = 2;
+  assert.equal(attackPower(s, s.party[0]), attack + 4);
+  const replacement = grantEquipment(s, "sword-2");
+  assert.ok(equipEquipment(s, replacement, 0));
+  assert.equal(gearOwner(s, sword), null);
+  assert.equal(attackPower(s, s.party[0]), attack + 5);
+  assert.ok(unequipEquipment(s, 0, "weapon"));
+  assert.equal(attackPower(s, s.party[0]), attack + 2);
+  assert.equal(unequipEquipment(s, 0, "weapon"), false);
+  assert.equal(unequipEquipment(s, 0, "invalid"), false);
+  assert.equal(equipEquipment(s, 999, 0), false);
+  assert.equal(equipEquipment(s, mace, 99), false);
+  s.battle = {};
+  assert.equal(equipEquipment(s, mace, 1), false);
+  assert.equal(unequipEquipment(s, 1, "armor"), false);
+  s.battle = null;
+  s.event = { kind: "courier" };
+  assert.equal(equipEquipment(s, mace, 1), false);
+});
+test("equipped armor reduces enemy damage rather than only changing the displayed stat", () => {
+  const s = fresh();
+  equipEquipment(s, grantEquipment(s, "armor-2"), 0);
+  s.contract = { target: 1, reward: 65 };
+  s.location = 1;
+  startBattle(s);
+  s.battle.enemies = [
+    { id: 0, x: 2, y: 1, hp: 20, max: 20, damage: 5, kind: "raider" },
+  ];
+  endTurn(s);
+  assert.equal(s.party[0].hp, 25);
+});
+test("blacksmith purchases and resale validate stock, standing, ownership, funds and village access", () => {
+  const s = fresh();
+  assert.equal(buyEquipment(s, "sword-3"), false);
+  assert.equal(buyEquipment(s, "sword-2"), false);
+  assert.equal(buyEquipment(s, "missing"), false);
+  assert.ok(buyEquipment(s, "sword-1"));
+  assert.equal(s.gold, 88);
+  const sword = s.gear[0].id;
+  equipEquipment(s, sword, 0);
+  assert.equal(sellEquipment(s, sword), false);
+  unequipEquipment(s, 0, "weapon");
+  assert.ok(sellEquipment(s, sword));
+  assert.equal(s.gold, 100);
+  assert.equal(sellEquipment(s, sword), false);
+  s.research.push("barter");
+  s.renown = 5;
+  assert.ok(buyEquipment(s, "bow-2"));
+  assert.equal(s.gold, 44);
+  s.location = -1;
+  assert.equal(buyEquipment(s, "armor-1"), false);
+  assert.equal(sellEquipment(s, s.gear[0].id), false);
+  s.location = 0;
+  s.gold = 1;
+  assert.equal(buyEquipment(s, "armor-1"), false);
+  assert.equal(s.gear.length, 1);
+});
+test("battle loot matches encounter tier, stays in inventory, and is never auto-equipped", () => {
+  for (const tier of [1, 2, 3]) {
+    const s = fresh();
+    s.contract = { target: 1, reward: 65, tier };
+    s.location = 1;
+    startBattle(s);
+    s.battle.enemies = [{ id: 0, x: 2, y: 1, hp: 1, max: 1 }];
+    act(s, 0, 2, 1);
+    assert.equal(s.gear.length, 1);
+    assert.equal(gearItem(s, s.gear[0].id).tier, tier);
+    assert.equal(gearOwner(s, s.gear[0].id), null);
+    assert.equal(s.party[0].equipment.weapon, null);
+  }
+});
+test("fine gear crafting requires research and a conscious Smith, consumes ranked costs, and adds practice", () => {
+  const s = fresh();
+  s.inventory.ore = 20;
+  s.inventory.wood = 10;
+  s.knowledge = 20;
+  assert.equal(research(s, "armorer"), false);
+  assert.equal(craftEquipment(s, "sword-2"), false);
+  assert.ok(research(s, "steel"));
+  assert.ok(research(s, "armorer"));
+  s.party[0].professionXP = 8;
+  assert.equal(equipmentRecipe(s, "sword-2").ore, 3);
+  assert.ok(craftEquipment(s, "sword-2"));
+  assert.equal(s.inventory.ore, 17);
+  assert.equal(s.inventory.wood, 8);
+  assert.equal(s.party[0].professionXP, 10);
+  assert.equal(gearItem(s, s.gear[0].id).name, "Tempered sword");
+  assert.equal(craftEquipment(s, "sword-3"), false);
+  s.party[0].hp = 0;
+  assert.equal(craftEquipment(s, "armor-2"), false);
+  s.party[0].hp = s.party[0].max;
+  s.inventory.ore = 0;
+  assert.equal(craftEquipment(s, "armor-2"), false);
+});
+test("gear migration preserves old upgrades and valid equipment while rejecting duplicate IDs and invalid assignments", () => {
+  const old = fresh();
+  old.version = 6;
+  delete old.gear;
+  delete old.nextGearId;
+  old.party[0].weapon = 4;
+  old.party[0].armor = 3;
+  delete old.party[0].equipment;
+  const migrated = restore(old);
+  assert.equal(migrated.version, 7);
+  assert.deepEqual(migrated.gear, []);
+  assert.equal(migrated.party[0].weapon, 4);
+  assert.equal(armorPower(migrated, migrated.party[0]), 3);
+  const s = fresh();
+  const sword = grantEquipment(s, "sword-2"),
+    armor = grantEquipment(s, "armor-3");
+  equipEquipment(s, sword, 0);
+  equipEquipment(s, armor, 1);
+  const loaded = restore(s);
+  assert.equal(
+    equippedItem(loaded, loaded.party[0], "weapon").name,
+    "Tempered sword",
+  );
+  assert.equal(armorPower(loaded, loaded.party[1]), 3);
+  assert.equal(grantEquipment(loaded, "bow-1"), 3);
+  s.gear.push(
+    { id: sword, template: "bow-1" },
+    { id: 99, template: "fake" },
+    { id: -2, template: "sword-1" },
+  );
+  s.party[1].equipment.weapon = sword;
+  s.party[2].equipment.armor = armor;
+  s.party[3].equipment.weapon = armor;
+  const sanitized = restore(s);
+  assert.equal(sanitized.gear.length, 2);
+  assert.equal(sanitized.party[1].equipment.weapon, null);
+  assert.equal(sanitized.party[2].equipment.armor, null);
+  assert.equal(sanitized.party[3].equipment.weapon, null);
+  assert.equal(grantEquipment(sanitized, "missing"), false);
 });

@@ -585,3 +585,34 @@ nav .active {
 .drawer-heading h2 {
   max-width: calc(100% - 60px);
 }
+.gear-card[data-quality="1"] {
+  border-left: 3px solid #8d9278;
+}
+.gear-card[data-quality="2"] {
+  border-left: 3px solid #658374;
+}
+.gear-card[data-quality="3"] {
+  border-left: 3px solid #b48d45;
+}
+.card .gear-quality {
+  font-weight: bold;
+  font-size: 10px;
+  letter-spacing: 0.6px;
+}
+.quality-1 {
+  color: #64664d !important;
+}
+.quality-2 {
+  color: #4d675a !important;
+}
+.quality-3 {
+  color: #806132 !important;
+}
+nav button[data-count]::after {
+  content: attr(data-count);
+  margin-left: 6px;
+  padding: 1px 4px;
+  color: #f2e0b2;
+  background: #736e4c;
+  font-size: 9px;
+}

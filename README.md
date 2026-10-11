@@ -58,6 +58,24 @@ Each combat victory also grants 2–4 ore and wood according to difficulty. Patr
 
 At the **Market square**, sell spare ore (2 crowns each), wood or herbs (1), and medicine (4), individually or as a whole stack. Purchase prices exceed resale prices. At **The Crooked Lantern**, resting costs **6 crowns per companion**, including beds, meals, and wages. It takes one day, uses no rations, restores everyone to full health, cures injuries, and adds 15 morale up to 100. Recruitment remains a separate service.
 
+## Equipment and battle loot
+
+Open **Equipment** from the bottom toolbar to manage your company’s named weapons and armor. Each combat victory adds one item to company stores: Standard encounters and patrols drop Common gear, Dangerous contracts drop Fine gear, and Elite contracts drop Rare gear. Loot stays unequipped until you assign it.
+
+| Quality | Weapon bonus | Armor bonus | How to acquire |
+| --- | --- | --- | --- |
+| Common | +2 attack | +1 armor | Standard fights or village blacksmiths |
+| Fine | +3 attack | +2 armor | Dangerous fights, blacksmiths at 5 renown, or crafting |
+| Rare | +4 attack | +3 armor | Elite contracts |
+
+Swords fit swordswomen, maces fit shieldbearers, bows fit archers, and spears fit spearmen. Armor fits everyone. Each companion wears one weapon and one armor item. Equipping a replacement returns the previous item to company stores; transferring an item removes it from its previous wearer. Comparison text shows the change for your selected companion. Gear bonuses add to permanent workshop improvements, research, and talents, and equipped armor actually reduces incoming damage.
+
+Buy gear at a village **Blacksmith**, then assign it in Equipment. While in a village, unequipped gear can be sold from the inventory for 40% of its normal price. Equipped gear must be removed before selling. Barter research discounts purchases. Rare equipment is not sold by shops.
+
+Research **Armorer’s craft** (5 knowledge, requires Tempered steel) to unlock five Fine recipes in **Workshop**. Weapons use 5 ore and 2 wood; armor uses 6 ore and 1 wood. Each Smith rank reduces ore cost by one, and crafting grants two Smith practice. Gear cannot be changed, bought, sold, or crafted during combat or roadside encounters.
+
+[Equipment inventory preview](docs/screenshots/equipment.png)
+
 ## Company development and tactical abilities
 
 Every class starts with an active ability. Select a companion, press its ability button, then click an outlined enemy. Press **Basic attack** to cancel aiming. Abilities use the companion's action and shared **valor**, and have a two-round cooldown: use in round one, unavailable in round two, available again in round three. Valor starts at three, caps at five, regenerates one per completed round, and gains one from bracing or an enemy kill.
@@ -97,13 +115,13 @@ Near a mine or forest, **Work mine / Gather herbs** is repeatable: it costs two 
 2. Close the panel and click toward **Pinewatch** on the map. You can take any route and stop anywhere along the way.
 3. **Explore** to collect knowledge, ore, wood, and herbs, then **Engage raiders**.
 4. Select a companion using their button or sprite. Outlined green tiles are movement options; outlined red enemies are attack targets. Each companion can move up to two Manhattan tiles **and** attack once per round. Bows reach four tiles, spears two, other weapons one. **Brace** trades your attack for damage reduction. End the round for enemy actions.
-5. Victory awards crowns, knowledge, salvage, and XP. Train leveled companions in **Company**, unlock permanent upgrades in **Research**, and equip crafted weapons and armor in **Workshop**.
+5. Victory awards crowns, knowledge, salvage, and XP. Train leveled companions in **Company**, unlock permanent upgrades in **Research**, make permanent improvements in **Workshop**, and assign battle loot in **Equipment**.
 6. Return to a village, visit its **Market square** for supplies and its **Crooked Lantern** tavern to recruit up to six companions. Buy medicine, heal injured allies, or camp to restore health and morale. Camp costs up to four rations (less with a skilled Cook) and two crowns per companion.
 7. Walk to Iron Hollow and the Watchtower, take additional contracts, and respond to roadside choices. Delivery contracts offer a noncombat source of income and knowledge.
 
 Morale at 85+ grants +1 attack. Injuries impose −1 attack. Armor absorbs damage. Profession practice now unlocks ranks and company bonuses. Explorable sites have one-time rewards. Contracts are repeatable. Defeat rescues the company in Greyhaven at a cost; there is no permadeath yet.
 
-Progress automatically saves in browser local storage. **New company** asks before replacing it. Version-one through version-five saves migrate; invalid saves fall back to a fresh company. Browser storage is specific to your browser and origin; moving from a local file to a hosted site does not transfer progress.
+Progress automatically saves in browser local storage. **New company** asks before replacing it. Version-one through version-six saves migrate, preserving permanent equipment improvements; invalid saves fall back to a fresh company. Browser storage is specific to your browser and origin; moving from a local file to a hosted site does not transfer progress.
 
 ## Validate and develop
 
@@ -120,8 +138,9 @@ A browser-driven smoke test also exercises combat victory, research, crafting, r
 npm install --prefix /tmp/pixel-browser --cache /tmp/pixel-npm-cache playwright-core
 PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/browser-smoke.mjs
 PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/village-smoke.mjs
+PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/equipment-smoke.mjs
 ```
 
-It uses `/usr/bin/chromium` by default; override `CHROMIUM_PATH` or `GAME_URL` as needed. Desktop and mobile screenshots are written under `/tmp`. The village smoke test checks regional offers, renown locks and unlocks, resale, inn recovery, save persistence, and dangerous encounters.
+It uses `/usr/bin/chromium` by default; override `CHROMIUM_PATH` or `GAME_URL` as needed. Desktop and mobile screenshots are written under `/tmp`. The village smoke test checks regional offers, renown locks and unlocks, resale, inn recovery, save persistence, and dangerous encounters. The equipment smoke test covers purchases, class restrictions, assignment and transfer, resale, research and crafting, combat restrictions, reloads, mobile layout, and new-company reset.
 
-Next development areas: advanced skill tiers, impassable terrain and pathfinding, varied enemy behaviors, equipment inventories, regional factions, procedural encounters, and Android packaging.
+Next development areas: advanced skill tiers, impassable terrain and pathfinding, varied enemy behaviors, equipment perks and durability, regional factions, procedural encounters, and Android packaging.

@@ -56,8 +56,10 @@ studies.push(
 );
 export function fresh() {
   return {
-    version: 6,
+    version: 7,
     inventory: { ore: 0, wood: 0, herbs: 0, medicine: 1 },
+    gear: [],
+    nextGearId: 1,
     explored: [],
     event: null,
     renown: 0,
@@ -111,6 +113,7 @@ export function fresh() {
       professionXP: 0,
       professionXPBy: {},
       talent: null,
+      equipment: { weapon: null, armor: null },
     })),
   };
 }
@@ -342,6 +345,15 @@ function win(s) {
     s,
     `${raid ? "Caravan plundered · 10 rations seized" : patrolFight ? "Patrol defeated" : "Contract fulfilled"}. Earned ${reward} crowns, ${difficulty.knowledge} knowledge, and ${difficulty.xp} XP per survivor.`,
   );
+  const lootPool = equipmentCatalog.filter(
+    (item) => item.tier === difficulty.tier,
+  );
+  const loot = lootPool[(s.completed + s.skirmishes - 1) % lootPool.length];
+  grantEquipment(s, loot.id);
+  note(
+    s,
+    `Recovered ${loot.rarity.toLowerCase()} ${loot.name}. Open Equipment to assign the loot.`,
+  );
   if (!patrolFight) s.contract = null;
   s.battle = null;
 }
@@ -418,7 +430,7 @@ export function endTurn(s) {
         1,
         (e.damage || 5) -
           (p.role === "Shieldbearer" ? 2 : 0) -
-          (p.armor || 0) -
+          armorPower(s, p) -
           (t.guard ? 2 : 0) -
           aura,
       );
@@ -467,7 +479,7 @@ export function restore(raw) {
   const base = fresh();
   if (
     !raw ||
-    ![1, 2, 3, 4, 5, 6].includes(raw.version) ||
+    ![1, 2, 3, 4, 5, 6, 7].includes(raw.version) ||
     !Array.isArray(raw.party) ||
     raw.party.length < 1 ||
     raw.party.length > 6 ||
@@ -493,7 +505,7 @@ export function restore(raw) {
   const result = {
     ...base,
     ...raw,
-    version: 6,
+    version: 7,
     inventory: { ...base.inventory, ...raw.inventory },
     explored: raw.explored || [],
     event: raw.event || null,
@@ -578,6 +590,46 @@ export function restore(raw) {
     ),
     talent: talentsFor(p).some((t) => t.id === p.talent) ? p.talent : null,
   }));
+  const ids = new Set();
+  result.gear = (Array.isArray(raw.gear) ? raw.gear : [])
+    .filter((item) => {
+      if (
+        !item ||
+        !Number.isInteger(item.id) ||
+        item.id < 1 ||
+        item.id > 1e9 ||
+        ids.has(item.id) ||
+        !equipmentCatalog.some((template) => template.id === item.template)
+      )
+        return false;
+      ids.add(item.id);
+      return true;
+    })
+    .map((item) => ({ id: item.id, template: item.template }));
+  result.nextGearId = result.gear.reduce(
+    (max, item) => Math.max(max, item.id + 1),
+    1,
+  );
+  const assigned = new Set();
+  for (const p of result.party) {
+    const saved = p.equipment;
+    p.equipment = { weapon: null, armor: null };
+    for (const slot of ["weapon", "armor"]) {
+      const item = result.gear.find((item) => item.id === saved?.[slot]);
+      const template =
+        item &&
+        equipmentCatalog.find((template) => template.id === item.template);
+      if (
+        template &&
+        template.slot === slot &&
+        (!template.role || template.role === p.role) &&
+        !assigned.has(item.id)
+      ) {
+        p.equipment[slot] = item.id;
+        assigned.add(item.id);
+      }
+    }
+  }
   // Old saves retain company progression but return to the map for the new combat rules.
   if (raw.version === 1) result.battle = null;
   if (result.battle) {
@@ -597,6 +649,7 @@ export function attackPower(s, p) {
   return (
     p.damage +
     (p.weapon || 0) +
+    (equippedItem(s, p, "weapon")?.bonus || 0) +
     (p.talent === "duelist" ? 2 : 0) +
     (s.research.includes("steel") ? 2 : 0) +
     (s.morale >= 85 ? 1 : 0) -
@@ -659,6 +712,7 @@ export function recruit(s) {
     professionXP: 0,
     professionXPBy: {},
     talent: null,
+    equipment: { weapon: null, armor: null },
   });
   note(
     s,
@@ -1622,6 +1676,180 @@ export function restAtInn(s) {
   note(
     s,
     `Rested at the inn. ${price} crowns paid for beds, meals, and wages; all companions recovered.`,
+  );
+  return true;
+}
+
+export const equipmentCatalog = [
+  ["sword", "Swordswoman", ["Road sword", "Tempered sword", "Relic blade"]],
+  ["mace", "Shieldbearer", ["Iron mace", "Flanged mace", "Oathkeeper mace"]],
+  ["bow", "Archer", ["Short bow", "Yew longbow", "Horn warbow"]],
+  ["spear", "Spearman", ["Ash spear", "Steel pike", "Sentinel spear"]],
+]
+  .flatMap(([key, role, names]) =>
+    names.map((name, i) => ({
+      id: `${key}-${i + 1}`,
+      name,
+      role,
+      slot: "weapon",
+      tier: i + 1,
+      rarity: ["Common", "Fine", "Rare"][i],
+      bonus: i + 2,
+      price: [32, 70, 120][i],
+    })),
+  )
+  .concat(
+    ["Padded vest", "Mail shirt", "Brigandine"].map((name, i) => ({
+      id: `armor-${i + 1}`,
+      name,
+      role: null,
+      slot: "armor",
+      tier: i + 1,
+      rarity: ["Common", "Fine", "Rare"][i],
+      bonus: i + 1,
+      price: [28, 64, 110][i],
+    })),
+  );
+studies.push({
+  id: "armorer",
+  name: "Armorer's craft",
+  cost: 5,
+  requires: "steel",
+  desc: "Requires Tempered steel. Unlock fine weapon and armor recipes for your Smith. Crafted gear goes into Equipment for assignment.",
+});
+export function gearItem(s, id) {
+  const item = s.gear.find((item) => item.id === id);
+  const template =
+    item && equipmentCatalog.find((template) => template.id === item.template);
+  return template ? { ...template, instanceId: item.id } : null;
+}
+export function equippedItem(s, p, slot) {
+  return gearItem(s, p.equipment?.[slot]);
+}
+export function gearOwner(s, id) {
+  return (
+    s.party.find(
+      (p) => p.equipment?.weapon === id || p.equipment?.armor === id,
+    ) || null
+  );
+}
+export function armorPower(s, p) {
+  return (p.armor || 0) + (equippedItem(s, p, "armor")?.bonus || 0);
+}
+export function grantEquipment(s, templateId) {
+  if (!equipmentCatalog.some((item) => item.id === templateId)) return false;
+  const item = { id: s.nextGearId++, template: templateId };
+  s.gear.push(item);
+  return item.id;
+}
+export function equipEquipment(s, id, target) {
+  const item = gearItem(s, id),
+    p = s.party[target];
+  if (
+    !item ||
+    !p ||
+    s.battle ||
+    s.event ||
+    (item.role && item.role !== p.role) ||
+    p.equipment?.[item.slot] === id
+  )
+    return false;
+  const previous = gearOwner(s, id);
+  if (previous) previous.equipment[item.slot] = null;
+  p.equipment ||= { weapon: null, armor: null };
+  p.equipment[item.slot] = id;
+  note(
+    s,
+    `${p.name} equipped ${item.name}${previous ? `, transferred from ${previous.name}` : ""}.`,
+  );
+  return true;
+}
+export function unequipEquipment(s, target, slot) {
+  const p = s.party[target];
+  if (
+    !p ||
+    !["weapon", "armor"].includes(slot) ||
+    !p.equipment?.[slot] ||
+    s.battle ||
+    s.event
+  )
+    return false;
+  const item = equippedItem(s, p, slot);
+  p.equipment[slot] = null;
+  note(s, `${p.name} returned ${item.name} to company stores.`);
+  return true;
+}
+export function equipmentPrice(s, item) {
+  return s.research.includes("barter")
+    ? Math.ceil(item.price * 0.8)
+    : item.price;
+}
+export function buyEquipment(s, templateId) {
+  const item = equipmentCatalog.find((item) => item.id === templateId);
+  if (
+    !item ||
+    item.tier > 2 ||
+    (item.tier === 2 && s.renown < 5) ||
+    s.battle ||
+    s.event ||
+    places[s.location]?.type !== "town" ||
+    s.gold < equipmentPrice(s, item)
+  )
+    return false;
+  s.gold -= equipmentPrice(s, item);
+  grantEquipment(s, templateId);
+  note(s, `Bought ${item.name}. Open Equipment to equip it.`);
+  return true;
+}
+export function sellEquipment(s, id) {
+  const item = gearItem(s, id);
+  if (
+    !item ||
+    gearOwner(s, id) ||
+    s.battle ||
+    s.event ||
+    places[s.location]?.type !== "town"
+  )
+    return false;
+  const price = Math.floor(item.price * 0.4);
+  s.gold += price;
+  s.gear = s.gear.filter((item) => item.id !== id);
+  note(s, `Sold ${item.name} for ${price} crowns.`);
+  return true;
+}
+export function equipmentRecipe(s, templateId) {
+  const item = equipmentCatalog.find((item) => item.id === templateId),
+    smith = professional(s, "Smith");
+  if (!item || item.tier !== 2) return null;
+  return {
+    item,
+    smith,
+    ore: Math.max(
+      1,
+      (item.slot === "armor" ? 6 : 5) - (smith ? professionRank(smith) : 0),
+    ),
+    wood: item.slot === "armor" ? 1 : 2,
+  };
+}
+export function craftEquipment(s, templateId) {
+  const plan = equipmentRecipe(s, templateId);
+  if (
+    !plan ||
+    !plan.smith ||
+    !s.research.includes("armorer") ||
+    s.battle ||
+    s.event ||
+    s.inventory.ore < plan.ore ||
+    s.inventory.wood < plan.wood
+  )
+    return false;
+  s.inventory.ore -= plan.ore;
+  s.inventory.wood -= plan.wood;
+  grantEquipment(s, templateId);
+  practice(s, plan.smith, 2);
+  note(
+    s,
+    `${plan.smith.name} crafted ${plan.item.name}. Assign it in Equipment.`,
   );
   return true;
 }

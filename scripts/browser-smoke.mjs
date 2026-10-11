@@ -62,7 +62,7 @@ const walk = async (x, y) => {
 };
 await page.goto(process.env.GAME_URL || "http://127.0.0.1:3000/");
 await page.waitForSelector("#tabs button");
-assert.equal(await page.locator("#tabs button").count(), 4);
+assert.equal(await page.locator("#tabs button").count(), 5);
 assert.equal(await page.locator("#drawer").isVisible(), true);
 assert.equal(
   await page
@@ -345,7 +345,7 @@ offlineHTML = offlineHTML
       "</script>",
   );
 await offlinePage.setContent(offlineHTML);
-assert.equal(await offlinePage.locator("#tabs button").count(), 4);
+assert.equal(await offlinePage.locator("#tabs button").count(), 5);
 await offlinePage
   .getByRole("button", { name: "Visit Contract board", exact: true })
   .click();

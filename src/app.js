@@ -55,6 +55,18 @@ import {
   restAtInn,
   companyStanding,
   contractDifficulty,
+  equipmentCatalog,
+  gearItem,
+  gearOwner,
+  equippedItem,
+  armorPower,
+  equipEquipment,
+  unequipEquipment,
+  buyEquipment,
+  sellEquipment,
+  equipmentPrice,
+  equipmentRecipe,
+  craftEquipment,
 } from "./game.js";
 import {
   worldArtwork,
@@ -81,7 +93,8 @@ let drawerOpen = false,
   abilityMode = false;
 let tab = "Company",
   selected = 0,
-  craftTarget = 0;
+  craftTarget = 0,
+  gearTarget = 0;
 const $ = (id) => document.getElementById(id),
   canvas = $("map"),
   ctx = canvas.getContext("2d");
@@ -122,6 +135,18 @@ function card(title, body) {
   d.append(content);
   return d;
 }
+function equipmentCard(item) {
+  const c = card(
+    item.name,
+    `<p class="gear-quality quality-${item.tier}">${item.rarity} · ${item.role || "All companions"}</p><p>+${item.bonus} ${item.slot === "weapon" ? "attack" : "armor"} when equipped</p>`,
+  );
+  c.classList.add("gear-card");
+  c.dataset.quality = item.tier;
+  c.querySelector(".pixel-icon").replaceWith(
+    pixelIcon(item.slot === "armor" ? "shield" : item.id.split("-")[0], 28),
+  );
+  return c;
+}
 function objective() {
   if (s.event)
     return "A roadside encounter awaits your decision. Choose how to respond below.";
@@ -139,6 +164,8 @@ function objective() {
     : "Click or tap anywhere to walk. Visit towns for contracts and trade, or venture into the wilderness.";
 }
 function render() {
+  if (!s.party[gearTarget]) gearTarget = 0;
+  if (!s.party[craftTarget]) craftTarget = 0;
   const inVillage =
     places[s.location]?.type === "town" && !s.battle && !s.event;
   if (observedLocation !== s.location) {
@@ -188,11 +215,13 @@ function render() {
     abilityMode = false;
   $("objective").textContent = objective();
   $("tabs").replaceChildren(
-    ...["Company", "Research", "Workshop", "Journal"].map((t) => {
+    ...["Company", "Equipment", "Research", "Workshop", "Journal"].map((t) => {
       const b = button(t, () => {
         drawerOpen = tab === t ? !drawerOpen : true;
         tab = t;
       });
+      b.setAttribute("aria-label", t);
+      if (t === "Equipment" && s.gear.length) b.dataset.count = s.gear.length;
       b.classList.toggle("active", drawerOpen && tab === t);
       return b;
     }),
@@ -202,6 +231,7 @@ function render() {
       ? places[s.location].name
       : {
           Company: "The Ashen Company",
+          Equipment: "Equipment & loot",
           Market: "Market square",
           Blacksmith: "The forge",
           Tavern: "The Crooked Lantern",
@@ -228,8 +258,19 @@ function render() {
     s.party.forEach((p) => {
       const c = card(
         `${p.name} · Level ${p.level}`,
-        `<p>${p.role} · ${rankNames[professionRank(p)]} ${p.profession} (${p.professionXP} practice${professionRank(p) < 3 ? ` / ${[3, 8, 15][professionRank(p)]} for next rank` : " · mastered"}) ${p.injury ? "· INJURED" : ""}</p><div class="row"><span class="hint">HP ${p.hp}/${p.max}</span><span class="hint">ATK ${attackPower(s, p)} · Armor ${p.armor}</span></div><div class="bar"><i style="width:${(p.hp / p.max) * 100}%"></i></div><p>XP ${p.xp}/${p.level * 30} · ${p.points} training points</p>`,
+        `<p>${p.role} · ${rankNames[professionRank(p)]} ${p.profession} (${p.professionXP} practice${professionRank(p) < 3 ? ` / ${[3, 8, 15][professionRank(p)]} for next rank` : " · mastered"}) ${p.injury ? "· INJURED" : ""}</p><div class="row"><span class="hint">HP ${p.hp}/${p.max}</span><span class="hint">ATK ${attackPower(s, p)} · Armor ${armorPower(s, p)}</span></div><div class="bar"><i style="width:${(p.hp / p.max) * 100}%"></i></div><p>XP ${p.xp}/${p.level * 30} · ${p.points} training points</p>`,
       );
+      const worn = card(
+        "Equipped gear",
+        `<p>Weapon: ${equippedItem(s, p, "weapon")?.name || "Company issue"}<br>Armor: ${equippedItem(s, p, "armor")?.name || "Company issue"}</p>`,
+      );
+      worn.append(
+        button("Manage equipment", () => {
+          gearTarget = p.id;
+          tab = "Equipment";
+        }),
+      );
+      c.append(worn);
       c.classList.add("companion-card");
       c.querySelector(".pixel-icon").replaceWith(portraitArtwork(p));
       if (p.points)
@@ -306,6 +347,88 @@ function render() {
       panel.append(c);
     });
   }
+  if (tab === "Equipment") {
+    panel.append(
+      card(
+        "Company equipment",
+        "<p>Choose a companion to equip or transfer gear. Weapons fit their class; armor fits anyone. Bonuses add to permanent improvements. Gear stays locked during combat and encounters.</p>",
+      ),
+    );
+    const selector = document.createElement("select");
+    selector.setAttribute("aria-label", "Equipment companion");
+    s.party.forEach((p) =>
+      selector.add(new Option(`${p.name} · ${p.role}`, p.id)),
+    );
+    selector.value = gearTarget;
+    selector.onchange = () => {
+      gearTarget = Number(selector.value);
+      render();
+    };
+    panel.append(selector);
+    const p = s.party[gearTarget];
+    const loadout = card(
+      `${p.name}'s loadout`,
+      `<p>ATK ${attackPower(s, p)} · Armor ${armorPower(s, p)}<br>Permanent improvements: weapon +${p.weapon}, armor +${p.armor}</p>`,
+    );
+    for (const slot of ["weapon", "armor"]) {
+      const item = equippedItem(s, p, slot);
+      const line = document.createElement("p");
+      line.textContent = `${slot === "weapon" ? "Weapon" : "Armor"}: ${item?.name || "Company issue"}`;
+      loadout.append(line);
+      if (item)
+        loadout.append(
+          button(
+            `Unequip ${item.name}`,
+            () => unequipEquipment(s, p.id, slot),
+            !!s.battle || !!s.event,
+          ),
+        );
+    }
+    panel.append(loadout);
+    if (!s.gear.length)
+      panel.append(
+        card(
+          "No spare gear yet",
+          "<p>Win a battle for loot or visit a village blacksmith to buy equipment. Research Armorer's craft to unlock fine equipment recipes.</p>",
+        ),
+      );
+    for (const entry of s.gear) {
+      const item = gearItem(s, entry.id),
+        owner = gearOwner(s, entry.id);
+      const c = equipmentCard(item);
+      const ownership = document.createElement("p");
+      ownership.textContent = owner
+        ? `Equipped by ${owner.name}`
+        : "In company stores";
+      if (owner?.id !== p.id && (!item.role || item.role === p.role)) {
+        const delta = item.bonus - (equippedItem(s, p, item.slot)?.bonus || 0);
+        const comparison = document.createElement("p");
+        comparison.textContent = `For ${p.name}: ${delta >= 0 ? "+" : ""}${delta} ${item.slot === "weapon" ? "attack" : "armor"} compared with current gear.`;
+        c.append(comparison);
+      }
+      c.append(
+        ownership,
+        button(
+          `${owner && owner.id !== p.id ? "Transfer" : "Equip"} ${item.name}`,
+          () => equipEquipment(s, entry.id, p.id),
+          !!s.battle ||
+            !!s.event ||
+            owner?.id === p.id ||
+            (item.role && item.role !== p.role),
+          true,
+        ),
+      );
+      if (places[s.location]?.type === "town")
+        c.append(
+          button(
+            `Sell ${item.name} · ${Math.floor(item.price * 0.4)} crowns`,
+            () => sellEquipment(s, entry.id),
+            !!owner || !!s.battle || !!s.event,
+          ),
+        );
+      panel.append(c);
+    }
+  }
   if (tab === "Contracts") {
     panel.append(
       card(
@@ -380,7 +503,7 @@ function render() {
     panel.append(
       card(
         "Company stores",
-        `<p>Ore ${s.inventory.ore} · Wood ${s.inventory.wood} · Herbs ${s.inventory.herbs} · Medicine ${s.inventory.medicine}</p><p>Explore sites or buy materials in towns. Equipment is applied directly to your selected companion. Weapon upgrades cap at +4; armor caps at 3.</p>`,
+        `<p>Ore ${s.inventory.ore} · Wood ${s.inventory.wood} · Herbs ${s.inventory.herbs} · Medicine ${s.inventory.medicine}</p><p>Explore sites or buy materials in towns. Permanent improvements below are applied to your selected companion. Weapon improvements cap at +4; armor improvements cap at 3. Named gear is crafted separately and assigned in Equipment.</p>`,
       ),
     );
     const target = card("Equip a companion", "");
@@ -413,6 +536,34 @@ function render() {
       );
       panel.append(el);
     });
+  }
+  if (tab === "Workshop") {
+    panel.append(
+      card(
+        "Armorer's bench",
+        `<p>${s.research.includes("armorer") ? "Fine equipment recipes unlocked." : "Research Armorer's craft after Tempered steel to unlock these recipes."} A conscious Smith is required; higher profession ranks reduce ore costs.</p>`,
+      ),
+    );
+    for (const item of equipmentCatalog.filter((item) => item.tier === 2)) {
+      const plan = equipmentRecipe(s, item.id),
+        c = equipmentCard(item);
+      const cost = document.createElement("p");
+      cost.textContent = `Crafting: ${plan.ore} ore · ${plan.wood} wood · +2 Smith practice`;
+      c.append(
+        cost,
+        button(
+          `Craft ${item.name}`,
+          () => craftEquipment(s, item.id),
+          !s.research.includes("armorer") ||
+            !plan.smith ||
+            s.inventory.ore < plan.ore ||
+            s.inventory.wood < plan.wood ||
+            !!s.battle ||
+            !!s.event,
+        ),
+      );
+      panel.append(c);
+    }
   }
   if (
     inVillage &&
@@ -542,7 +693,7 @@ function render() {
       panel.append(
         card(
           "Blacksmith",
-          "<p>Purchase equipment directly for a companion. Weapons add attack (maximum +4); armor reduces incoming damage (maximum 3).</p>",
+          "<p>Purchase permanent improvements for a companion: up to +4 attack and +3 armor. Buy named gear below, then assign it in Equipment.</p>",
         ),
       );
       const selector = document.createElement("select");
@@ -574,6 +725,31 @@ function render() {
         );
       }
     }
+  }
+  if (inVillage && tab === "Blacksmith") {
+    panel.append(
+      card(
+        "Equipment for sale",
+        "<p>Named gear goes into company stores for assignment. Fine stock requires 5 renown; rare gear is recovered from elite battles. Permanent improvements above remain separate from equipment.</p>",
+      ),
+    );
+    for (const item of equipmentCatalog.filter((item) => item.tier <= 2)) {
+      const c = equipmentCard(item),
+        price = equipmentPrice(s, item);
+      c.append(
+        button(
+          `Buy ${item.name} · ${price} crowns`,
+          () => buyEquipment(s, item.id),
+          s.gold < price || (item.tier === 2 && s.renown < 5),
+        ),
+      );
+      panel.append(c);
+    }
+    panel.append(
+      button("Open company equipment", () => {
+        tab = "Equipment";
+      }),
+    );
   }
   const a = $("actions");
   a.replaceChildren();
