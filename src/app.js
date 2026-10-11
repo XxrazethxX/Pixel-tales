@@ -49,6 +49,12 @@ import {
   deliver,
   buy,
   buyGear,
+  sell,
+  salePrices,
+  innCost,
+  restAtInn,
+  companyStanding,
+  contractDifficulty,
 } from "./game.js";
 let s = fresh();
 try {
@@ -160,10 +166,11 @@ function render() {
   const panel = $("panel");
   panel.replaceChildren();
   if (tab === "Company") {
+    const standing = companyStanding(s);
     panel.append(
       card(
         "The Ashen Company",
-        `<div class="row"><span class="hint">${s.completed} contracts · ${s.skirmishes} skirmishes · ${s.renown} renown</span><span class="badge">Morale ${s.morale}%</span></div><div class="bar"><i style="width:${s.morale}%"></i></div><p>Map: ${s.discovered.length}/${places.length} locations discovered.</p><p>Wages: ${s.party.length * 2} crowns per camp. At 85 morale, all attacks gain +1 damage. Injuries reduce attack by 1. Skilled cooks reduce camp supplies to ${campCost(s)} rations.</p>`,
+        `<div class="row"><span class="hint">${s.completed} contracts · ${s.skirmishes} skirmishes · ${s.renown} renown</span><span class="badge">Morale ${s.morale}%</span></div><div class="bar"><i style="width:${s.morale}%"></i></div><p>${standing.name}${standing.next ? ` · ${standing.next.renown - s.renown} more renown to become ${standing.next.name}` : " · Highest standing achieved"}. Complete contracts to unlock tougher work.</p><p>Map: ${s.discovered.length}/${places.length} locations discovered.</p><p>Wages: ${s.party.length * 2} crowns per camp. At 85 morale, all attacks gain +1 damage. Injuries reduce attack by 1. Skilled cooks reduce camp supplies to ${campCost(s)} rations.</p>`,
       ),
     );
     s.party.forEach((p) => {
@@ -248,28 +255,40 @@ function render() {
   if (tab === "Contracts") {
     panel.append(
       card(
-        "The contract board",
-        "<p>Town contracts fund your company. Combat rewards gear materials and character experience; deliveries provide a safer way to earn knowledge.</p>",
+        `The ${places[s.location].name} contract board`,
+        `<p>${companyStanding(s).name} · ${s.renown} renown. Every village posts its own work. Build renown to earn the trust needed for dangerous and elite jobs.</p>`,
       ),
     );
     if (s.contract)
       panel.append(
         card(
           s.contract.name,
-          `<p>Destination: ${places[s.contract.target].name}</p><p>Reward: ${s.contract.reward} crowns</p><span class="badge">ACTIVE · ${s.contract.kind === "delivery" ? "Deliver 5 rations" : "Defeat three raiders"}</span>`,
+          `<p>Destination: ${places[s.contract.target].name}</p><p>Reward: ${s.contract.reward} crowns</p><span class="badge">ACTIVE · ${s.contract.kind === "delivery" ? "Deliver 5 rations" : `Defeat ${contractDifficulty(s.contract).enemies} enemies`}</span>`,
         ),
       );
     else
       contracts(s).forEach((c, i) => {
+        const difficulty = contractDifficulty(c);
+        const locked = s.renown < c.minRenown;
         const el = card(
           c.name,
-          `<p>${c.kind === "delivery" ? "Deliver 5 rations" : "Disperse three armed raiders"} at ${places[c.target].name}.</p><p>${c.reward} crowns · ${c.kind === "delivery" ? "1 knowledge" : "2 knowledge + XP + salvage"}</p>`,
+          `<p>${c.kind === "delivery" ? "Deliver 5 rations" : `Defeat ${difficulty.enemies} enemies · ${difficulty.label}`} at ${places[c.target].name}.</p><p>${c.reward} crowns · ${c.kind === "delivery" ? "1 knowledge" : `${difficulty.knowledge} knowledge · ${difficulty.xp} XP · ${difficulty.renown} renown + salvage`}</p>`,
         );
+        if (locked)
+          el.append(
+            card(
+              "Company standing required",
+              `<p>${c.minRenown} renown required · earn ${c.minRenown - s.renown} more.</p>`,
+            ),
+          );
         el.append(
           button(
             "Accept contract",
             () => accept(s, i),
-            !!s.battle || !!s.event || places[s.location]?.type !== "town",
+            locked ||
+              !!s.battle ||
+              !!s.event ||
+              places[s.location]?.type !== "town",
             true,
           ),
         );
@@ -362,13 +381,13 @@ function render() {
         [
           "Market square",
           "Market",
-          "Buy food, medicine, and crafting supplies.",
+          "Buy provisions and sell surplus materials.",
         ],
         ["Blacksmith", "Blacksmith", "Buy and equip weapons and armor."],
         [
           "The Crooked Lantern",
           "Tavern",
-          "Hire new companions for your company.",
+          "Hire companions or rest to recover the whole party.",
         ],
         [
           "Contract board",
@@ -416,6 +435,27 @@ function render() {
         ),
       );
       panel.append(market);
+      const resale = card(
+        "Sell supplies",
+        "<p>Turn surplus loot into crowns. Keep materials needed for crafting.</p>",
+      );
+      for (const [item, price] of Object.entries(salePrices)) {
+        const owned = s.inventory[item];
+        resale.append(
+          button(
+            `Sell 1 ${item} · ${price} crowns (${owned} owned)`,
+            () => sell(s, item),
+            owned < 1,
+          ),
+        );
+        if (owned > 1)
+          resale.append(
+            button(`Sell all ${item} · ${owned * price} crowns`, () =>
+              sell(s, item, owned),
+            ),
+          );
+      }
+      panel.append(resale);
     }
     if (tab === "Tavern") {
       const inn = card(
@@ -429,7 +469,18 @@ function render() {
           s.gold < 60 || s.party.length >= 6 || !!s.battle || !!s.event,
         ),
       );
-      panel.append(inn);
+      const rest = card(
+        "A night under a roof",
+        `<p>Full health, injuries cured, +15 morale. Includes meals and company wages; uses no rations. Takes one day.</p><p>${innCost(s)} crowns for ${s.party.length} companions.</p>`,
+      );
+      rest.append(
+        button(
+          `Rest at inn · ${innCost(s)} crowns`,
+          () => restAtInn(s),
+          s.gold < innCost(s),
+        ),
+      );
+      panel.append(rest, inn);
     }
     if (tab === "Blacksmith") {
       panel.append(

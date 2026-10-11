@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   fresh,
+  places,
   travel,
   camp,
   research,
@@ -549,7 +550,7 @@ test("crafting uses the proper profession and higher ranks increase output", () 
 import { contracts, buyGear } from "../src/game.js";
 test("village offers disappear outside towns and gear purchases equip the selected companion", () => {
   const s = fresh();
-  assert.equal(contracts(s).length, 6);
+  assert.equal(contracts(s).length, 4);
   assert.ok(buyGear(s, "weapon", 1));
   assert.equal(s.party[1].weapon, 2);
   assert.equal(s.gold, 85);
@@ -586,4 +587,153 @@ test("caravan attacks require proximity, end trade, persist hostility and award 
   assert.equal(s.contract, contract);
   assert.equal(s.patrols[0].cleared, true);
   assert.equal(startBattle(s, "caravan"), false);
+});
+
+import {
+  companyStanding,
+  contractDifficulty,
+  sell,
+  restAtInn,
+  innCost,
+} from "../src/game.js";
+test("village boards offer local work and enforce renown requirements at acceptance", () => {
+  const s = fresh();
+  assert.equal(companyStanding(s).name, "Greenhands");
+  assert.equal(companyStanding(s).next.renown, 5);
+  const greyJobs = contracts(s);
+  assert.equal(accept(s, 3), false);
+  assert.equal(s.contract, null);
+  s.location = 3;
+  assert.notDeepEqual(
+    contracts(s).map((c) => c.name),
+    greyJobs.map((c) => c.name),
+  );
+  assert.equal(accept(s, 2), false);
+  s.renown = 5;
+  assert.equal(companyStanding(s).name, "Proven company");
+  assert.ok(accept(s, 2));
+  assert.equal(s.contract.issuer, 3);
+  assert.equal(s.contract.target, 6);
+  s.contract = null;
+  s.location = 6;
+  s.renown = 14;
+  assert.equal(accept(s, 2), false);
+  s.renown = 15;
+  assert.ok(accept(s, 2));
+  assert.equal(contractDifficulty(s.contract).enemies, 5);
+  assert.equal(restore(s).contract.tier, 3);
+  s.renown = 30;
+  assert.equal(companyStanding(s).next, null);
+});
+test("dangerous contracts increase enemy strength and progression while old contracts stay standard", () => {
+  const s = fresh();
+  s.renown = 5;
+  assert.ok(accept(s, 3));
+  s.location = s.contract.target;
+  assert.ok(startBattle(s));
+  assert.equal(s.battle.enemies.length, 4);
+  assert.equal(s.battle.enemies[0].hp, 20);
+  assert.equal(s.battle.enemies[0].damage, 6);
+  assert.equal(new Set(s.battle.enemies.map((e) => `${e.x},${e.y}`)).size, 4);
+  s.battle.enemies.forEach((e) => (e.hp = 0));
+  s.battle.enemies[0] = { id: 0, x: 2, y: 1, hp: 1, max: 20 };
+  assert.ok(act(s, 0, 2, 1));
+  assert.equal(s.gold, 250);
+  assert.equal(s.renown, 15);
+  assert.equal(s.knowledge, 3);
+  assert.equal(s.inventory.ore, 3);
+  assert.equal(s.party[0].level, 2);
+  assert.equal(s.party[0].xp, 15);
+  assert.equal(s.contract, null);
+  assert.equal(contractDifficulty({ target: 1, reward: 65 }).enemies, 3);
+});
+test("market resale validates inventory and quantity and cannot create a buying profit loop", () => {
+  const s = fresh();
+  assert.ok(buy(s, "ore"));
+  assert.equal(s.gold, 110);
+  assert.equal(sell(s, "ore", 4), false);
+  for (const quantity of [
+    -1,
+    0,
+    1.5,
+    NaN,
+    Infinity,
+    Number.MAX_SAFE_INTEGER + 1,
+  ])
+    assert.equal(sell(s, "ore", quantity), false);
+  assert.equal(sell(s, "gold"), false);
+  assert.ok(sell(s, "ore", 3));
+  assert.equal(s.gold, 116);
+  assert.equal(s.inventory.ore, 0);
+  assert.equal(sell(s, "ore"), false);
+  s.inventory.wood = 3;
+  s.location = -1;
+  assert.equal(sell(s, "wood"), false);
+  s.location = 0;
+  s.event = { kind: "courier" };
+  assert.equal(sell(s, "wood"), false);
+  s.event = null;
+  s.battle = {};
+  assert.equal(sell(s, "wood"), false);
+  s.battle = null;
+  assert.ok(sell(s, "wood", 3));
+  assert.equal(s.gold, 119);
+});
+test("inn recovery includes incapacitated companions, wages and meals without consuming rations", () => {
+  const s = fresh();
+  s.party[0].hp = 0;
+  s.party[0].injury = true;
+  s.party[1].hp = 2;
+  s.morale = 96;
+  assert.equal(innCost(s), 24);
+  assert.ok(restAtInn(s));
+  assert.equal(s.gold, 96);
+  assert.equal(s.food, 24);
+  assert.equal(s.day, 2);
+  assert.equal(s.morale, 100);
+  assert.ok(s.party.every((p) => p.hp === p.max && !p.injury));
+  s.gold = 23;
+  const before = structuredClone(s);
+  assert.equal(restAtInn(s), false);
+  assert.deepEqual(s, before);
+  s.gold = 100;
+  s.location = -1;
+  assert.equal(restAtInn(s), false);
+  s.location = 0;
+  s.event = { kind: "courier" };
+  assert.equal(restAtInn(s), false);
+  s.event = null;
+  s.battle = {};
+  assert.equal(restAtInn(s), false);
+  s.battle = null;
+  recruit(s);
+  assert.equal(innCost(s), 30);
+  assert.ok(restAtInn(s));
+  assert.equal(restore(s).party[0].hp, s.party[0].max);
+});
+
+test("elite contracts deploy five stronger enemies and legacy accepted work remains valid", () => {
+  const s = fresh();
+  s.location = 6;
+  s.renown = 15;
+  assert.ok(accept(s, 2));
+  s.location = 11;
+  assert.ok(startBattle(s));
+  assert.equal(s.battle.enemies.length, 5);
+  assert.equal(s.battle.enemies[0].hp, 24);
+  assert.equal(s.battle.enemies[0].damage, 7);
+  assert.equal(new Set(s.battle.enemies.map((e) => `${e.x},${e.y}`)).size, 5);
+  assert.equal(restore(s).battle.enemies.length, 5);
+  const old = fresh();
+  old.contract = {
+    name: "A crown in the dirt",
+    kind: "battle",
+    target: 11,
+    reward: 180,
+  };
+  old.position = { x: places[11].x, y: places[11].y };
+  old.location = 11;
+  const migrated = restore(old);
+  assert.ok(startBattle(migrated));
+  assert.equal(migrated.battle.enemies.length, 3);
 });

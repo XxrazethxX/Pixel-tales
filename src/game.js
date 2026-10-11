@@ -261,6 +261,24 @@ export function startBattle(s, patrolId = null) {
       },
     ],
   };
+  const difficulty = contractDifficulty(patrol ? null : s.contract);
+  for (let i = 0; i < difficulty.tier - 1; i++) {
+    s.battle.enemies.push({
+      id: 3 + i,
+      x: i === 0 ? 7 : 6,
+      y: i === 0 ? 2 : 4,
+      hp: 16,
+      max: 16,
+      kind: i === 0 ? "raider" : "archer",
+      damage: i === 0 ? 5 : 4,
+      armor: 0,
+    });
+  }
+  for (const e of s.battle.enemies) {
+    e.hp += (difficulty.tier - 1) * 4;
+    e.max = e.hp;
+    e.damage += difficulty.tier - 1;
+  }
   note(
     s,
     "Steel drawn. Select a companion, then a neighboring tile to move or an enemy to attack.",
@@ -299,20 +317,21 @@ export function act(s, id, x, y) {
 function win(s) {
   const patrolFight = s.battle.kind === "patrol";
   const raid = patrolFight && s.battle.caravanRaid;
+  const difficulty = contractDifficulty(patrolFight ? null : s.contract);
   const reward = patrolFight ? (raid ? 60 : 40) : s.contract.reward;
   if (raid) s.food += 10;
   s.gold += reward;
-  s.knowledge += 2;
+  s.knowledge += difficulty.knowledge;
   if (patrolFight) {
     s.skirmishes++;
     const patrol = s.patrols.find((p) => p.id === s.battle.patrolId);
     if (patrol) patrol.cleared = true;
   } else s.completed++;
-  if (!raid) s.renown += 5;
-  s.inventory.ore += 2;
-  s.inventory.wood += 2;
+  if (!raid) s.renown += difficulty.renown;
+  s.inventory.ore += difficulty.salvage;
+  s.inventory.wood += difficulty.salvage;
   for (const p of s.party.filter((p) => p.hp > 0)) {
-    p.xp += 35;
+    p.xp += difficulty.xp;
     while (p.xp >= p.level * 30) {
       p.xp -= p.level * 30;
       p.level++;
@@ -321,7 +340,7 @@ function win(s) {
   }
   note(
     s,
-    `${raid ? "Caravan plundered · 10 rations seized" : patrolFight ? "Patrol defeated" : "Contract fulfilled"}. Earned ${reward} crowns, 2 knowledge, and 35 XP per survivor.`,
+    `${raid ? "Caravan plundered · 10 rations seized" : patrolFight ? "Patrol defeated" : "Contract fulfilled"}. Earned ${reward} crowns, ${difficulty.knowledge} knowledge, and ${difficulty.xp} XP per survivor.`,
   );
   if (!patrolFight) s.contract = null;
   s.battle = null;
@@ -820,26 +839,144 @@ export function resolveEvent(s, choice) {
   s.event = null;
   return true;
 }
-export function contracts(s) {
-  if (places[s.location]?.type !== "town" || s.battle || s.event) return [];
-  return [
-    { name: "Wolves in human clothing", target: 1, reward: 65, kind: "battle" },
-    { name: "The barrow road", target: 2, reward: 85, kind: "battle" },
+export const companyRanks = [
+  { name: "Greenhands", renown: 0 },
+  { name: "Proven company", renown: 5 },
+  { name: "Veterans", renown: 15 },
+  { name: "Famed company", renown: 30 },
+];
+export function companyStanding(s) {
+  const rank =
+    companyRanks.findLast((r) => s.renown >= r.renown) || companyRanks[0];
+  return {
+    ...rank,
+    next: companyRanks[companyRanks.indexOf(rank) + 1] || null,
+  };
+}
+export function contractDifficulty(c) {
+  const tier = [1, 2, 3].includes(c?.tier) ? c.tier : 1;
+  return {
+    tier,
+    label: ["Standard", "Dangerous", "Elite"][tier - 1],
+    enemies: tier + 2,
+    xp: 35 + (tier - 1) * 10,
+    knowledge: tier + 1,
+    salvage: tier + 1,
+    renown: tier * 5,
+  };
+}
+const villageJobs = {
+  0: [
+    {
+      name: "Wolves in human clothing",
+      target: 1,
+      reward: 65,
+      kind: "battle",
+      tier: 1,
+      minRenown: 0,
+    },
+    {
+      name: "The barrow road",
+      target: 2,
+      reward: 85,
+      kind: "battle",
+      tier: 1,
+      minRenown: 0,
+    },
     {
       name: "Supplies for Saltbridge",
       target: 3,
       reward: 45,
       kind: "delivery",
+      minRenown: 0,
     },
-    { name: "Silence the watchtower", target: 5, reward: 100, kind: "battle" },
-    { name: "Emberfall relief", target: 6, reward: 150, kind: "delivery" },
-    { name: "A crown in the dirt", target: 11, reward: 180, kind: "battle" },
-  ];
+    {
+      name: "Silence the watchtower",
+      target: 5,
+      reward: 130,
+      kind: "battle",
+      tier: 2,
+      minRenown: 5,
+    },
+  ],
+  3: [
+    {
+      name: "Provisions for Greyhaven",
+      target: 0,
+      reward: 45,
+      kind: "delivery",
+      minRenown: 0,
+    },
+    {
+      name: "The chapel smugglers",
+      target: 8,
+      reward: 90,
+      kind: "battle",
+      tier: 1,
+      minRenown: 0,
+    },
+    {
+      name: "Emberfall relief",
+      target: 6,
+      reward: 150,
+      kind: "delivery",
+      minRenown: 5,
+    },
+    {
+      name: "Ambush in Whispering Grove",
+      target: 7,
+      reward: 145,
+      kind: "battle",
+      tier: 2,
+      minRenown: 5,
+    },
+  ],
+  6: [
+    {
+      name: "Supplies for Saltbridge",
+      target: 3,
+      reward: 150,
+      kind: "delivery",
+      minRenown: 0,
+    },
+    {
+      name: "Reclaim Redstone Quarry",
+      target: 9,
+      reward: 155,
+      kind: "battle",
+      tier: 2,
+      minRenown: 5,
+    },
+    {
+      name: "A crown in the dirt",
+      target: 11,
+      reward: 230,
+      kind: "battle",
+      tier: 3,
+      minRenown: 15,
+    },
+    {
+      name: "The Cinder warband",
+      target: 7,
+      reward: 290,
+      kind: "battle",
+      tier: 3,
+      minRenown: 30,
+    },
+  ],
+};
+export function contracts(s) {
+  if (places[s.location]?.type !== "town" || s.battle || s.event) return [];
+  return (villageJobs[s.location] || []).map((c) => ({
+    ...c,
+    issuer: s.location,
+  }));
 }
 export function accept(s, index) {
   const c = contracts(s)[index];
   if (
     !c ||
+    s.renown < c.minRenown ||
     s.contract ||
     s.battle ||
     s.event ||
@@ -1437,6 +1574,54 @@ export function buyGear(s, item, target = 0) {
   note(
     s,
     `Bought ${item} for ${p.name}: +${item === "weapon" ? "attack" : "armor"}, ${price} crowns.`,
+  );
+  return true;
+}
+
+export const salePrices = { ore: 2, wood: 1, herbs: 1, medicine: 4 };
+export function sell(s, item, quantity = 1) {
+  const price = salePrices[item];
+  if (
+    !price ||
+    !Number.isSafeInteger(quantity) ||
+    quantity < 1 ||
+    s.battle ||
+    s.event ||
+    places[s.location]?.type !== "town" ||
+    !Number.isFinite(s.inventory[item]) ||
+    s.inventory[item] < quantity
+  )
+    return false;
+  const proceeds = quantity * price;
+  if (!Number.isSafeInteger(proceeds)) return false;
+  s.inventory[item] -= quantity;
+  s.gold += proceeds;
+  note(s, `Sold ${quantity} ${item} for ${proceeds} crowns.`);
+  return true;
+}
+export function innCost(s) {
+  return s.party.length * 6;
+}
+export function restAtInn(s) {
+  const price = innCost(s);
+  if (
+    s.battle ||
+    s.event ||
+    places[s.location]?.type !== "town" ||
+    s.gold < price
+  )
+    return false;
+  s.destination = null;
+  s.gold -= price;
+  s.day++;
+  s.morale = Math.min(100, s.morale + 15);
+  for (const p of s.party) {
+    p.hp = p.max;
+    p.injury = false;
+  }
+  note(
+    s,
+    `Rested at the inn. ${price} crowns paid for beds, meals, and wages; all companions recovered.`,
   );
   return true;
 }

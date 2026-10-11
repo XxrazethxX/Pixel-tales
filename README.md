@@ -32,6 +32,22 @@ A caravan and two bandit patrols roam independently while exploration is active.
 
 Research **Watchful eyes** for a 210-pixel discovery radius, **A fair bargain** for cheaper purchases, and **Borderlands charts** (requires Watchful eyes) to reveal landmark locations without exploring their terrain. Hidden stashes offer one-time crowns and medicine. Road events now include wounded travellers, abandoned camps, and storms with different choices and costs.
 
+## Village services and company standing
+
+Each village has four local contracts. Greyhaven introduces mercenary work around Pinewatch and Old Barrow; Saltbridge sends you to the chapel and eastern forests; Emberfall offers quarry and frontier jobs. Available offers remain exclusive to village boards. Existing accepted contracts continue to work after updating.
+
+Company standing advances at **5 renown** (Proven company), **15** (Veterans), and **30** (Famed company). Boards show each job’s requirement and lock acceptance until you qualify. Combat contracts have real difficulty and reward differences:
+
+| Difficulty | Enemies | Extra health / damage per enemy | Knowledge | XP per survivor | Renown |
+| --- | --- | --- | --- | --- | --- |
+| Standard | 3 | None | 2 | 35 | 5 |
+| Dangerous | 4 | +4 / +1 | 3 | 45 | 10 |
+| Elite | 5 | +8 / +2 | 4 | 55 | 15 |
+
+Each combat victory also grants 2–4 ore and wood according to difficulty. Patrols and caravan raids retain their existing rewards. Peaceful caravan attacks reduce renown, which can close access to advanced work until you rebuild your standing.
+
+At the **Market square**, sell spare ore (2 crowns each), wood or herbs (1), and medicine (4), individually or as a whole stack. Purchase prices exceed resale prices. At **The Crooked Lantern**, resting costs **6 crowns per companion**, including beds, meals, and wages. It takes one day, uses no rations, restores everyone to full health, cures injuries, and adds 15 morale up to 100. Recruitment remains a separate service.
+
 ## Company development and tactical abilities
 
 Every class starts with an active ability. Select a companion, press its ability button, then click an outlined enemy. Press **Basic attack** to cancel aiming. Abilities use the companion's action and shared **valor**, and have a two-round cooldown: use in round one, unavailable in round two, available again in round three. Valor starts at three, caps at five, regenerates one per completed round, and gains one from bracing or an enemy kill.
@@ -93,8 +109,9 @@ A browser-driven smoke test also exercises combat victory, research, crafting, r
 ```sh
 npm install --prefix /tmp/pixel-browser --cache /tmp/pixel-npm-cache playwright-core
 PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/browser-smoke.mjs
+PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/village-smoke.mjs
 ```
 
-It uses `/usr/bin/chromium` by default; override `CHROMIUM_PATH` or `GAME_URL` as needed. Desktop and mobile screenshots are written under `/tmp`.
+It uses `/usr/bin/chromium` by default; override `CHROMIUM_PATH` or `GAME_URL` as needed. Desktop and mobile screenshots are written under `/tmp`. The village smoke test checks regional offers, renown locks and unlocks, resale, inn recovery, save persistence, and dangerous encounters.
 
 Next development areas: advanced skill tiers, impassable terrain and pathfinding, varied enemy behaviors, equipment inventories, regional factions, procedural encounters, and Android packaging.
