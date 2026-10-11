@@ -343,6 +343,7 @@ function startBattle(s, patrolId = null) {
     e.max = e.hp;
     e.damage += difficulty.tier - 1;
   }
+  deployBattle(s, patrol);
   note(
     s,
     "Steel drawn. Select a companion, then a neighboring tile to move or an enemy to attack.",
@@ -369,7 +370,12 @@ function act(s, id, x, y) {
   const d = Math.abs(x - u.x) + Math.abs(y - u.y);
   const e = b.enemies.find((e) => e.hp > 0 && e.x === x && e.y === y);
   if (e) {
-    if (u.acted || d > attackRange(p, false, s)) return false;
+    if (
+      u.acted ||
+      d > attackRange(p, false, s) ||
+      !hasLineOfSight(s, u, { x, y })
+    )
+      return false;
     const flank = p.role === "Archer" ? 0 : flankingBonus(s, u, e);
     const damage = hitEnemy(
       s,
@@ -518,10 +524,12 @@ function endTurn(s) {
       !rooted &&
       movement > 0 &&
       step < (e.kind === "wolf" ? 2 : 1) &&
-      (dist() > range || (e.kind === "archer" && dist() <= 1));
+      (dist() > range ||
+        !hasLineOfSight(s, e, t) ||
+        (e.kind === "archer" && dist() <= 1));
       step++
     ) {
-      const options = [
+      let options = [
         [e.x + 1, e.y],
         [e.x - 1, e.y],
         [e.x, e.y + 1],
@@ -546,6 +554,13 @@ function endTurn(s) {
             (Math.abs(c[0] - t.x) + Math.abs(c[1] - t.y))) *
           (retreat ? -1 : 1),
       );
+      if (!retreat && battleTerrain(s).some((tile) => tile.blocked)) {
+        const route = enemyApproach(s, e, t, range, movement);
+        options =
+          route && terrainCell(s, route[0], route[1]).cost <= movement
+            ? [route]
+            : [];
+      }
       if (options.length) {
         enemyDisengagement(s, e, options[0]);
         if (e.hp <= 0) break;
@@ -553,7 +568,7 @@ function endTurn(s) {
         [e.x, e.y] = options[0];
       }
     }
-    if (e.hp > 0 && dist() <= range) {
+    if (e.hp > 0 && dist() <= range && hasLineOfSight(s, e, t)) {
       const p = s.party[t.id];
       const power =
         (e.damage || 5) +
@@ -1057,6 +1072,11 @@ function restore(raw) {
   result.preparedValor = raw.preparedValor === 1 ? 1 : 0;
   if (raw.version === 1) result.battle = null;
   if (result.battle) {
+    result.battle.layoutId = battleLayouts.some(
+      (layout) => layout.id === result.battle.layoutId,
+    )
+      ? result.battle.layoutId
+      : "legacy";
     result.battle.valor = Number.isFinite(result.battle.valor)
       ? Math.max(0, Math.min(5, result.battle.valor))
       : 3;
@@ -2268,7 +2288,8 @@ function useSkill(s, id, x, y) {
     u.cooldown > 0 ||
     b.valor < skill.cost ||
     !enemy ||
-    Math.abs(x - u.x) + Math.abs(y - u.y) > attackRange(p, true, s)
+    Math.abs(x - u.x) + Math.abs(y - u.y) > attackRange(p, true, s) ||
+    !hasLineOfSight(s, u, { x, y })
   )
     return false;
   b.valor -= skill.cost;
@@ -2288,7 +2309,8 @@ function useSkill(s, id, x, y) {
                   e.y === y + Math.sign(y - u.y))),
           )
         : [enemy];
-  victims.forEach((e) => {
+  const reachableVictims = victims.filter((e) => hasLineOfSight(s, u, e));
+  reachableVictims.forEach((e) => {
     if (skill.sunder) e.armor = Math.max(0, (e.armor || 0) - 2);
     const flank = p.role === "Archer" ? 0 : flankingBonus(s, u, e);
     const damage = hitEnemy(
@@ -2308,7 +2330,10 @@ function useSkill(s, id, x, y) {
     note(s, `${p.name} uses ${skill.name} for ${damage} damage.`);
   });
   if (skill.leech) {
-    const healing = Math.min(p.max - p.hp, Math.min(6, victims.length * 2));
+    const healing = Math.min(
+      p.max - p.hp,
+      Math.min(6, reachableVictims.length * 2),
+    );
     p.hp += healing;
     note(s, `${p.name} reaps ${healing} health.`);
   }
@@ -3344,15 +3369,264 @@ function recruitmentOffers(s) {
 }
 
 // Terrain, movement, and disengagement share the same rules with the canvas UI.
+const coverTile = (x, y, kind = "rubble") => ({
+  x,
+  y,
+  kind,
+  cover: 2,
+  cost: 1,
+});
+const mudTile = (x, y) => ({ x, y, kind: "mud", cover: 0, cost: 2 });
+const obstacleTile = (x, y, kind = "wall") => ({
+  x,
+  y,
+  kind,
+  cover: 0,
+  cost: Infinity,
+  blocked: true,
+  blocksSight: kind !== "water",
+});
+const classicTerrain = (forest) => [
+  coverTile(3, 2, forest ? "brush" : "rubble"),
+  coverTile(5, 4, forest ? "brush" : "rubble"),
+  coverTile(4, 0),
+  mudTile(4, 5),
+  mudTile(2, 6),
+];
+const battleLayouts = [
+  {
+    id: "legacy",
+    name: "Open ground",
+    text: "Cover and soft ground shape the approach.",
+    style: "meadow",
+    tiles: null,
+  },
+  {
+    id: "forest-edge",
+    name: "Forest edge",
+    text: "Brush shelters ranged fighters; muddy low ground slows the flank.",
+    style: "forest",
+    tiles: classicTerrain(true),
+  },
+  {
+    id: "forest-grove",
+    name: "Fallen grove",
+    text: "Fallen trunks split the center. Brush and side trails offer alternate approaches.",
+    style: "forest",
+    tiles: [
+      coverTile(3, 2, "brush"),
+      coverTile(5, 4, "brush"),
+      coverTile(4, 0, "brush"),
+      coverTile(6, 5, "brush"),
+      mudTile(2, 6),
+      mudTile(5, 1),
+      obstacleTile(4, 3, "log"),
+      obstacleTile(4, 4, "log"),
+    ],
+  },
+  {
+    id: "ruin-court",
+    name: "Ruined courtyard",
+    text: "Broken pillars obstruct the center; use the gaps to flank.",
+    style: "ruin",
+    tiles: [
+      coverTile(3, 2),
+      coverTile(5, 4),
+      coverTile(4, 0),
+      mudTile(2, 6),
+      obstacleTile(4, 1),
+      obstacleTile(4, 3),
+    ],
+  },
+  {
+    id: "ruin-aisle",
+    name: "Collapsed halls",
+    text: "Surviving walls protect the flanks. The central aisle offers a clear route.",
+    style: "ruin",
+    tiles: [
+      coverTile(3, 2),
+      coverTile(5, 4),
+      coverTile(4, 0),
+      mudTile(4, 5),
+      obstacleTile(3, 0),
+      obstacleTile(3, 1),
+      obstacleTile(5, 5),
+      obstacleTile(5, 6),
+    ],
+  },
+  {
+    id: "quarry",
+    name: "Quarry shelves",
+    text: "Large boulders break sight lines; rubble offers cover and loose earth slows movement.",
+    style: "quarry",
+    tiles: [
+      coverTile(3, 2),
+      coverTile(5, 4),
+      coverTile(4, 0),
+      mudTile(3, 4),
+      mudTile(4, 5),
+      obstacleTile(3, 1, "boulder"),
+      obstacleTile(5, 5, "boulder"),
+      obstacleTile(4, 4, "boulder"),
+    ],
+  },
+  {
+    id: "road",
+    name: "Caravan road",
+    text: "The wagon blocks one approach. Advance along the open road or take cover behind cargo.",
+    style: "road",
+    tiles: [
+      coverTile(3, 2),
+      coverTile(5, 4),
+      coverTile(4, 0),
+      mudTile(2, 6),
+      obstacleTile(4, 1, "wagon"),
+      obstacleTile(4, 2, "wagon"),
+    ],
+  },
+  {
+    id: "river",
+    name: "Flooded ford",
+    text: "Deep water blocks the banks. Cross through the central shallows and protect the approach.",
+    style: "river",
+    tiles: [
+      coverTile(3, 2, "brush"),
+      coverTile(5, 4, "brush"),
+      mudTile(4, 2),
+      mudTile(4, 4),
+      { x: 4, y: 3, kind: "bridge", cover: 0, cost: 1 },
+      obstacleTile(4, 0, "water"),
+      obstacleTile(4, 1, "water"),
+      obstacleTile(4, 5, "water"),
+      obstacleTile(4, 6, "water"),
+    ],
+  },
+];
+function battlefield(s) {
+  return (
+    battleLayouts.find((layout) => layout.id === s.battle?.layoutId) ||
+    battleLayouts[0]
+  );
+}
+function chooseBattleLayout(s, patrol) {
+  const place = places[s.location],
+    biome = terrainAt(s.position);
+  if (patrol?.kind === "merchant") return "road";
+  if (patrol?.kind === "wolves") return "forest-edge";
+  if (!patrol && place?.type === "ruin")
+    return s.location === 8
+      ? "river"
+      : (s.day + s.completed + s.skirmishes) % 2
+        ? "ruin-court"
+        : "ruin-aisle";
+  if (place?.type === "forest")
+    return s.location === 7 ? "forest-grove" : "forest-edge";
+  if ((!patrol && place?.type === "mine") || biome === "highlands")
+    return "quarry";
+  if (biome === "shallows") return "river";
+  if (place?.type === "forest" || biome === "forest")
+    return s.location === 7 || (s.day + s.completed + s.skirmishes) % 2 === 0
+      ? "forest-grove"
+      : "forest-edge";
+  return "road";
+}
+function deployBattle(s, patrol) {
+  s.battle.layoutId = chooseBattleLayout(s, patrol);
+  if (s.battle.layoutId === "forest-edge") return;
+  const allies = [
+      [1, 1],
+      [1, 5],
+      [0, 2],
+      [0, 4],
+      [1, 0],
+      [1, 6],
+    ],
+    foes =
+      s.battle.layoutId === "road"
+        ? [
+            [7, 2],
+            [6, 4],
+            [7, 6],
+            [6, 0],
+            [7, 3],
+          ]
+        : [
+            [7, 1],
+            [6, 3],
+            [7, 5],
+            [6, 0],
+            [6, 6],
+          ];
+  s.battle.units.forEach((u, i) => ([u.x, u.y] = allies[i]));
+  s.battle.enemies.forEach((e, i) => ([e.x, e.y] = foes[i]));
+}
+function hasLineOfSight(s, from, to) {
+  let x = from.x,
+    y = from.y,
+    ix = 0,
+    iy = 0;
+  const nx = Math.abs(to.x - x),
+    ny = Math.abs(to.y - y),
+    sx = Math.sign(to.x - x),
+    sy = Math.sign(to.y - y);
+  const opaque = (x, y) => terrainCell(s, x, y).blocksSight;
+  while (ix < nx || iy < ny) {
+    const horizontal = (1 + 2 * ix) * ny,
+      vertical = (1 + 2 * iy) * nx;
+    if (horizontal === vertical) {
+      if (opaque(x + sx, y) || opaque(x, y + sy)) return false;
+      x += sx;
+      y += sy;
+      ix++;
+      iy++;
+    } else if (horizontal < vertical) {
+      x += sx;
+      ix++;
+    } else {
+      y += sy;
+      iy++;
+    }
+    if (opaque(x, y)) return false;
+  }
+  return true;
+}
+function enemyApproach(s, enemy, target, range, movement) {
+  let best = null,
+    bestCost = Infinity;
+  for (let y = 0; y < 7; y++)
+    for (let x = 0; x < 9; x++) {
+      const distance = Math.abs(x - target.x) + Math.abs(y - target.y);
+      if (
+        distance > range ||
+        distance < (enemy.kind === "archer" ? 2 : 1) ||
+        !hasLineOfSight(s, { x, y }, target)
+      )
+        continue;
+      const path = battlePath(
+        s,
+        { ...enemy, side: "enemy", firstStepBudget: movement },
+        x,
+        y,
+        200,
+      );
+      if (!path || !path.length) continue;
+      const cost = path.reduce(
+        (sum, p) => sum + terrainCell(s, p.x, p.y).cost,
+        0,
+      );
+      if (cost < bestCost) {
+        bestCost = cost;
+        best = path[0];
+      }
+    }
+  return best ? [best.x, best.y] : null;
+}
+
 function battleTerrain(s) {
-  const forest = s.battle?.wildlife || places[s.location]?.type === "forest";
-  return [
-    { x: 3, y: 2, kind: forest ? "brush" : "rubble", cover: 2, cost: 1 },
-    { x: 5, y: 4, kind: forest ? "brush" : "rubble", cover: 2, cost: 1 },
-    { x: 4, y: 0, kind: "rubble", cover: 2, cost: 1 },
-    { x: 4, y: 5, kind: "mud", cover: 0, cost: 2 },
-    { x: 2, y: 6, kind: "mud", cover: 0, cost: 2 },
-  ];
+  return (
+    battlefield(s).tiles ||
+    classicTerrain(s.battle?.wildlife || places[s.location]?.type === "forest")
+  );
 }
 function terrainCell(s, x, y) {
   return (
@@ -3402,10 +3676,20 @@ function battlePath(
         ny < 0 ||
         ny > 6 ||
         cost > budget ||
-        s.battle.enemies.some((e) => e.hp > 0 && e.x === nx && e.y === ny) ||
+        (step.path.length === 0 &&
+          unit.firstStepBudget !== undefined &&
+          terrainCell(s, nx, ny).cost > unit.firstStepBudget) ||
+        terrainCell(s, nx, ny).blocked ||
+        s.battle.enemies.some(
+          (e) =>
+            (unit.side !== "enemy" || e.id !== unit.id) &&
+            e.hp > 0 &&
+            e.x === nx &&
+            e.y === ny,
+        ) ||
         s.battle.units.some(
           (u) =>
-            u.id !== unit.id &&
+            (unit.side === "enemy" || u.id !== unit.id) &&
             s.party[u.id].hp > 0 &&
             u.x === nx &&
             u.y === ny,
@@ -3656,7 +3940,12 @@ function equipmentOnHit(s, p, target, basic = false) {
       (e) =>
         e !== target &&
         e.hp > 0 &&
-        Math.abs(e.x - target.x) + Math.abs(e.y - target.y) === 1,
+        Math.abs(e.x - target.x) + Math.abs(e.y - target.y) === 1 &&
+        hasLineOfSight(
+          s,
+          s.battle.units.find((u) => u.id === p.id),
+          e,
+        ),
     );
     if (extra) {
       const damage = hitEnemy(
@@ -5253,7 +5542,16 @@ function venueArtwork(venue) {
   return image;
 }
 function drawBattlefield(c, s) {
-  pixel(c, 0, 0, 768, 432, "#879064");
+  const style = s ? battlefield(s).style : "meadow",
+    colors = {
+      forest: ["#79885d", "#a8aa7c", "#afb184"],
+      ruin: ["#888770", "#a9a48a", "#b8b194"],
+      quarry: ["#8b7f64", "#b1a17f", "#bdac88"],
+      road: ["#8b8765", "#aea479", "#b8ad82"],
+      river: ["#7d927d", "#9aa88c", "#acb398"],
+      meadow: ["#879064", "#a8aa7c", "#afb184"],
+    }[style];
+  pixel(c, 0, 0, 768, 432, colors[0]);
   for (let i = 0; i < 360; i++) {
     const x = Math.floor(noise(i, 8) * 768),
       y = Math.floor(noise(i, 9) * 432);
@@ -5267,7 +5565,7 @@ function drawBattlefield(c, s) {
         y * 60,
         60,
         58,
-        (x + y) % 2 ? "#a8aa7c" : "#afb184",
+        (x + y) % 2 ? colors[1] : colors[2],
       );
       pixel(c, 106 + x * 62, 1 + y * 60, 58, 1, "#bdbe8f");
       for (let k = 0; k < 5; k++)
@@ -5285,7 +5583,32 @@ function drawBattlefield(c, s) {
     for (const tile of battleTerrain(s)) {
       const x = 105 + tile.x * 62,
         y = tile.y * 60;
-      if (tile.kind === "brush") {
+      if (tile.blocked) {
+        if (tile.kind === "water") {
+          pixel(c, x + 2, y + 2, 56, 53, "#708f8b");
+          for (let i = 0; i < 4; i++)
+            pixel(c, x + 8 + i * 9, y + 12 + i * 8, 16, 2, "#9eb3a1");
+        } else if (tile.kind === "log") {
+          pixel(c, x + 5, y + 20, 47, 14, "#635c42");
+          pixel(c, x + 7, y + 23, 42, 3, "#9b8456");
+          pixel(c, x + 4, y + 22, 7, 10, "#bd9d68");
+        } else if (tile.kind === "wagon") {
+          pixel(c, x + 5, y + 15, 48, 25, "#78664a");
+          pixel(c, x + 8, y + 18, 42, 17, "#b4a078");
+          pixel(c, x + 5, y + 37, 8, 7, "#48493b");
+          pixel(c, x + 43, y + 37, 8, 7, "#48493b");
+        } else {
+          pixel(c, x + 7, y + 17, 42, 24, "#757767");
+          pixel(c, x + 9, y + 15, 39, 6, "#b2b099");
+          pixel(c, x + 26, y + 22, 2, 17, "#535d50");
+        }
+      } else if (tile.kind === "bridge") {
+        pixel(c, x + 2, y + 4, 56, 46, "#7b7254");
+        for (let i = 0; i < 6; i++) {
+          pixel(c, x + 4, y + 7 + i * 7, 52, 5, "#c0ad79");
+          pixel(c, x + 7, y + 8 + i * 7, 46, 1, "#d0bd8a");
+        }
+      } else if (tile.kind === "brush") {
         for (let i = 0; i < 4; i++)
           steppedOval(
             c,
@@ -5305,7 +5628,17 @@ function drawBattlefield(c, s) {
       c.fillStyle = "#5b5c3e";
       c.font = "8px monospace";
       c.textAlign = "left";
-      c.fillText(tile.cover ? "COVER 2" : "COST 2", x + 5, y + 54);
+      c.fillText(
+        tile.blocked
+          ? "BLOCKED"
+          : tile.kind === "bridge"
+            ? "CROSSING"
+            : tile.cover
+              ? "COVER 2"
+              : "COST 2",
+        x + 5,
+        y + 54,
+      );
     }
   drawTree(c, 41, 50, 0);
   drawTree(c, 65, 94, 2);
@@ -5706,7 +6039,7 @@ function objective() {
       u = s.battle.units.find((u) => u.id === selected);
     if (abilityMode)
       return `${skillFor(p).name} armed: click an outlined enemy within ${attackRange(p, true, s)} tiles. ${skillFor(p).desc} Costs ${skillFor(p).cost} valor.`;
-    return `Valor ${s.battle.valor}/5 · Round ${s.battle.turn} · ${p.name}: ${u?.moved ? "movement used" : `move up to ${movementRange(p)} tiles`} · ${u?.acted ? "action used" : "attack or brace"}. ${resolveLabel(p)} · ${bondSupport(s, p) ? "Trusted support +1 attack · " : ""}${fatigueLabel(p)} · Fatigue ${Math.round(p.fatigue || 0)}/100. Melee flanking +2: place allies on opposite sides of a foe. Wolves rush wounded targets and gain +1 damage when hunting together. Cover blocks 2 ranged damage; mud costs 2 movement. Disengage before leaving melee reach.`;
+    return `${battlefield(s).name} · Round ${s.battle.turn} · Valor ${s.battle.valor}/5 · ${p.name}: ${u?.moved ? "movement used" : `move up to ${movementRange(p)} tiles`}, ${u?.acted ? "action used" : "attack or brace"}. ${resolveLabel(p)} · ${fatigueLabel(p)} · Fatigue ${Math.round(p.fatigue || 0)}/100. ${bondSupport(s, p) ? "Trusted support +1 attack. " : ""}${battlefield(s).text} Cover blocks 2 ranged damage; mud costs 2; Melee flanking +2. Disengage before leaving melee reach.${s.battle.wildlife ? " Wolves rush wounded targets and gain pack damage." : ""}`;
   }
   if (s.contract)
     return `Active: ${s.contract.name}. ${s.location === s.contract.target ? "Use the gold button below to complete your objective." : `Travel to ${places[s.contract.target].name} by clicking any point on the map.`}`;
@@ -7085,7 +7418,10 @@ function draw() {
               (u) => s.party[u.id].hp > 0 && u.x === x && u.y === y,
             );
           if (
-            (enemy && !active.acted && distance <= range) ||
+            (enemy &&
+              !active.acted &&
+              distance <= range &&
+              hasLineOfSight(s, active, { x, y })) ||
             (!abilityMode &&
               !active.moved &&
               !enemy &&
@@ -7500,8 +7836,9 @@ canvas.addEventListener("pointermove", (event) => {
     enemy = s.battle.enemies.find((e) => e.hp > 0 && e.x === x && e.y === y);
   if (x >= 0 && x < 9 && y >= 0 && y < 7) {
     const tile = terrainCell(s, x, y);
-    $("map-label").textContent =
-      `${tile.kind} · movement cost ${tile.cost} · ranged cover ${tile.cover}`;
+    $("map-label").textContent = tile.blocked
+      ? `${tile.kind} · impassable · ${tile.blocksSight ? "blocks sight" : "clear sight"}`
+      : `${tile.kind} · movement cost ${tile.cost} · ranged cover ${tile.cover}`;
   }
   if (enemy)
     $("map-label").textContent =

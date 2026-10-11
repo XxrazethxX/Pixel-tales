@@ -6,6 +6,7 @@ import {
   campRoles,
   campWorker,
   battleTerrain,
+  battlefield,
   equippedItem,
 } from "./game.js";
 export const artPalette = {
@@ -685,7 +686,16 @@ export function venueArtwork(venue) {
   return image;
 }
 export function drawBattlefield(c, s) {
-  pixel(c, 0, 0, 768, 432, "#879064");
+  const style = s ? battlefield(s).style : "meadow",
+    colors = {
+      forest: ["#79885d", "#a8aa7c", "#afb184"],
+      ruin: ["#888770", "#a9a48a", "#b8b194"],
+      quarry: ["#8b7f64", "#b1a17f", "#bdac88"],
+      road: ["#8b8765", "#aea479", "#b8ad82"],
+      river: ["#7d927d", "#9aa88c", "#acb398"],
+      meadow: ["#879064", "#a8aa7c", "#afb184"],
+    }[style];
+  pixel(c, 0, 0, 768, 432, colors[0]);
   for (let i = 0; i < 360; i++) {
     const x = Math.floor(noise(i, 8) * 768),
       y = Math.floor(noise(i, 9) * 432);
@@ -699,7 +709,7 @@ export function drawBattlefield(c, s) {
         y * 60,
         60,
         58,
-        (x + y) % 2 ? "#a8aa7c" : "#afb184",
+        (x + y) % 2 ? colors[1] : colors[2],
       );
       pixel(c, 106 + x * 62, 1 + y * 60, 58, 1, "#bdbe8f");
       for (let k = 0; k < 5; k++)
@@ -717,7 +727,32 @@ export function drawBattlefield(c, s) {
     for (const tile of battleTerrain(s)) {
       const x = 105 + tile.x * 62,
         y = tile.y * 60;
-      if (tile.kind === "brush") {
+      if (tile.blocked) {
+        if (tile.kind === "water") {
+          pixel(c, x + 2, y + 2, 56, 53, "#708f8b");
+          for (let i = 0; i < 4; i++)
+            pixel(c, x + 8 + i * 9, y + 12 + i * 8, 16, 2, "#9eb3a1");
+        } else if (tile.kind === "log") {
+          pixel(c, x + 5, y + 20, 47, 14, "#635c42");
+          pixel(c, x + 7, y + 23, 42, 3, "#9b8456");
+          pixel(c, x + 4, y + 22, 7, 10, "#bd9d68");
+        } else if (tile.kind === "wagon") {
+          pixel(c, x + 5, y + 15, 48, 25, "#78664a");
+          pixel(c, x + 8, y + 18, 42, 17, "#b4a078");
+          pixel(c, x + 5, y + 37, 8, 7, "#48493b");
+          pixel(c, x + 43, y + 37, 8, 7, "#48493b");
+        } else {
+          pixel(c, x + 7, y + 17, 42, 24, "#757767");
+          pixel(c, x + 9, y + 15, 39, 6, "#b2b099");
+          pixel(c, x + 26, y + 22, 2, 17, "#535d50");
+        }
+      } else if (tile.kind === "bridge") {
+        pixel(c, x + 2, y + 4, 56, 46, "#7b7254");
+        for (let i = 0; i < 6; i++) {
+          pixel(c, x + 4, y + 7 + i * 7, 52, 5, "#c0ad79");
+          pixel(c, x + 7, y + 8 + i * 7, 46, 1, "#d0bd8a");
+        }
+      } else if (tile.kind === "brush") {
         for (let i = 0; i < 4; i++)
           steppedOval(
             c,
@@ -737,7 +772,17 @@ export function drawBattlefield(c, s) {
       c.fillStyle = "#5b5c3e";
       c.font = "8px monospace";
       c.textAlign = "left";
-      c.fillText(tile.cover ? "COVER 2" : "COST 2", x + 5, y + 54);
+      c.fillText(
+        tile.blocked
+          ? "BLOCKED"
+          : tile.kind === "bridge"
+            ? "CROSSING"
+            : tile.cover
+              ? "COVER 2"
+              : "COST 2",
+        x + 5,
+        y + 54,
+      );
     }
   drawTree(c, 41, 50, 0);
   drawTree(c, 65, 94, 2);

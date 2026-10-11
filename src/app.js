@@ -109,6 +109,8 @@ import {
   equipmentPerks,
   canEquipEquipment,
   battleTerrain,
+  battlefield,
+  hasLineOfSight,
   terrainCell,
   battlePath,
   disengage,
@@ -273,7 +275,7 @@ function objective() {
       u = s.battle.units.find((u) => u.id === selected);
     if (abilityMode)
       return `${skillFor(p).name} armed: click an outlined enemy within ${attackRange(p, true, s)} tiles. ${skillFor(p).desc} Costs ${skillFor(p).cost} valor.`;
-    return `Valor ${s.battle.valor}/5 · Round ${s.battle.turn} · ${p.name}: ${u?.moved ? "movement used" : `move up to ${movementRange(p)} tiles`} · ${u?.acted ? "action used" : "attack or brace"}. ${resolveLabel(p)} · ${bondSupport(s, p) ? "Trusted support +1 attack · " : ""}${fatigueLabel(p)} · Fatigue ${Math.round(p.fatigue || 0)}/100. Melee flanking +2: place allies on opposite sides of a foe. Wolves rush wounded targets and gain +1 damage when hunting together. Cover blocks 2 ranged damage; mud costs 2 movement. Disengage before leaving melee reach.`;
+    return `${battlefield(s).name} · Round ${s.battle.turn} · Valor ${s.battle.valor}/5 · ${p.name}: ${u?.moved ? "movement used" : `move up to ${movementRange(p)} tiles`}, ${u?.acted ? "action used" : "attack or brace"}. ${resolveLabel(p)} · ${fatigueLabel(p)} · Fatigue ${Math.round(p.fatigue || 0)}/100. ${bondSupport(s, p) ? "Trusted support +1 attack. " : ""}${battlefield(s).text} Cover blocks 2 ranged damage; mud costs 2; Melee flanking +2. Disengage before leaving melee reach.${s.battle.wildlife ? " Wolves rush wounded targets and gain pack damage." : ""}`;
   }
   if (s.contract)
     return `Active: ${s.contract.name}. ${s.location === s.contract.target ? "Use the gold button below to complete your objective." : `Travel to ${places[s.contract.target].name} by clicking any point on the map.`}`;
@@ -1652,7 +1654,10 @@ function draw() {
               (u) => s.party[u.id].hp > 0 && u.x === x && u.y === y,
             );
           if (
-            (enemy && !active.acted && distance <= range) ||
+            (enemy &&
+              !active.acted &&
+              distance <= range &&
+              hasLineOfSight(s, active, { x, y })) ||
             (!abilityMode &&
               !active.moved &&
               !enemy &&
@@ -2067,8 +2072,9 @@ canvas.addEventListener("pointermove", (event) => {
     enemy = s.battle.enemies.find((e) => e.hp > 0 && e.x === x && e.y === y);
   if (x >= 0 && x < 9 && y >= 0 && y < 7) {
     const tile = terrainCell(s, x, y);
-    $("map-label").textContent =
-      `${tile.kind} · movement cost ${tile.cost} · ranged cover ${tile.cover}`;
+    $("map-label").textContent = tile.blocked
+      ? `${tile.kind} · impassable · ${tile.blocksSight ? "blocks sight" : "clear sight"}`
+      : `${tile.kind} · movement cost ${tile.cost} · ranged cover ${tile.cover}`;
   }
   if (enemy)
     $("map-label").textContent =

@@ -201,6 +201,18 @@ Brush and rubble provide **2 cover against ranged attacks**, for either side. Mu
 
 Wolves rush reachable wounded companions, move farther, and gain pack damage when hunting together. Bandit archers maintain distance, while their melee allies close in. Cover, shields, bracing, fatigue, resolve, and trusted companions all affect the outcome.
 
+## Contextual battlefields
+
+[Ruined courtyard](docs/screenshots/battle.png) · [Quarry battle](docs/screenshots/quarry-battle.png) · [River battle on mobile](docs/screenshots/river-battle-mobile.png)
+
+Battles use seven contextual layouts with distinct terrain artwork and deployments. Pinewatch and roaming wolves use the familiar **Forest edge**; Whispering Grove uses **Fallen grove**, with trunks dividing the center. Ruins alternate between **Ruined courtyard** and **Collapsed halls**, based on the day and company victories. Mines and rocky patrol country use **Quarry shelves**. Caravan attacks and open-road patrols use **Caravan road**, with the wagon blocking an approach. Sunken Chapel and river encounters use **Flooded ford**.
+
+Solid walls, logs, boulders, and wagons block **movement and line of sight**. Attack outlines appear only for targets you can reach and see. This includes spear attacks and advanced abilities; Piercing shot ignores armor and cover, while solid obstacles still stop it. Diagonal sight checks do not allow attacks through the corner of a wall. Secondary cleave and sweep targets also require a clear sight line.
+
+Deep water blocks movement while allowing shots across it. The ford has an open central crossing and slower adjacent shallows. Cover still absorbs two ranged damage, and muddy ground still costs two movement points. Hover or point at a tile to see whether it is blocked, provides cover, or costs extra movement. Enemies navigate toward reachable melee positions or firing lines, taking routes around obstacles and choosing first steps they can afford.
+
+Later fields spread the company between flanks and change enemy positions. Six-companion companies and elite groups have distinct, unobstructed starting cells. Layouts persist through battle reloads. Older saved battles keep their existing positions and the original open terrain; they gain the new layouts when the next battle begins.
+
 ## Advanced class training
 
 [Advanced training on mobile](docs/screenshots/advanced-training-mobile.png)
@@ -302,6 +314,7 @@ PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node
 PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/advanced-skills-smoke.mjs
 PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/durability-smoke.mjs
 PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/trail-encounters-smoke.mjs
+PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/battle-layouts-smoke.mjs
 ```
 
 It uses `/usr/bin/chromium` by default; override `CHROMIUM_PATH` or `GAME_URL` as needed. Desktop and mobile screenshots are written under `/tmp`. The village smoke test checks regional offers, renown locks and unlocks, resale, inn recovery, save persistence, and dangerous encounters. The equipment smoke test covers purchases, class restrictions, assignment and transfer, resale, research and crafting, combat restrictions, reloads, mobile layout, and new-company reset.
@@ -320,4 +333,6 @@ The durability smoke test verifies broken-gear stats, village and staffed camp r
 
 The trail-encounters smoke test verifies terrain selection, profession and faction gates, trait choices, cargo capacity, regional daily limits, mobile decision menus and journals, pending saves, clock pausing, and natural roadside encounters.
 
-Further development includes varied battle layouts, named adversaries, and Android packaging.
+The battlefield smoke test covers contextual layouts, blocked movement, sight-restricted attacks and skills, terrain tooltips, deployment persistence, caravan fights, field artwork, and mobile combat.
+
+Further development includes named adversaries and Android packaging.
