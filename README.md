@@ -633,3 +633,61 @@ npm test
 npm run build
 GAME_URL=http://127.0.0.1:3002/ PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/expedition-systems-smoke.mjs
 ```
+
+## Regions, companion continuations and captives (v0.31)
+
+**Distinct regional environments.** The current freely traveled map now has five geographic identities, with original scenery: Greyhaven's planted fields, the Salt Coast, the rocky Redstone Passes, the pale Whispering Wilds, and Emberfall's terraced dominion and academy spires. These deepen the existing map rather than opening a separate campaign.
+
+| Region | Travel and resources | Local trade and services |
+| --- | --- | --- |
+| Greyhaven Farmlands | Irrigation obstacles; a Cook finds a safe route | Greyhaven sells one daily harvest bundle: 12 rations for 18 crowns |
+| Salt Coast | Flooded fords; a Thief identifies safe crossings | Saltbridge sells one daily reed remedy bundle: 4 herbs and 1 medicine for 20 crowns |
+| Redstone Passes | Scree falls; Miners find safe approaches; first daily gathering at a site adds ore | Ore-rich quarries and mountain battlefields reward exploration |
+| Whispering Wilds | Ghost-mist and misleading lights; Herbalists find safe growth; first daily gathering at a site adds herbs | Wolves, goblins, haunted ruins and existing Freefolk services shape woodland travel |
+| Emberfall Dominion | Unstable roadside wards; Wizards interpret safe routes | Existing cheap cloth/iron and scarce grain; academy gates provide costly arcane passage |
+
+After 650 pixels of actual travel, a regional obstacle can appear outside settlements, limited to once per region each day. A conscious specialist finds a one-hour route and earns knowledge. Two rations and one timber secure a one-hour crossing. A three-hour detour adds fatigue; all elapsed time can cross midnight and charge wages and meals. Obstacles pause walking and survive reloading. View the regional atlas in Company management.
+
+Emberfall's academy transports the company to a discovered Greyhaven or Saltbridge for fifty crowns, two hours, and a conscious caster's persistent level-two slot. Gates cannot transport a company wagon, escorted travelers or prisoners. Existing temple recovery remains a separate service. Magic remains costly and concentrated around the flourishing city.
+
+**Six multi-stage companion continuations.** Complete a companion's first personal journey, then begin a follow-up at camp. Each combat class has a different story, witness, destination and recovered evidence. Hear testimony in the appropriate village, investigate a second landmark using two ore or herbs and two hours, then decide its meaning at camp. Choose a living quest partner there; changing partners does not bypass actual trust requirements.
+
+| Class | Follow-up | Unique technique after an oath or reconciliation |
+| --- | --- | --- |
+| Swordswoman | The broken dueling oath | Oathstrike: adjacent attack with two additional power, then brace |
+| Shieldbearer | Names beneath the barrow | Steadfast: give every conscious ally a two-point ward |
+| Spearman | The watcher's last post | Holdfast: root enemies within two tiles for two rounds |
+| Archer | The hunter's missing sister | Trueflight: expose visible enemies to stronger company attacks |
+| Wizard | An apprentice's forbidden notes | Lastspark: recover one actually spent level-one slot |
+| Cleric | The bell that forgot its dead | Mercy: heal all conscious allies by four health |
+
+All personal techniques consume an action and are limited to once per battle, including after reloading. An oath requires at least ten bond with the living partner and settled wage debt. Restitution costs twenty-five crowns, repairs rivalry, and unlocks the technique through reconciliation. Alternatively, let the companion leave peacefully: they genuinely vacate the roster, their equipment stays in company stores, and the Freefolk recognize the decision. Outcomes and evidence persist; camp and Company menus expose requirements.
+
+**Enemy surrender, fleeing and prisoners.** Wounded humanoids in ordinary battles can offer surrender after the opening round when outnumbered. Capture them, release them alive, accept eight crowns for safe passage, or refuse. Critically wounded enemies whose surrender is refused try to escape east; roots, disengagement attacks and overwatch can stop them. Escape loses their stolen supplies, and a fight in which every enemy escapes pays half the normal crown reward. Wildlife, undead, named adversaries, stronghold leaders, objective defenders, peaceful caravan defenders and pursuing authorities do not offer this ordinary surrender.
+
+The company can keep at most three prisoners. A conscious Shieldbearer, Thief, camp guard or traveling rear guard provides supervision. Prisoners visibly follow the company and consume one additional ration each at daily upkeep; the supply forecasts include them. Two days without food or three days without supervision cause escape. Deliver a captive to a village guard for thirty crowns, or forty-five for a mage, and gain Warden standing. Releasing captives earns Freefolk standing; selling battlefield passage lowers Warden standing.
+
+After two fed days, recruit a human captive at camp for sixty crowns if wages are settled and the roster has room. Their previous enemy role determines their combat class; they join as Thieves with the Mercenary trait and fifty resolve, introducing wage and loyalty tradeoffs. Goblins can be released or delivered for bounty but cannot join the current company. Dead/departed roster slots can be reused, with the previous owner's progression cleared.
+
+**Visible and purposeful equipment.** Equipped weapons, armor, shields and helmets now appear consistently on world avatars, combat units, camp and interior sprites, and company portraits. Item quality and condition change their colors and silhouettes. Equipment comparisons show the full attack and armor change, shield loss from two-handed weapons, gained/lost perks, and broken-item effects.
+
+Four finite relics add tactical choices. An Archer or Thief must locate them; recovery costs two knowledge, four listed materials, and two hours. Broken relics lose their special effect.
+
+| Relic | Landmark and materials | Tactical effect |
+| --- | --- | --- |
+| Winterglass pike | Redstone Quarry · 4 ore | Basic attacks root the target for one round |
+| Horizon bow | Watchtower · 4 wood | Two extra bow range while stationary; movement removes it |
+| Spellbreaker blade | Broken Crown · 4 ore | Basic hits interrupt channels without refunding spent enemy slots, then silence for one round |
+| Grovewarden helm | Whispering Grove · 4 herbs | Two additional damage reduction while standing in cover |
+
+Save version eighteen migrates older companies and validates the new regional, companion, captive and relic ledgers. Validation: **429 automated tests**, a dedicated desktop/mobile browser check covering a complete continuation, capture/reload/bounty, two actual fed rests before prisoner recruitment, relic equipment and paid arcane travel, plus regression checks for previous systems.
+
+[Regional atlas](docs/screenshots/regional-atlas.png) · [Companion oath](docs/screenshots/companion-oath-mobile.png) · [Enemy surrender](docs/screenshots/enemy-surrender-mobile.png) · [Equipment comparison](docs/screenshots/equipment-comparison-mobile.png)
+
+[Farmlands](docs/screenshots/farmlands.png) · [Haunted woodland](docs/screenshots/haunted-wilds.png) · [Mountain passes](docs/screenshots/mountain-passes.png) · [Emberfall and equipped avatars](docs/screenshots/emberfall-city.png)
+
+```sh
+npm test
+npm run build
+GAME_URL=http://127.0.0.1:3002/ PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/odyssey-systems-smoke.mjs
+```

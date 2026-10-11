@@ -167,6 +167,27 @@ import {
   tradeCaravan,
   discoverNearby,
   fresh,
+  regions,
+  regionAt,
+  regionalChoice,
+  regionalChoiceLock,
+  regionalService,
+  regionalServiceLock,
+  chooseJourneyPartner,
+  continuationInfo,
+  continuationLock,
+  continueCompanion,
+  continuationTechnique,
+  continuationTechniqueLock,
+  prisonerAction,
+  prisonerActionLock,
+  prisonerGuard,
+  answerSurrender,
+  surrenderLock,
+  regionalRelics,
+  relicLock,
+  recoverRelic,
+  equipmentComparison,
   restore,
   places,
   studies,
@@ -353,7 +374,7 @@ function button(text, fn, disabled = false, primary = false) {
   };
   return b;
 }
-function card(title, body) {
+function card(title, body = "") {
   const d = document.createElement("div");
   d.className = "card";
   const heading = document.createElement("h3");
@@ -707,6 +728,7 @@ function render() {
   panel.replaceChildren();
   if (tab === "Company") {
     appendExpeditionCompany(panel);
+    appendOdysseyCompany(panel);
     appendRealmCompany(panel);
     appendTravelJobs(panel);
     appendWagonPanel(panel);
@@ -839,7 +861,9 @@ function render() {
           "<p>Died of starvation. Starvation deaths are permanent; medicine and rest cannot revive this companion.</p>",
         );
         memorial.classList.add("fallen");
-        memorial.querySelector(".pixel-icon").replaceWith(portraitArtwork(p));
+        memorial
+          .querySelector(".pixel-icon")
+          .replaceWith(portraitArtwork(p, s));
         panel.append(memorial);
         return;
       }
@@ -884,7 +908,7 @@ function render() {
       character.append(connections);
       c.append(character, worn);
       c.classList.add("companion-card");
-      c.querySelector(".pixel-icon").replaceWith(portraitArtwork(p));
+      c.querySelector(".pixel-icon").replaceWith(portraitArtwork(p, s));
       if (p.points)
         c.append(
           button(
@@ -1083,6 +1107,8 @@ function render() {
     });
   }
   if (tab === "Camp") {
+    appendContinuationPanel(panel);
+    if (s.odyssey.prisoners.length) appendPrisoners(panel);
     appendWagonPanel(panel);
     appendTravelJobs(panel);
     panel.append(
@@ -1364,9 +1390,8 @@ function render() {
         ? `Equipped by ${owner.name}`
         : "In company stores";
       if (owner?.id !== p.id && canEquipEquipment(s, item, p)) {
-        const delta = item.bonus - (equippedItem(s, p, item.slot)?.bonus || 0);
         const comparison = document.createElement("p");
-        comparison.textContent = `For ${p.name}: ${delta >= 0 ? "+" : ""}${delta} ${item.slot === "weapon" ? "attack" : "armor"} compared with current gear.`;
+        comparison.textContent = `For ${p.name}: ${equipmentComparison(s, item, p).text}`;
         c.append(comparison);
       }
       c.append(
@@ -1639,6 +1664,7 @@ function render() {
       );
     if (tab === "Town") {
       appendTerritoryPanel(panel);
+      appendRegionalServices(panel);
       if (
         s.location === 0 &&
         s.campaign.phase !== "unstarted" &&
@@ -2119,7 +2145,20 @@ function render() {
     const raided =
       s.event.kind === "caravan-raid" &&
       s.patrols.find((p) => p.id === s.event.patrolId);
-    if (s.event.kind === "home") {
+    if (s.event.kind === "region") {
+      for (const [action, label] of [
+        ["specialist", "Find a route with a specialist · 1 hour"],
+        ["supplies", "Secure the crossing · 2 rations / 1 wood / 1 hour"],
+        ["detour", "Take the long way · 3 hours / fatigue"],
+      ])
+        c.append(
+          lockedButton(
+            label,
+            () => regionalChoice(s, action),
+            regionalChoiceLock(s, action),
+          ),
+        );
+    } else if (s.event.kind === "home") {
       appendHomePanel(c);
     } else if (s.event.kind === "travel-conversation") {
       for (const [choice, label] of [
@@ -2540,6 +2579,7 @@ function render() {
     );
     appendMissionCombat(a);
     appendCareerCombat(a);
+    appendOdysseyCombat(a);
     const actor = s.party[selected],
       unit = s.battle.units.find((u) => u.id === selected),
       skill = skillFor(actor);
@@ -2940,6 +2980,7 @@ function render() {
       `${places[s.location]?.name || terrainAt(s.position).toUpperCase()} · ${Math.round(s.position.x)}, ${Math.round(s.position.y)}`;
   }
   appendExpeditionWorld(a);
+  appendOdysseyWorld(a);
   appendRealmWorldActions(a);
   const rumorJournal = $("rumor-journal");
   rumorJournal.replaceChildren();
@@ -3411,6 +3452,13 @@ function draw() {
       drawLoadout(ctx, s, s.party[p.i], p.x, p.y);
     });
   ctx.globalAlpha = 1;
+  s.odyssey.prisoners.forEach((prisoner, index) => {
+    const point = partyPositions(s).at(-1) || s.position;
+    person(point.x - 15 - index * 13, point.y + 12, "#77796b", 0, "", index, {
+      race: prisoner.kind === "goblin" ? "orc" : "human",
+    });
+    rect(point.x - 17 - index * 13, point.y + 14, 5, 1, "#b6b2a1");
+  });
   if (isHidden(s))
     drawMapLabel(ctx, "HIDDEN", s.position.x, s.position.y - 35, true);
   if (s.wagon.owned) {
@@ -4611,10 +4659,11 @@ function lockedButton(label, fn, reason) {
   }
   return wrap;
 }
-function fold(title) {
+function fold(title, open = false) {
   const d = document.createElement("details"),
     s = document.createElement("summary");
   s.textContent = title;
+  d.open = open;
   d.append(s);
   return d;
 }
@@ -5131,4 +5180,252 @@ function inferActionRequirement(label) {
   if (s.event?.kind === "dungeon")
     return "Stand beside the relevant dungeon feature and bring the required profession or materials.";
   return "Check the action's listed location, resources, companion requirements, and one-time completion status.";
+}
+
+function appendOdysseyCompany(panel) {
+  const region = regionAt(s.position),
+    atlas = fold(`Regions · ${region.name}`);
+  for (const r of regions) {
+    const line = document.createElement("p");
+    line.textContent = `${r.name}${s.odyssey.visited[r.id] || r.id === region.id ? " · visited" : ""}: ${r.desc}`;
+    atlas.append(line);
+  }
+  atlas.append(
+    card(
+      "Regional travel",
+      "<p>Long journeys can encounter local obstacles once per region each day. Specialists save time; supplies or tiring detours provide alternatives. Mountains yield ore, haunted woods yield herbs. Village markets offer regional services.</p>",
+    ),
+  );
+  panel.append(atlas);
+  appendContinuationPanel(panel);
+  if (s.odyssey.prisoners.length) appendPrisoners(panel);
+  const relics = fold("Regional relics · finite tactical equipment");
+  for (const r of regionalRelics) {
+    const item = equipmentCatalog.find((v) => v.id === r.id),
+      line = document.createElement("p");
+    line.textContent = `${item.name}: ${equipmentPerks[item.perk]} ${r.desc} ${s.odyssey.relics[r.id] ? "Recovered." : `Two knowledge and ${r.amount} ${r.resource}.`}`;
+    relics.append(line);
+    if (s.discovered.includes(r.site) && !s.odyssey.relics[r.id])
+      relics.append(
+        button(
+          `Travel to relic: ${places[r.site].name}`,
+          () => moveTo(s, places[r.site].x, places[r.site].y),
+          !!s.battle || !!s.event || s.campOpen,
+        ),
+      );
+  }
+  panel.append(relics);
+}
+function appendPrisoners(panel) {
+  const menu = fold(`Prisoners · ${s.odyssey.prisoners.length}/3`, true),
+    guard = prisonerGuard(s);
+  const desc = document.createElement("p");
+  desc.textContent = `Each prisoner consumes one extra ration at dawn. Two fed days permit recruitment at camp for sixty crowns. Two hungry days cause escape; three days without supervision also cause escape. Supervisor: ${guard?.name || "none"}. Recruitment brings Mercenary wages and fifty resolve.`;
+  menu.append(desc);
+  for (const p of s.odyssey.prisoners) {
+    const c = card(p.name),
+      line = document.createElement("p");
+    line.textContent = `${p.kind} · trust ${p.trust}/2 · hungry days ${p.unfed} · captured day ${p.day}`;
+    c.append(line);
+    for (const [action, label] of [
+      [
+        "ransom",
+        `Deliver ${p.name} for bounty · ${p.kind === "mage" ? 45 : 30} crowns`,
+      ],
+      ["recruit", `Recruit ${p.name} · 60 crowns`],
+      ["release", `Release ${p.name}`],
+    ])
+      c.append(
+        lockedButton(
+          label,
+          () => prisonerAction(s, p.id, action),
+          prisonerActionLock(s, p.id, action),
+        ),
+      );
+    menu.append(c);
+  }
+  panel.append(menu);
+}
+function appendRegionalServices(panel) {
+  const r = regionAt(s.position),
+    c = card(r.name),
+    line = document.createElement("p");
+  line.textContent = r.desc;
+  c.append(line);
+  if (s.location === 0)
+    c.append(
+      lockedButton(
+        "Buy harvest bundle · 18 crowns / 12 rations",
+        () => regionalService(s, "provisions"),
+        regionalServiceLock(s, "provisions"),
+      ),
+    );
+  if (s.location === 3)
+    c.append(
+      lockedButton(
+        "Buy reed remedies · 20 crowns",
+        () => regionalService(s, "remedies"),
+        regionalServiceLock(s, "remedies"),
+      ),
+    );
+  if (s.location === 6) {
+    const gates = fold("Academy gates · fifty crowns and one level-two slot");
+    const hint = document.createElement("p");
+    hint.textContent =
+      "Passage takes two hours. Gates carry the company, but cannot transport a wagon, escorted travelers or prisoners.";
+    gates.append(hint);
+    for (const id of [0, 3])
+      gates.append(
+        lockedButton(
+          `Arcane passage to ${places[id].name}`,
+          () => regionalService(s, "transit", id),
+          regionalServiceLock(s, "transit", id),
+        ),
+      );
+    c.append(gates);
+  }
+  for (const p of livingParty(s)) {
+    const q = continuationInfo(s, p.id);
+    if (q?.stage === 1 && q.meet === s.location)
+      c.append(
+        lockedButton(
+          `Hear testimony for ${p.name}`,
+          () => continueCompanion(s, p.id, "meet"),
+          continuationLock(s, p.id, "meet"),
+        ),
+      );
+  }
+  panel.append(c);
+  if (s.odyssey.prisoners.length) appendPrisoners(panel);
+}
+function appendOdysseyWorld(a) {
+  if (s.battle || s.event || s.campOpen) return;
+  for (const p of livingParty(s)) {
+    const q = continuationInfo(s, p.id);
+    if (q?.stage === 2 && q.site === s.location)
+      a.append(
+        lockedButton(
+          `Recover evidence for ${p.name}`,
+          () => continueCompanion(s, p.id, "recover"),
+          continuationLock(s, p.id, "recover"),
+        ),
+      );
+  }
+  for (const r of regionalRelics)
+    if (r.site === s.location && !s.odyssey.relics[r.id])
+      a.append(
+        lockedButton(
+          `Recover ${equipmentCatalog.find((v) => v.id === r.id).name}`,
+          () => recoverRelic(s, r.id),
+          relicLock(s, r.id),
+        ),
+      );
+}
+function appendOdysseyCombat(a) {
+  const q = continuationInfo(s, selected);
+  if (q?.stage === 4 && ["swear", "reconcile"].includes(q.outcome)) {
+    const menu = fold(`Personal technique · ${q.perk}`),
+      targets =
+        s.party[selected].role === "Swordswoman"
+          ? s.battle.enemies.filter((e) => e.hp > 0)
+          : [null];
+    const hint = document.createElement("p");
+    hint.textContent = q.desc;
+    menu.append(hint);
+    for (const e of targets)
+      menu.append(
+        lockedButton(
+          `Use ${q.perk}${e ? ` on ${e.name || e.kind} ${e.id + 1}` : ""}`,
+          () => continuationTechnique(s, selected, e?.id ?? null),
+          continuationTechniqueLock(s, selected, e?.id ?? null),
+        ),
+      );
+    a.append(menu);
+  }
+  const offers = s.battle.enemies.filter((e) => e.hp > 0 && e.surrenderOffer);
+  if (offers.length) {
+    const menu = fold("Enemy surrender · decide their fate", true);
+    for (const e of offers) {
+      const line = document.createElement("p");
+      line.textContent = `${e.name || e.kind} ${e.id + 1} offers surrender. Capture costs food and supervision; safe passage pays eight crowns but lowers Warden reputation.`;
+      menu.append(line);
+      for (const [action, label] of [
+        ["capture", "Take prisoner"],
+        ["ransom", "Sell safe passage"],
+        ["release", "Release alive"],
+        ["refuse", "Refuse surrender"],
+      ])
+        menu.append(
+          lockedButton(
+            `${label}: ${e.kind} ${e.id + 1}`,
+            () => answerSurrender(s, e.id, action),
+            surrenderLock(s, e.id, action),
+          ),
+        );
+    }
+    a.append(menu);
+  }
+}
+
+function appendContinuationPanel(panel) {
+  const journeys = fold("Companion continuations · oaths and reconciliation");
+  for (const p of livingParty(s)) {
+    const q = continuationInfo(s, p.id);
+    if (!q) continue;
+    const partner = s.party[q.partner],
+      c = card(`${p.name} · ${q.title}`);
+    const line = document.createElement("p");
+    line.textContent = `${q.desc} ${q.stage === 0 ? "Finish their first personal journey, then begin this follow-up at camp." : q.stage === 1 ? `Hear testimony at ${places[q.meet].name}.` : q.stage === 2 ? `Recover evidence at ${places[q.site].name}; bring two ${q.resource}.` : q.stage === 3 ? `Discuss the evidence at camp. Partner: ${partner?.name || "none"}; bond ${partner ? bondValue(s, p.id, partner.id) : 0}.` : `Resolved: ${q.outcome}.`} `;
+    c.append(line);
+    if (q.stage >= 2) {
+      const story = document.createElement("p");
+      story.textContent = q.stage === 2 ? q.testimony : q.evidence;
+      c.append(story);
+    }
+    if (s.campOpen && q.stage > 0 && q.stage < 4) {
+      const partners = document.createElement("select");
+      partners.setAttribute("aria-label", `Journey partner: ${p.name}`);
+      partners.add(new Option("Choose a partner", ""));
+      for (const other of livingParty(s).filter(
+        (v) => v.id !== p.id && v.hp > 0,
+      ))
+        partners.add(
+          new Option(
+            `${other.name} · bond ${bondValue(s, p.id, other.id)}`,
+            String(other.id),
+          ),
+        );
+      partners.value = q.partner === null ? "" : String(q.partner);
+      partners.onchange = () => {
+        if (partners.value !== "")
+          chooseJourneyPartner(s, p.id, Number(partners.value));
+        render();
+      };
+      c.append(partners);
+    }
+    const choices =
+      q.stage === 0
+        ? [["begin", `Begin ${p.name}'s follow-up`]]
+        : q.stage === 1
+          ? [["meet", `Hear testimony for ${p.name}`]]
+          : q.stage === 2
+            ? [["recover", `Recover evidence for ${p.name}`]]
+            : q.stage === 3
+              ? [
+                  ["swear", `Swear an oath with ${p.name}`],
+                  ["reconcile", `Reconcile ${p.name}'s rivalry · 25 crowns`],
+                  ["depart", `Let ${p.name} leave peacefully`],
+                ]
+              : [];
+    for (const [action, label] of choices)
+      c.append(
+        lockedButton(
+          label,
+          () => continueCompanion(s, p.id, action),
+          continuationLock(s, p.id, action),
+        ),
+      );
+    journeys.append(c);
+  }
+  panel.append(journeys);
 }

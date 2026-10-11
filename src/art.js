@@ -5,6 +5,7 @@ import {
   WORLD,
   places,
   terrainAt,
+  regionAt,
   campRoles,
   campWorker,
   battleTerrain,
@@ -156,7 +157,19 @@ export function drawLandmark(c, p, index = 0) {
         1,
         "#c6bd88",
       );
-    fence(c, x - 44, y - 30, 84);
+    if (index === 6) {
+      // Emberfall's walls and academy spires distinguish the flourishing city.
+      pixel(c, x - 57, y - 42, 114, 7, "#898d80");
+      pixel(c, x - 53, y - 40, 106, 2, "#c4b99b");
+      for (const dx of [-54, 42]) {
+        pixel(c, x + dx, y - 58, 13, 34, "#a2a79a");
+        pixel(c, x + dx + 2, y - 61, 9, 3, "#c5b894");
+        pixel(c, x + dx + 5, y - 52, 3, 7, "#597584");
+        pixel(c, x + dx + 5, y - 39, 3, 7, "#597584");
+        pixel(c, x + dx + 3, y - 69, 7, 8, "#788291");
+        pixel(c, x + dx + 5, y - 73, 3, 5, "#c0d4d1");
+      }
+    } else fence(c, x - 44, y - 30, 84);
     house(c, x - 35, y - 14, index === 6 ? "#8c5340" : "#8c6849");
     house(c, x + 3, y - 9, "#7b7760");
     house(c, x - 17, y + 26, "#986247", true);
@@ -254,7 +267,8 @@ export function worldArtwork() {
   // Low contrast patches make open land readable without a conspicuous tile grid.
   for (let y = 0; y < WORLD.height; y += 8)
     for (let x = 0; x < WORLD.width; x += 8) {
-      const highlands = terrainAt({ x, y }) === "highlands";
+      const highlands = terrainAt({ x, y }) === "highlands",
+        region = regionAt({ x, y });
       const n = noise(Math.floor(x / 48), Math.floor(y / 48));
       pixel(
         c,
@@ -263,8 +277,12 @@ export function worldArtwork() {
         8,
         8,
         highlands
-          ? ["#a5a584", "#b0ad89", "#aaa985"][Math.floor(n * 2.99)]
-          : ["#a3a775", "#9da370", "#a8ab79"][Math.floor(n * 2.99)],
+          ? ["#a1a4ad", "#adb0b9", "#a7abb3"][Math.floor(n * 2.99)]
+          : region.id === "haunted"
+            ? ["#909994", "#899591", "#98a198"][Math.floor(n * 2.99)]
+            : region.id === "city"
+              ? ["#b0aa87", "#aaa57e", "#b6b08d"][Math.floor(n * 2.99)]
+              : ["#a3a775", "#9da370", "#a8ab79"][Math.floor(n * 2.99)],
       );
       if (noise(x, y) > 0.7) {
         pixel(c, x + 2, y + 5, 3, 1, highlands ? "#959779" : "#8c9867");
@@ -349,6 +367,35 @@ export function worldArtwork() {
         trees.push({ x, y, i });
     }
   trees.sort((a, b) => a.y - b.y).forEach((p) => drawTree(c, p.x, p.y, p.i));
+  // Regional landmarks are scenery: fields, scree, ghost lights and city terraces.
+  for (let row = 0; row < 4; row++)
+    for (let col = 0; col < 3; col++) {
+      const x = 52 + col * 78,
+        y = 365 + row * 30;
+      pixel(c, x, y, 65, 22, "#aaa16a");
+      for (let furrow = 0; furrow < 5; furrow++)
+        pixel(c, x + furrow * 12, y + 3, 2, 16, "#c4b576");
+    }
+  for (let i = 0; i < 70; i++) {
+    const x = 520 + Math.floor(noise(i, 1) * 950),
+      y = 22 + Math.floor(noise(i, 4) * 106);
+    if (places.every((p) => Math.hypot(p.x - x, p.y - y) > 40))
+      rock(c, x, y, 1);
+  }
+  for (let i = 0; i < 20; i++) {
+    const x = 900 + Math.floor(noise(i, 7) * 225),
+      y = 175 + Math.floor(noise(i, 9) * 205);
+    if (places.every((p) => Math.hypot(p.x - x, p.y - y) > 40)) {
+      pixel(c, x, y, 3, 5, "#bfc8c6");
+      pixel(c, x - 2, y + 5, 7, 1, "#7b8c87");
+    }
+  }
+  for (let i = 0; i < 5; i++) {
+    const x = 1040 + i * 30,
+      y = 656;
+    pixel(c, x, y, 22, 5, "#c0ae87");
+    pixel(c, x + 2, y + 5, 18, 2, "#8b8d77");
+  }
   return landscape;
 }
 function characterImage(role, coat, step, variant, appearance = {}) {
@@ -493,7 +540,7 @@ export const partyCoats = [
   "#968095",
   "#839480",
 ];
-export function portraitArtwork(p) {
+export function portraitArtwork(p, s = null) {
   const image = surface(48, 48),
     c = image.getContext("2d");
   pixel(c, 0, 0, 48, 48, "#a7ad83");
@@ -513,6 +560,13 @@ export function portraitArtwork(p) {
     39,
     51,
   );
+  if (s) {
+    c.save();
+    c.translate(6, 1);
+    c.scale(1.5, 1.5);
+    drawLoadout(c, s, p, 13, 17);
+    c.restore();
+  }
   image.className = "companion-portrait";
   image.setAttribute("aria-hidden", "true");
   return image;
@@ -1218,18 +1272,69 @@ export function drawCampScene(c, s) {
 }
 
 export function drawLoadout(c, s, p, x, y) {
-  if (equippedItem(s, p, "helmet")) {
-    pixel(c, x - 4, y - 15, 9, 5, "#87918b");
-    pixel(c, x - 5, y - 11, 11, 2, "#bdc0a0");
+  const helmet = equippedItem(s, p, "helmet"),
+    shield = equippedItem(s, p, "shield"),
+    weapon = equippedItem(s, p, "weapon"),
+    armor = equippedItem(s, p, "armor");
+  const metal = (item) =>
+    item.durability === 0
+      ? "#766d59"
+      : item.tier === 3
+        ? "#bed1cd"
+        : item.tier === 2
+          ? "#bbc2b5"
+          : "#8d9891";
+  if (armor) {
+    pixel(c, x - 5, y - 1, 10, 8, metal(armor));
+    pixel(c, x - 3, y, 6, 7, armor.tier === 3 ? "#6d8790" : "#6d786e");
+    pixel(c, x - 5, y + 7, 10, 2, "#756144");
   }
-  if (equippedItem(s, p, "shield")) {
-    pixel(c, x - 12, y + 1, 8, 11, "#565e50");
-    pixel(c, x - 11, y + 2, 6, 8, "#ac9971");
-    pixel(c, x - 9, y + 5, 2, 2, "#c9c5a3");
+  if (helmet) {
+    pixel(c, x - 4, y - 15, 9, 5, metal(helmet));
+    pixel(c, x - 5, y - 11, 11, 2, "#c1bea0");
+    if (helmet.tier >= 2) pixel(c, x - 1, y - 16, 2, 7, "#d0c497");
+    if (helmet.tier === 3) {
+      pixel(c, x - 6, y - 16, 2, 5, "#718777");
+      pixel(c, x + 5, y - 16, 2, 5, "#718777");
+    }
   }
-  if (equippedItem(s, p, "weapon")?.twoHanded) {
-    pixel(c, x + 10, y - 14, 2, 24, "#c5c9ac");
-    pixel(c, x + 7, y + 4, 8, 2, "#7b6844");
+  if (shield) {
+    pixel(c, x - 12, y + 1, 8, 11, "#4e5a50");
+    pixel(c, x - 11, y + 2, 6, 8, metal(shield));
+    pixel(c, x - 9, y + 5, 2, 2, "#d8c690");
+  }
+  if (weapon) {
+    const steel = metal(weapon);
+    if (p.role === "Archer") {
+      pixel(c, x + 11, y - 11, 2, 4, steel);
+      pixel(c, x + 13, y - 7, 2, 12, steel);
+      pixel(c, x + 11, y + 5, 2, 4, steel);
+      pixel(c, x + 10, y - 8, 1, 14, "#ded6ac");
+    } else if (p.role === "Spearman") {
+      pixel(c, x + 10, y - 13, 2, 27, "#94764f");
+      pixel(c, x + 9, y - 18, 4, 6, steel);
+      pixel(c, x + 10, y - 20, 2, 3, steel);
+    } else if (p.role === "Shieldbearer") {
+      pixel(c, x + 9, y - 4, 2, 17, "#94764f");
+      pixel(c, x + 7, y - 8, 6, 7, steel);
+    } else if (p.role === "Wizard" || p.role === "Cleric") {
+      pixel(c, x + 10, y - 13, 2, 26, "#94764f");
+      pixel(c, x + 8, y - 17, 6, 5, steel);
+      pixel(c, x + 10, y - 16, 2, 3, weapon.tier === 3 ? "#acbddd" : "#d4c082");
+    } else {
+      pixel(
+        c,
+        x + 10,
+        y - (weapon.twoHanded ? 17 : 10),
+        2,
+        weapon.twoHanded ? 28 : 20,
+        steel,
+      );
+      pixel(c, x + 7, y + 5, 8, 2, "#aa8e57");
+      pixel(c, x + 10, y + 7, 2, 6, "#756144");
+    }
+    if (weapon.tier === 3 && weapon.durability > 0)
+      pixel(c, x + 10, y - 8, 2, 2, "#e2e4c2");
   }
 }
 
@@ -1311,7 +1416,7 @@ export function drawSiteInterior(c, s) {
     }
   }
   for (let i = 0; i < s.party.length; i++)
-    if (!s.party[i].dead)
+    if (!s.party[i].dead) {
       drawCharacter(
         c,
         270 + i * 40,
@@ -1322,6 +1427,8 @@ export function drawSiteInterior(c, s) {
         i,
         s.party[i],
       );
+      drawLoadout(c, s, s.party[i], 270 + i * 40, 340);
+    }
   drawMapLabel(c, places[e.site].name, 384, 22);
 }
 export function drawDungeonInterior(c, s) {
@@ -1404,6 +1511,7 @@ export function drawDungeonInterior(c, s) {
     p.id,
     p,
   );
+  drawLoadout(c, s, p, 136 + s.event.x * 62, 28 + s.event.y * 60);
 }
 
 export function drawFarmInterior(c, s) {
@@ -1433,6 +1541,7 @@ export function drawFarmInterior(c, s) {
   drawMapLabel(c, "Old well", 537, 187);
   const p = s.party.find((p) => !p.dead);
   drawCharacter(c, 410, 350, p.coat || partyCoats[0], 0, p.role, p.id, p);
+  drawLoadout(c, s, p, 410, 350);
 }
 
 export function chestPreview(contents) {
@@ -1541,7 +1650,7 @@ export function drawCompanyHome(c, s) {
   }
   s.party
     .filter((p) => !p.dead)
-    .forEach((p, i) =>
+    .forEach((p, i) => {
       drawCharacter(
         c,
         245 + i * 35,
@@ -1551,8 +1660,9 @@ export function drawCompanyHome(c, s) {
         p.role,
         p.id,
         p,
-      ),
-    );
+      );
+      drawLoadout(c, s, p, 245 + i * 35, 335);
+    });
   c.fillStyle = "#4c4e39";
   c.font = "bold 14px monospace";
   c.textAlign = "center";

@@ -118,7 +118,7 @@ function researchLock(s, id) {
 }
 function fresh() {
   return {
-    version: 17,
+    version: 18,
     companyName: "The Ashen Company",
     difficulty: "standard",
     banner: "ashen",
@@ -181,6 +181,7 @@ function fresh() {
     escortLedger: {},
     realm: freshRealm(),
     expedition: freshExpedition(),
+    odyssey: freshOdyssey(),
     stash: { found: false, unlocked: false, searched: [], clues: [], loot: {} },
     cargo: { grain: 0, cloth: 0, salt: 0, iron: 0 },
     markets: {},
@@ -607,7 +608,9 @@ function win(s) {
         : 40
     : s.contract.reward;
   const reward = Math.ceil(
-    baseReward * (s.difficulty === "veteran" ? 1.15 : 1),
+    baseReward *
+      (s.difficulty === "veteran" ? 1.15 : 1) *
+      (s.battle.enemies.every((e) => e.escaped) ? 0.5 : 1),
   );
   if (wildlife) {
     s.food += 6;
@@ -730,6 +733,7 @@ function endTurn(s) {
       note(s, "A stunned enemy loses its turn.");
       continue;
     }
+    if (routeEnemy(s, e)) continue;
     if (enemySpecialTurn(s, e)) continue;
     adversaryTurn(s, e);
     const targets = b.units
@@ -926,6 +930,7 @@ function endTurn(s) {
     });
   }
   if (s.battle && s.battle.enemies.every((e) => e.hp <= 0)) win(s);
+  if (s.battle) refreshSurrender(s);
   return true;
 }
 
@@ -933,7 +938,7 @@ function restore(raw) {
   const base = fresh();
   if (
     !raw ||
-    ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17].includes(
+    ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18].includes(
       raw.version,
     ) ||
     !Array.isArray(raw.party) ||
@@ -961,7 +966,7 @@ function restore(raw) {
   const result = {
     ...base,
     ...raw,
-    version: 17,
+    version: 18,
     inventory: { ...base.inventory, ...raw.inventory },
     explored: raw.explored || [],
     event: raw.event || null,
@@ -1780,6 +1785,7 @@ function restore(raw) {
   restoreExpansionState(result, raw);
   restoreRealm(result, raw);
   restoreExpedition(result, raw);
+  restoreOdyssey(result, raw);
   updateCampaign(result);
   return result;
 }
@@ -1880,6 +1886,7 @@ function recruit(s, offerId = null) {
   for (const other of s.party) delete s.bonds[bondKey(id, other.id)];
   delete s.realm.lineage[id];
   delete s.expedition.careers[id];
+  delete s.odyssey.journeys[id];
   if (vacancy >= 0) s.party[id] = companion;
   else s.party.push(companion);
   s.recruitSerial++;
@@ -2029,6 +2036,9 @@ function forage(s) {
     s.inventory.herbs += 1 + professionRank(herbalist);
     practice(s, herbalist, 1);
   }
+  const regional = regionalForage(s);
+  if (regional && s.forageLedger[key] === 1)
+    s.inventory[regional.resource] += regional.amount;
   spendHours(s, 6);
   s.morale = Math.max(0, s.morale - 3);
   note(
@@ -2330,7 +2340,7 @@ function stopMovement(s) {
 function terrainAt(p) {
   const riverX = 475 + Math.sin(p.y / 65) * 38;
   if (Math.abs(p.x - riverX) < 14) return "shallows";
-  if (p.y < 150 && p.x < 450) return "highlands";
+  if (p.y < 150 && (p.x < 275 || p.x > 450)) return "highlands";
   if (
     (p.x > 275 && p.x < 395 && p.y < 230) ||
     (p.x > 870 && p.x < 1150 && p.y < 400)
@@ -2396,6 +2406,7 @@ function advanceMovement(s, seconds) {
     checkWagonTravel(s, distanceTravelled);
     observeClues(s);
     checkTravelConversation(s, distanceTravelled);
+    checkRegionalTravel(s, distanceTravelled);
   }
   return { changed, arrived };
 }
@@ -3169,7 +3180,12 @@ function attackRange(p, skill = false, s = null) {
           : 1) +
     (p.talent === "marksman" ? 1 : 0) +
     (activeCareer(p)?.id === "tracker" ? 1 : 0) +
-    (s && gearPerk(s, p, "reach") ? 1 : 0)
+    (s && gearPerk(s, p, "reach") ? 1 : 0) +
+    (s &&
+    gearPerk(s, p, "farshot") &&
+    s.battle?.units.find((u) => u.id === p.id)?.moved === false
+      ? 2
+      : 0)
   );
 }
 function movementRange(p) {
@@ -3769,6 +3785,7 @@ function settleDay(s, mealsProvided = false) {
     `Daily upkeep: ${mealsProvided ? "inn meals" : `${supplied} rations`} and ${paid} crowns paid. ${s.wageDebt ? `${s.wageDebt} crowns still owed.` : "Wages settled."}`,
   );
   settleTravelPromises(s);
+  settlePrisoners(s);
   for (const p of livingParty(s))
     if (
       s.wageDebt > 0 &&
@@ -4899,6 +4916,10 @@ function damageCompanion(s, target, power, ranged = false) {
     power -
       (target.protectedThisHit ? 2 : 0) -
       (target.arcaneWard || 0) -
+      (gearPerk(s, p, "coverward") &&
+      terrainCell(s, target.x, target.y).cover > 0
+        ? 2
+        : 0) -
       (p.role === "Shieldbearer" ? 2 : 0) -
       armorPower(s, p) -
       (target.guard ? 2 + (gearPerk(s, p, "bastion") ? 2 : 0) : 0) -
@@ -5060,6 +5081,16 @@ function canEquipEquipment(s, item, p) {
   );
 }
 function equipmentOnHit(s, p, target, basic = false) {
+  if (basic && target.hp > 0 && gearPerk(s, p, "frostbind"))
+    target.root = Math.max(target.root || 0, 1);
+  if (basic && target.hp > 0 && gearPerk(s, p, "spellbreak")) {
+    target.casting = null;
+    target.silenced = 1;
+    note(
+      s,
+      "The spellbreaker blade severs the prepared spell without refunding its slot.",
+    );
+  }
   if (target.hp > 0 && basic && gearPerk(s, p, "bleeding")) target.bleed = 2;
   if (basic && gearPerk(s, p, "sweep")) {
     const extra = s.battle.enemies.find(
@@ -7459,7 +7490,7 @@ function farmAction(s, action) {
   return true;
 }
 function supplyForecast(s) {
-  const food = campCost(s),
+  const food = campCost(s) + s.odyssey.prisoners.length,
     wages = dailyWages(s);
   return {
     food,
@@ -8732,6 +8763,7 @@ function infiltrateStronghold(s, action) {
       if (s.travelJobs[role.id] === id) delete s.travelJobs[role.id];
     delete s.realm.lineage[id];
     delete s.expedition.careers[id];
+    delete s.odyssey.journeys[id];
     s.party[id] = {
       ...fresh().party[3],
       id,
@@ -9396,6 +9428,9 @@ function enemyArmor(s, e) {
   );
 }
 function enemyDescription(s, e) {
+  if (e.fleeing) return "Routed: attempting to escape at the eastern edge.";
+  if (e.surrenderOffer)
+    return "Offers surrender: capture, release, bargain or refuse.";
   if (e.kind === "mage")
     return `Spell slots ${e.mana || 0}/2${e.casting ? " · CHANNELING: move off the marked tile or interrupt" : " · Channels a visible spell before release; stun interrupts"}`;
   if (e.kind === "skeleton")
@@ -11991,7 +12026,7 @@ function homeCraft(s, template) {
   return true;
 }
 function upkeepForecast(s) {
-  const food = campCost(s),
+  const food = campCost(s) + s.odyssey.prisoners.length,
     wages = dailyWages(s);
   return {
     food,
@@ -12176,6 +12211,988 @@ function recoverMagicAtHome(s, id) {
   return true;
 }
 
+// Regional travel, companion continuations, and captives share a bounded save ledger.
+const regions = [
+  {
+    id: "farmland",
+    name: "Greyhaven Farmlands",
+    desc: "Golden fields and rebuilt farms. Grain and rations are plentiful; hungry bandits watch the roads.",
+    hazard: "A washed-out irrigation ditch cuts across the fields.",
+    goods: "grain",
+    color: "#b1ad72",
+  },
+  {
+    id: "coast",
+    name: "Salt Coast",
+    desc: "Reed banks, floodwater and salt merchants. Salt is cheap at Saltbridge; iron and grain are in demand.",
+    hazard: "The river has flooded a ford ahead.",
+    goods: "salt",
+    color: "#99ada0",
+  },
+  {
+    id: "mountains",
+    name: "Redstone Passes",
+    desc: "Cold scree, narrow tracks and raider lookouts. Ore seams reward Miners; shelters prevent exhausting climbs.",
+    hazard: "A scree fall blocks the mountain approach.",
+    goods: "iron",
+    color: "#9a9caa",
+  },
+  {
+    id: "haunted",
+    name: "Whispering Wilds",
+    desc: "Pale roots and spirit lights surround old graves. Wolves, goblins and restless dead stalk the woodland. Herbalists recognize safe growth.",
+    hazard: "False lanterns lure travelers into choking ghost-mist.",
+    goods: "herbs",
+    color: "#89959c",
+  },
+  {
+    id: "city",
+    name: "Emberfall Dominion",
+    desc: "Terraced gardens, tiled roads and a flourishing magical city. Cloth and iron are cheap; grain is scarce. Its academy offers costly arcane travel.",
+    hazard: "A leaking ward floods the old road with arcane static.",
+    goods: "cloth",
+    color: "#b1a48d",
+  },
+];
+function regionAt(position) {
+  const id =
+    position.y < 150
+      ? "mountains"
+      : position.x >= 870 && position.y < 400
+        ? "haunted"
+        : position.x >= 1000 && position.y >= 440
+          ? "city"
+          : position.x >= 450
+            ? "coast"
+            : "farmland";
+  return regions.find((r) => r.id === id);
+}
+function freshOdyssey() {
+  return {
+    distance: 0,
+    hazardLedger: {},
+    visited: {},
+    journeys: {},
+    prisoners: [],
+    serial: 0,
+    services: {},
+    relics: {},
+  };
+}
+function checkRegionalTravel(s, distance) {
+  const o = s.odyssey,
+    r = regionAt(s.position);
+  o.visited[r.id] = true;
+  o.distance = Math.min(1200, o.distance + Math.max(0, distance));
+  if (
+    o.distance < 650 ||
+    s.event ||
+    s.battle ||
+    s.campOpen ||
+    s.location >= 0 ||
+    o.hazardLedger[r.id] === s.day ||
+    companyLost(s)
+  )
+    return false;
+  o.distance = 0;
+  o.hazardLedger[r.id] = s.day;
+  s.destination = null;
+  s.event = { kind: "region", region: r.id, title: r.name, text: r.hazard };
+  note(s, `${r.name}: ${r.hazard}`);
+  return true;
+}
+function regionalChoiceLock(s, action) {
+  const r = regions.find((r) => r.id === s.event?.region);
+  if (s.event?.kind !== "region" || !r)
+    return "No regional obstacle is pending.";
+  if (action === "detour") return null;
+  if (action === "supplies")
+    return s.food < 2 || s.inventory.wood < 1
+      ? "Requires two rations and one timber."
+      : null;
+  if (action === "specialist") {
+    const prof = {
+      farmland: "Cook",
+      coast: "Thief",
+      mountains: "Miner",
+      haunted: "Herbalist",
+      city: "Wizard",
+    }[r.id];
+    return !livingParty(s).some(
+      (p) => p.hp > 0 && (p.profession === prof || p.role === prof),
+    )
+      ? `Requires a conscious ${prof}.`
+      : null;
+  }
+  return "Unknown obstacle response.";
+}
+function regionalChoice(s, action) {
+  if (regionalChoiceLock(s, action)) return false;
+  const r = regions.find((r) => r.id === s.event.region);
+  s.event = null;
+  if (action === "supplies") {
+    s.food -= 2;
+    s.inventory.wood--;
+    spendHours(s, 1);
+  }
+  if (action === "detour") {
+    spendHours(s, 3);
+    for (const p of livingParty(s)) p.fatigue = Math.min(100, p.fatigue + 8);
+  }
+  if (action === "specialist") {
+    spendHours(s, 1);
+    s.knowledge++;
+  }
+  note(
+    s,
+    `${r.name}: ${action === "detour" ? "took a tiring three-hour detour" : action === "supplies" ? "used supplies to secure the crossing" : "a specialist found a safe one-hour route"}.`,
+  );
+  return true;
+}
+function regionalServiceLock(s, action, target = null) {
+  if (s.battle || s.event || s.campOpen || companyLost(s) || townAccessLock(s))
+    return "Visit an accessible village outside an encounter.";
+  if (action === "provisions")
+    return s.location !== 0
+      ? "Only Greyhaven's farm market offers harvest bundles."
+      : s.gold < 18
+        ? "Requires eighteen crowns."
+        : s.odyssey.services.harvest === s.day
+          ? "One harvest bundle per day."
+          : null;
+  if (action === "remedies")
+    return s.location !== 3
+      ? "Only Saltbridge's reed apothecary offers remedies."
+      : s.gold < 20
+        ? "Requires twenty crowns."
+        : s.odyssey.services.remedies === s.day
+          ? "One remedy bundle per day."
+          : null;
+  if (action === "transit") {
+    if (s.location !== 6)
+      return "Arcane travel is available only at Emberfall's academy.";
+    if (![0, 3].includes(target) || !s.discovered.includes(target))
+      return "Choose a discovered village.";
+    if (
+      s.wagon.owned ||
+      s.caravanEscort ||
+      s.travelers.merrit === "escorting" ||
+      s.odyssey.prisoners.length
+    )
+      return "The gate cannot carry wagons, escorts or prisoners.";
+    if (
+      !livingParty(s).some(
+        (p) => p.hp > 0 && isCaster(p) && spellSlots(p)[2] > 0,
+      )
+    )
+      return "A conscious caster needs an available level-two slot.";
+    return s.gold < 50 ? "Requires fifty crowns." : null;
+  }
+  return "Unknown regional service.";
+}
+function regionalService(s, action, target = null) {
+  if (regionalServiceLock(s, action, target)) return false;
+  if (action === "provisions") {
+    s.gold -= 18;
+    s.food += 12;
+    s.odyssey.services.harvest = s.day;
+  }
+  if (action === "remedies") {
+    s.gold -= 20;
+    s.inventory.herbs += 4;
+    s.inventory.medicine += 1;
+    s.odyssey.services.remedies = s.day;
+  }
+  if (action === "transit") {
+    const p = livingParty(s).find(
+      (p) => p.hp > 0 && isCaster(p) && spellSlots(p)[2] > 0,
+    );
+    s.gold -= 50;
+    p.spellSpent[2]++;
+    spendHours(s, 2);
+    if (companyLost(s)) return true;
+    s.location = target;
+    s.position = { x: places[target].x, y: places[target].y };
+    s.destination = null;
+    s.trail = [{ ...s.position }];
+    discoverNearby(s);
+  }
+  note(
+    s,
+    `Regional service: ${action === "transit" ? `arcane passage to ${places[target].name}, fifty crowns and a level-two slot` : action === "provisions" ? "twelve harvest rations for eighteen crowns" : "four herbs and one medicine for twenty crowns"}.`,
+  );
+  return true;
+}
+function regionalForage(s) {
+  const r = regionAt(s.position);
+  return r.id === "mountains"
+    ? { resource: "ore", amount: professional(s, "Miner") ? 2 : 1 }
+    : r.id === "haunted"
+      ? { resource: "herbs", amount: professional(s, "Herbalist") ? 2 : 1 }
+      : null;
+}
+
+const companionContinuations = {
+  Swordswoman: {
+    title: "The broken dueling oath",
+    testimony:
+      "An old dueling tutor remembers a companion who fled the watchtower rather than execute a prisoner. The discarded oath blade may prove why.",
+    evidence:
+      "Inside the abandoned guard post, a broken blade lies beside an order to kill unarmed travelers. Your companion kept their honor at the cost of their name.",
+    meet: 0,
+    site: 5,
+    resource: "ore",
+    perk: "oathstrike",
+    desc: "Once per battle, strike an adjacent enemy and brace without valor.",
+  },
+  Shieldbearer: {
+    title: "Names beneath the barrow",
+    testimony:
+      "A ferryman carried nameless soldiers to the barrow. A shield bearing their household names was buried with them.",
+    evidence:
+      "Cleaning the buried shield reveals the names of people your companion thought they had failed. Their last inscription thanks the defender who held the retreat.",
+    meet: 3,
+    site: 2,
+    resource: "herbs",
+    perk: "steadfast",
+    desc: "Once per battle, grant every conscious companion a two-point ward.",
+  },
+  Spearman: {
+    title: "The watcher's last post",
+    testimony:
+      "A quarry foreman saw a watchman leave a spear beside a collapsed pass. An unfinished evacuation map remains beneath the rubble.",
+    evidence:
+      "The repaired map shows the watchman deliberately drew the raiders away from fleeing families. Your companion can restore that lonely watch to the company.",
+    meet: 3,
+    site: 9,
+    resource: "ore",
+    perk: "holdfast",
+    desc: "Once per battle, root every enemy within spear reach for two rounds.",
+  },
+  Archer: {
+    title: "The hunter's missing sister",
+    testimony:
+      "A caravan witness saw the missing hunter entering the pale grove. Her trail markers were made with medicinal sap.",
+    evidence:
+      "The sap reveals a hidden message: the hunter survived and chose to guard the grove. She asks your companion to protect the people beside them instead of chasing her shadow.",
+    meet: 0,
+    site: 7,
+    resource: "herbs",
+    perk: "trueflight",
+    desc: "Once per battle, mark every visible enemy for stronger company attacks.",
+  },
+  Wizard: {
+    title: "An apprentice's forbidden notes",
+    testimony:
+      "An academy archivist admits the apprentice was expelled for sharing spells with poor villagers. Their copied notes were hidden in the Broken Crown.",
+    evidence:
+      "The rebound notes teach a careful way to preserve a final spark. A dedication asks that this knowledge help those who cannot pay for city magic.",
+    meet: 6,
+    site: 11,
+    resource: "ore",
+    perk: "lastspark",
+    desc: "Once per battle, recover one spent level-one slot without valor.",
+  },
+  Cleric: {
+    title: "The bell that forgot its dead",
+    testimony:
+      "A temple keeper remembers a drowned chapel whose bell recorded names erased from the official rolls. Its clapper still bears them.",
+    evidence:
+      "Herbs lift the tarnish from the bell clapper. The forgotten names return, and your companion promises that company mercy will reach beyond temple walls.",
+    meet: 6,
+    site: 8,
+    resource: "herbs",
+    perk: "mercy",
+    desc: "Once per battle, heal all conscious companions by four health.",
+  },
+};
+function continuationInfo(s, id) {
+  const p = s.party[id],
+    q = s.odyssey.journeys[id],
+    c = companionContinuations[p?.role];
+  return c
+    ? {
+        ...c,
+        stage: q?.stage || 0,
+        outcome: q?.outcome || null,
+        partner: q?.partner ?? null,
+      }
+    : null;
+}
+function continuationLock(s, id, action) {
+  const p = s.party[id],
+    q = s.odyssey.journeys[id],
+    c = companionContinuations[p?.role];
+  if (!p || p.dead || p.hp <= 0 || !c || s.battle || s.event || companyLost(s))
+    return "Requires a conscious companion outside an encounter.";
+  if (action === "begin")
+    return !s.campOpen
+      ? "Discuss the next journey at camp."
+      : q
+        ? "This follow-up journey has already begun."
+        : p.personalQuest?.stage !== 3
+          ? "Finish this companion's first personal journey."
+          : null;
+  if (!q || q.stage === 4) return "No unfinished follow-up journey.";
+  if (action === "meet")
+    return q.stage !== 1 || s.campOpen || s.location !== c.meet
+      ? `Visit ${places[c.meet].name} together first.`
+      : townAccessLock(s);
+  if (action === "recover")
+    return q.stage !== 2 || s.campOpen || s.location !== c.site
+      ? `Follow the testimony to ${places[c.site].name}.`
+      : s.inventory[c.resource] < 2
+        ? `Requires two ${c.resource} for the investigation.`
+        : null;
+  if (!s.campOpen || q.stage !== 3)
+    return "Recover the evidence, then discuss it at camp.";
+  const partner = s.party[q.partner];
+  if (action === "swear")
+    return !partner || partner.dead || bondValue(s, id, partner.id) < 10
+      ? "The chosen partner must be alive with at least ten bond."
+      : s.wageDebt > 0
+        ? "Settle unpaid wages before making an oath."
+        : null;
+  if (action === "reconcile")
+    return s.gold < 25
+      ? "Requires twenty-five crowns for restitution."
+      : !partner || partner.dead
+        ? "Their chosen partner is no longer in the company."
+        : null;
+  return action === "depart" ? null : "Unknown journey decision.";
+}
+function continueCompanion(s, id, action) {
+  if (continuationLock(s, id, action)) return false;
+  const p = s.party[id],
+    c = companionContinuations[p.role];
+  if (action === "begin") {
+    const partner = livingParty(s)
+      .filter((v) => v.id !== id)
+      .sort((a, b) => bondValue(s, id, b.id) - bondValue(s, id, a.id))[0];
+    s.odyssey.journeys[id] = {
+      stage: 1,
+      partner: partner?.id ?? null,
+      outcome: null,
+    };
+    if (!s.discovered.includes(c.meet)) s.discovered.push(c.meet);
+  } else if (action === "meet") {
+    s.odyssey.journeys[id].stage = 2;
+    if (!s.discovered.includes(c.site)) s.discovered.push(c.site);
+    spendHours(s, 1);
+    note(
+      s,
+      `${p.name}: ${c.testimony} Recover the evidence at ${places[c.site].name}; bring two ${c.resource}.`,
+    );
+  } else if (action === "recover") {
+    s.inventory[c.resource] -= 2;
+    spendHours(s, 2);
+    if (p.dead) return true;
+    s.odyssey.journeys[id].stage = 3;
+    note(
+      s,
+      `${p.name}: ${c.evidence} Discuss its meaning with the company at camp.`,
+    );
+  } else {
+    const q = s.odyssey.journeys[id];
+    q.stage = 4;
+    q.outcome = action;
+    if (action === "depart") {
+      departCompanion(s, p);
+      s.reputation.freefolk = Math.min(100, s.reputation.freefolk + 3);
+    } else {
+      if (action === "reconcile") s.gold -= 25;
+      const key = bondKey(id, q.partner);
+      s.bonds[key] = Math.max(10, bondValue(s, id, q.partner) + 12);
+      delete s.expedition.rivalries[key];
+      changeResolve(p, 15);
+      changeResolve(s.party[q.partner], 8);
+      s.knowledge += 2;
+      note(
+        s,
+        `${p.name} and ${s.party[q.partner].name} ${action === "swear" ? "swear a company oath" : "repair their trust"}. ${c.desc}`,
+      );
+    }
+  }
+  note(s, `${p.name}: ${c.title} — stage ${s.odyssey.journeys[id].stage}/4.`);
+  return true;
+}
+function chooseJourneyPartner(s, id, partnerId) {
+  const p = s.party[id],
+    other = s.party[partnerId],
+    q = s.odyssey.journeys[id];
+  if (
+    !s.campOpen ||
+    s.battle ||
+    s.event ||
+    !p ||
+    p.dead ||
+    p.hp <= 0 ||
+    !other ||
+    other.dead ||
+    other.hp <= 0 ||
+    id === partnerId ||
+    !q ||
+    q.stage >= 4
+  )
+    return false;
+  q.partner = partnerId;
+  note(
+    s,
+    `${other.name} agrees to accompany ${p.name}'s personal journey. Their actual trust still determines the final oath.`,
+  );
+  return true;
+}
+function continuationTechniqueLock(s, id, target = null) {
+  const p = s.party[id],
+    u = s.battle?.units.find((v) => v.id === id),
+    q = s.odyssey.journeys[id];
+  if (
+    !u ||
+    p.hp <= 0 ||
+    !q ||
+    q.stage !== 4 ||
+    !["swear", "reconcile"].includes(q.outcome)
+  )
+    return "Complete this companion's follow-up with an oath or reconciliation.";
+  if (u.questUsed)
+    return "This personal technique was already used in this battle.";
+  if (u.acted) return "Action already spent.";
+  if (p.role === "Wizard" && !(p.spellSpent?.[1] > 0))
+    return "Spend a level-one slot before recovering it.";
+  if (p.role === "Swordswoman") {
+    const e = s.battle.enemies.find((e) => e.id === target && e.hp > 0);
+    if (!e || Math.abs(e.x - u.x) + Math.abs(e.y - u.y) > 1)
+      return "Choose an adjacent living enemy.";
+  }
+  return null;
+}
+function continuationTechnique(s, id, target = null) {
+  if (continuationTechniqueLock(s, id, target)) return false;
+  const p = s.party[id],
+    b = s.battle,
+    u = b.units.find((v) => v.id === id);
+  u.questUsed = true;
+  u.acted = true;
+  if (p.role === "Swordswoman") {
+    hitEnemy(
+      s,
+      b.enemies.find((e) => e.id === target),
+      attackPower(s, p) + 2,
+    );
+    u.guard = true;
+  }
+  if (p.role === "Shieldbearer")
+    b.units
+      .filter((v) => s.party[v.id].hp > 0)
+      .forEach((v) => (v.arcaneWard = Math.max(v.arcaneWard || 0, 2)));
+  if (p.role === "Spearman")
+    b.enemies
+      .filter((e) => e.hp > 0 && Math.abs(e.x - u.x) + Math.abs(e.y - u.y) <= 2)
+      .forEach((e) => (e.root = 2));
+  if (p.role === "Archer")
+    b.enemies
+      .filter((e) => e.hp > 0 && hasLineOfSight(s, u, e))
+      .forEach((e) => (e.exposed = 2));
+  if (p.role === "Wizard") p.spellSpent[1]--;
+  if (p.role === "Cleric")
+    livingParty(s)
+      .filter((v) => v.hp > 0)
+      .forEach((v) => (v.hp = Math.min(v.max, v.hp + 4)));
+  note(
+    s,
+    `${p.name} uses ${companionContinuations[p.role].perk}; once per battle.`,
+  );
+  if (b.enemies.every((e) => e.hp <= 0)) win(s);
+  return true;
+}
+
+function prisonerGuard(s) {
+  return (
+    campWorker(s, "guard") ||
+    travelWorker(s, "rearguard") ||
+    s.party.find(
+      (p) =>
+        p.hp > 0 &&
+        !p.dead &&
+        (p.role === "Shieldbearer" || p.profession === "Thief"),
+    )
+  );
+}
+function surrenderEligible(s, e) {
+  const b = s.battle;
+  return (
+    b &&
+    !b.mission &&
+    !b.realmStronghold &&
+    !b.stronghold &&
+    !b.dungeonReturn &&
+    !Number.isInteger(b.realmLineage) &&
+    !e.bossId &&
+    !e.escaped &&
+    ["raider", "archer", "brute", "goblin", "mage"].includes(e.kind) &&
+    (b.kind === "patrol" ||
+      (b.kind === "contract" &&
+        !["boss", "story"].includes(s.contract?.kind))) &&
+    !b.caravanRaid &&
+    b.patrolId !== "warden-pursuit"
+  );
+}
+function refreshSurrender(s) {
+  const b = s.battle;
+  if (!b) return false;
+  const alive = b.enemies.filter((e) => e.hp > 0),
+    company = b.units.filter((u) => s.party[u.id].hp > 0);
+  for (const e of alive) {
+    if (!surrenderEligible(s, e) || b.turn < 2) continue;
+    if (e.hp <= e.max / 2 && company.length >= alive.length + 1) {
+      if (!e.refused) e.surrenderOffer = true;
+      if (e.refused && e.hp <= e.max / 4) e.fleeing = true;
+    }
+  }
+  return alive.some((e) => e.surrenderOffer);
+}
+function surrenderLock(s, id, action) {
+  const e = s.battle?.enemies.find((e) => e.id === id);
+  if (!e || e.hp <= 0 || !e.surrenderOffer || !surrenderEligible(s, e))
+    return "This enemy has not offered surrender.";
+  if (action === "capture")
+    return s.odyssey.prisoners.length >= 3
+      ? "The company can supervise at most three prisoners."
+      : !prisonerGuard(s)
+        ? "Requires a conscious Shieldbearer, Thief or assigned guard."
+        : null;
+  if (action === "ransom") return null;
+  if (action === "release" || action === "refuse") return null;
+  return "Unknown surrender response.";
+}
+function answerSurrender(s, id, action) {
+  if (surrenderLock(s, id, action)) return false;
+  const e = s.battle.enemies.find((e) => e.id === id);
+  if (action === "refuse") {
+    e.surrenderOffer = false;
+    e.refused = true;
+    e.fleeing = e.hp <= e.max / 4;
+    note(s, "Surrender refused. A badly wounded enemy may try to escape.");
+    return true;
+  }
+  if (action === "capture") {
+    const serial = ++s.odyssey.serial;
+    s.odyssey.prisoners.push({
+      id: serial,
+      name: `${e.kind === "goblin" ? "Grik" : e.kind === "mage" ? "Varen" : e.kind === "archer" ? "Hale" : "Bram"}${serial > 1 ? ` ${serial}` : ""} the captive`,
+      kind: e.kind,
+      day: s.day,
+      trust: 0,
+      unfed: 0,
+    });
+  }
+  if (action === "ransom") {
+    s.gold += 8;
+    changeReputation(s, "wardens", -1);
+  }
+  if (action === "release") {
+    changeReputation(s, "freefolk", 1);
+  }
+  e.surrendered = true;
+  e.hp = 0;
+  e.casting = null;
+  note(
+    s,
+    `${e.kind} ${action === "capture" ? "captured: one ration per day, with supervision needed" : action === "ransom" ? "buys safe passage for eight crowns" : "released alive"}.`,
+  );
+  if (s.battle.enemies.every((e) => e.hp <= 0)) win(s);
+  return true;
+}
+function routeEnemy(s, e) {
+  if (!e.fleeing || !surrenderEligible(s, e)) return false;
+  if (e.root > 0 || e.stun > 0) return false;
+  if (e.x >= 8) {
+    e.hp = 0;
+    e.escaped = true;
+    e.casting = null;
+    note(
+      s,
+      "A routed enemy escapes the battlefield. Their stolen supplies are lost.",
+    );
+    return true;
+  }
+  const options = [
+    [e.x + 1, e.y],
+    [e.x, e.y - 1],
+    [e.x, e.y + 1],
+  ].filter(
+    ([x, y]) =>
+      x >= 0 &&
+      x < 9 &&
+      y >= 0 &&
+      y < 7 &&
+      !terrainCell(s, x, y).blocked &&
+      !s.battle.units.some(
+        (u) => s.party[u.id].hp > 0 && u.x === x && u.y === y,
+      ) &&
+      !s.battle.enemies.some(
+        (v) => v !== e && v.hp > 0 && v.x === x && v.y === y,
+      ),
+  );
+  const point = options[0];
+  if (point) {
+    enemyDisengagement(s, e, point);
+    if (e.hp > 0) [e.x, e.y] = point;
+    triggerOverwatch(s, e);
+  }
+  return true;
+}
+function settlePrisoners(s) {
+  if (!s.odyssey.prisoners.length) return;
+  const guard = prisonerGuard(s);
+  s.odyssey.prisoners = s.odyssey.prisoners.filter((p) => {
+    if (s.food > 0) {
+      s.food--;
+      p.trust = Math.min(3, p.trust + 1);
+      p.unfed = 0;
+    } else {
+      p.unfed++;
+      p.trust = Math.max(0, p.trust - 1);
+    }
+    if (p.unfed >= 2 || (!guard && s.day - p.day >= 3)) {
+      note(
+        s,
+        `${p.name} escaped ${p.unfed >= 2 ? "after being denied food" : "without supervision"}.`,
+      );
+      return false;
+    }
+    return true;
+  });
+}
+function prisonerActionLock(s, id, action) {
+  const p = s.odyssey.prisoners.find((v) => v.id === id);
+  if (!p || s.battle || s.event || companyLost(s))
+    return "Manage a current prisoner outside an encounter.";
+  if (action === "release") return null;
+  if (action === "ransom")
+    return s.campOpen || ![0, 3, 6].includes(s.location)
+      ? "Visit a village guard to collect the bounty."
+      : townAccessLock(s);
+  if (action === "recruit")
+    return p.kind === "goblin"
+      ? "Goblins can be released or delivered for bounty, but cannot join this company."
+      : !s.campOpen
+        ? "Discuss recruitment at camp."
+        : p.trust < 2
+          ? "Provide at least two days of food to earn trust."
+          : s.wageDebt > 0
+            ? "Pay existing wage debts first."
+            : livingParty(s).length >= 6
+              ? "The company already has six companions."
+              : s.gold < 60
+                ? "Requires sixty crowns for release and equipment."
+                : null;
+  return "Unknown prisoner decision.";
+}
+function prisonerAction(s, id, action) {
+  if (prisonerActionLock(s, id, action)) return false;
+  const captive = s.odyssey.prisoners.find((v) => v.id === id);
+  if (action === "ransom") {
+    s.gold += captive.kind === "mage" ? 45 : 30;
+    changeReputation(s, "wardens", 2);
+  }
+  if (action === "release") changeReputation(s, "freefolk", 1);
+  if (action === "recruit") {
+    const vacancy = s.party.findIndex((v) => v.dead),
+      slot = vacancy < 0 ? s.party.length : vacancy;
+    const role =
+      captive.kind === "mage"
+        ? "Wizard"
+        : captive.kind === "archer"
+          ? "Archer"
+          : captive.kind === "brute"
+            ? "Shieldbearer"
+            : "Swordswoman";
+    const p = {
+      ...fresh().party[0],
+      id: slot,
+      name: captive.name.replace(" the captive", ""),
+      role,
+      hp: 24,
+      max: 24,
+      damage: founderRoles[role].damage,
+      level: 1,
+      xp: 0,
+      points: 0,
+      profession: "Thief",
+      professionXP: 0,
+      professionXPBy: {},
+      traits: ["mercenary"],
+      race: "human",
+      resolve: 50,
+      fatigue: 0,
+      weapon: 0,
+      armor: 0,
+      dead: false,
+      departed: false,
+      injury: false,
+      personalQuest: { stage: 0, outcome: null },
+      storyComplete: null,
+      personalPerk: null,
+      talent: null,
+      advancedSkill: null,
+      career: null,
+      spellSchool: null,
+      spellSpent: { 1: 0, 2: 0 },
+      equipment: { weapon: null, armor: null, shield: null, helmet: null },
+    };
+    s.gold -= 60;
+    for (const other of s.party) delete s.bonds[bondKey(slot, other.id)];
+    delete s.realm.lineage[slot];
+    delete s.expedition.careers[slot];
+    delete s.odyssey.journeys[slot];
+    if (vacancy < 0) s.party.push(p);
+    else s.party[slot] = p;
+    s.recruitSerial++;
+    note(
+      s,
+      `${p.name} joins as a ${role} and Thief with Mercenary wages and fifty resolve.`,
+    );
+  }
+  s.odyssey.prisoners = s.odyssey.prisoners.filter((v) => v.id !== id);
+  note(s, `${captive.name}: ${action}.`);
+  return true;
+}
+
+equipmentPerks.frostbind =
+  "Basic attacks root their target for one round; broken gear loses this effect.";
+equipmentPerks.farshot =
+  "Gain two bow range while stationary; moving removes the bonus.";
+equipmentPerks.spellbreak =
+  "Basic hits interrupt enemy channels and silence the caster for one round.";
+equipmentPerks.coverward =
+  "Reduce incoming damage by two while standing in cover.";
+equipmentCatalog.push(
+  {
+    id: "winter-pike",
+    name: "Winterglass pike",
+    role: "Spearman",
+    slot: "weapon",
+    tier: 3,
+    rarity: "Rare",
+    bonus: 3,
+    price: 140,
+    perk: "frostbind",
+    uniqueBoss: true,
+  },
+  {
+    id: "horizon-bow",
+    name: "Horizon bow",
+    role: "Archer",
+    slot: "weapon",
+    tier: 3,
+    rarity: "Rare",
+    bonus: 3,
+    price: 140,
+    perk: "farshot",
+    uniqueBoss: true,
+  },
+  {
+    id: "spellbreaker",
+    name: "Spellbreaker blade",
+    role: "Swordswoman",
+    slot: "weapon",
+    tier: 3,
+    rarity: "Rare",
+    bonus: 3,
+    price: 140,
+    perk: "spellbreak",
+    uniqueBoss: true,
+  },
+  {
+    id: "grove-helmet",
+    name: "Grovewarden helm",
+    role: null,
+    slot: "helmet",
+    tier: 3,
+    rarity: "Rare",
+    bonus: 1,
+    price: 120,
+    perk: "coverward",
+    uniqueBoss: true,
+  },
+);
+const regionalRelics = [
+  {
+    id: "winter-pike",
+    site: 9,
+    resource: "ore",
+    amount: 4,
+    desc: "Reforge a frozen haft at Redstone Quarry.",
+  },
+  {
+    id: "horizon-bow",
+    site: 5,
+    resource: "wood",
+    amount: 4,
+    desc: "Restore the watchtower's abandoned bow.",
+  },
+  {
+    id: "spellbreaker",
+    site: 11,
+    resource: "ore",
+    amount: 4,
+    desc: "Rebind a blade in the Broken Crown's wards.",
+  },
+  {
+    id: "grove-helmet",
+    site: 7,
+    resource: "herbs",
+    amount: 4,
+    desc: "Cleanse a helm woven into the grove's roots.",
+  },
+];
+function relicLock(s, id) {
+  const r = regionalRelics.find((v) => v.id === id);
+  if (!r) return "Unknown relic.";
+  if (s.odyssey.relics[id]) return "Already recovered.";
+  if (
+    s.location !== r.site ||
+    s.battle ||
+    s.event ||
+    s.campOpen ||
+    companyLost(s)
+  )
+    return `Visit ${places[r.site].name} outside an encounter.`;
+  if (!companyScout(s))
+    return "Requires a conscious Archer or Thief to locate the relic.";
+  if (s.knowledge < 2 || s.inventory[r.resource] < r.amount)
+    return `Requires two knowledge and ${r.amount} ${r.resource}.`;
+  return null;
+}
+function recoverRelic(s, id) {
+  if (relicLock(s, id)) return false;
+  const r = regionalRelics.find((v) => v.id === id);
+  s.knowledge -= 2;
+  s.inventory[r.resource] -= r.amount;
+  s.odyssey.relics[id] = true;
+  spendHours(s, 2);
+  grantEquipment(s, id);
+  note(
+    s,
+    `Recovered ${equipmentCatalog.find((v) => v.id === id).name}. A finite regional relic.`,
+  );
+  return true;
+}
+function equipmentComparison(s, item, p) {
+  if (!canEquipEquipment(s, item, p))
+    return { allowed: false, text: "This companion cannot use this item." };
+  const copy = {
+    ...p,
+    equipment: { ...p.equipment, [item.slot]: item.instanceId },
+  };
+  if (item.twoHanded) copy.equipment.shield = null;
+  const attack = attackPower(s, copy) - attackPower(s, p),
+    armor = armorPower(s, copy) - armorPower(s, p);
+  const old = equippedItem(s, p, item.slot),
+    changes = [];
+  if (item.twoHanded && equippedItem(s, p, "shield"))
+    changes.push("Shield returns to stores");
+  if (old?.perk && old.perk !== item.perk)
+    changes.push(`Lose: ${equipmentPerks[old.perk]}`);
+  if (item.perk && item.durability > 0)
+    changes.push(`Gain: ${equipmentPerks[item.perk]}`);
+  if (item.durability === 0) changes.push("Broken: no item bonus or perk");
+  return {
+    allowed: true,
+    attack,
+    armor,
+    text: `ATK ${attack >= 0 ? "+" : ""}${attack} · Armor ${armor >= 0 ? "+" : ""}${armor}${changes.length ? " · " + changes.join(" · ") : ""}`,
+  };
+}
+function restoreOdyssey(s, raw) {
+  const o = freshOdyssey(),
+    r = raw.odyssey || {},
+    count = (v, max = 100000) =>
+      Number.isInteger(v) ? Math.max(0, Math.min(max, v)) : 0;
+  o.distance = count(r.distance, 1200);
+  o.serial = count(r.serial, 1000000000);
+  for (const region of regions) {
+    if (r.visited?.[region.id] === true) o.visited[region.id] = true;
+    const d = r.hazardLedger?.[region.id];
+    if (Number.isInteger(d) && d >= 1 && d <= s.day)
+      o.hazardLedger[region.id] = d;
+  }
+  for (const name of ["harvest", "remedies"]) {
+    const d = r.services?.[name];
+    if (Number.isInteger(d) && d >= 1 && d <= s.day) o.services[name] = d;
+  }
+  for (const relic of regionalRelics)
+    if (r.relics?.[relic.id] === true) o.relics[relic.id] = true;
+  for (const p of s.party) {
+    const q = r.journeys?.[p.id];
+    if (
+      !q ||
+      (p.dead && q.stage !== 4) ||
+      !companionContinuations[p.role] ||
+      p.personalQuest?.stage !== 3 ||
+      ![1, 2, 3, 4].includes(q.stage)
+    )
+      continue;
+    o.journeys[p.id] = {
+      stage: q.stage,
+      partner:
+        Number.isInteger(q.partner) && q.partner !== p.id && s.party[q.partner]
+          ? q.partner
+          : null,
+      outcome:
+        q.stage === 4 && ["swear", "reconcile", "depart"].includes(q.outcome)
+          ? q.outcome
+          : null,
+    };
+    if (q.stage === 4 && !o.journeys[p.id].outcome) o.journeys[p.id].stage = 3;
+  }
+  for (const p of Array.isArray(r.prisoners) ? r.prisoners.slice(0, 3) : []) {
+    if (
+      !p ||
+      !Number.isSafeInteger(p.id) ||
+      p.id < 1 ||
+      p.id > 1000000000 ||
+      o.prisoners.some((v) => v.id === p.id) ||
+      !["raider", "archer", "brute", "goblin", "mage"].includes(p.kind)
+    )
+      continue;
+    o.prisoners.push({
+      id: p.id,
+      name:
+        typeof p.name === "string" ? p.name.slice(0, 40) : "Unknown captive",
+      kind: p.kind,
+      day: Math.max(1, Math.min(s.day, count(p.day))),
+      trust: count(p.trust, 3),
+      unfed: count(p.unfed, 1),
+    });
+    o.serial = Math.max(o.serial, p.id);
+  }
+  s.odyssey = o;
+  if (s.event?.kind === "region") {
+    const region = regions.find((v) => v.id === raw.event?.region);
+    s.event =
+      region && !s.battle
+        ? {
+            kind: "region",
+            region: region.id,
+            title: region.name,
+            text: region.hazard,
+          }
+        : null;
+  }
+  if (s.battle) {
+    for (const e of s.battle.enemies) {
+      e.surrenderOffer =
+        e.surrenderOffer === true && e.hp > 0 && surrenderEligible(s, e);
+      e.refused = e.refused === true;
+      e.fleeing = e.fleeing === true && surrenderEligible(s, e);
+      e.surrendered = e.surrendered === true && e.hp === 0;
+    }
+    for (const u of s.battle.units) u.questUsed = u.questUsed === true;
+  }
+}
+
 // Original, hand-built pixel artwork. All coordinates are logical pixels.
 const artPalette = {
   meadow: "#a3a775",
@@ -12322,7 +13339,19 @@ function drawLandmark(c, p, index = 0) {
         1,
         "#c6bd88",
       );
-    fence(c, x - 44, y - 30, 84);
+    if (index === 6) {
+      // Emberfall's walls and academy spires distinguish the flourishing city.
+      pixel(c, x - 57, y - 42, 114, 7, "#898d80");
+      pixel(c, x - 53, y - 40, 106, 2, "#c4b99b");
+      for (const dx of [-54, 42]) {
+        pixel(c, x + dx, y - 58, 13, 34, "#a2a79a");
+        pixel(c, x + dx + 2, y - 61, 9, 3, "#c5b894");
+        pixel(c, x + dx + 5, y - 52, 3, 7, "#597584");
+        pixel(c, x + dx + 5, y - 39, 3, 7, "#597584");
+        pixel(c, x + dx + 3, y - 69, 7, 8, "#788291");
+        pixel(c, x + dx + 5, y - 73, 3, 5, "#c0d4d1");
+      }
+    } else fence(c, x - 44, y - 30, 84);
     house(c, x - 35, y - 14, index === 6 ? "#8c5340" : "#8c6849");
     house(c, x + 3, y - 9, "#7b7760");
     house(c, x - 17, y + 26, "#986247", true);
@@ -12420,7 +13449,8 @@ function worldArtwork() {
   // Low contrast patches make open land readable without a conspicuous tile grid.
   for (let y = 0; y < WORLD.height; y += 8)
     for (let x = 0; x < WORLD.width; x += 8) {
-      const highlands = terrainAt({ x, y }) === "highlands";
+      const highlands = terrainAt({ x, y }) === "highlands",
+        region = regionAt({ x, y });
       const n = noise(Math.floor(x / 48), Math.floor(y / 48));
       pixel(
         c,
@@ -12429,8 +13459,12 @@ function worldArtwork() {
         8,
         8,
         highlands
-          ? ["#a5a584", "#b0ad89", "#aaa985"][Math.floor(n * 2.99)]
-          : ["#a3a775", "#9da370", "#a8ab79"][Math.floor(n * 2.99)],
+          ? ["#a1a4ad", "#adb0b9", "#a7abb3"][Math.floor(n * 2.99)]
+          : region.id === "haunted"
+            ? ["#909994", "#899591", "#98a198"][Math.floor(n * 2.99)]
+            : region.id === "city"
+              ? ["#b0aa87", "#aaa57e", "#b6b08d"][Math.floor(n * 2.99)]
+              : ["#a3a775", "#9da370", "#a8ab79"][Math.floor(n * 2.99)],
       );
       if (noise(x, y) > 0.7) {
         pixel(c, x + 2, y + 5, 3, 1, highlands ? "#959779" : "#8c9867");
@@ -12515,6 +13549,35 @@ function worldArtwork() {
         trees.push({ x, y, i });
     }
   trees.sort((a, b) => a.y - b.y).forEach((p) => drawTree(c, p.x, p.y, p.i));
+  // Regional landmarks are scenery: fields, scree, ghost lights and city terraces.
+  for (let row = 0; row < 4; row++)
+    for (let col = 0; col < 3; col++) {
+      const x = 52 + col * 78,
+        y = 365 + row * 30;
+      pixel(c, x, y, 65, 22, "#aaa16a");
+      for (let furrow = 0; furrow < 5; furrow++)
+        pixel(c, x + furrow * 12, y + 3, 2, 16, "#c4b576");
+    }
+  for (let i = 0; i < 70; i++) {
+    const x = 520 + Math.floor(noise(i, 1) * 950),
+      y = 22 + Math.floor(noise(i, 4) * 106);
+    if (places.every((p) => Math.hypot(p.x - x, p.y - y) > 40))
+      rock(c, x, y, 1);
+  }
+  for (let i = 0; i < 20; i++) {
+    const x = 900 + Math.floor(noise(i, 7) * 225),
+      y = 175 + Math.floor(noise(i, 9) * 205);
+    if (places.every((p) => Math.hypot(p.x - x, p.y - y) > 40)) {
+      pixel(c, x, y, 3, 5, "#bfc8c6");
+      pixel(c, x - 2, y + 5, 7, 1, "#7b8c87");
+    }
+  }
+  for (let i = 0; i < 5; i++) {
+    const x = 1040 + i * 30,
+      y = 656;
+    pixel(c, x, y, 22, 5, "#c0ae87");
+    pixel(c, x + 2, y + 5, 18, 2, "#8b8d77");
+  }
   return landscape;
 }
 function characterImage(role, coat, step, variant, appearance = {}) {
@@ -12659,7 +13722,7 @@ const partyCoats = [
   "#968095",
   "#839480",
 ];
-function portraitArtwork(p) {
+function portraitArtwork(p, s = null) {
   const image = surface(48, 48),
     c = image.getContext("2d");
   pixel(c, 0, 0, 48, 48, "#a7ad83");
@@ -12679,6 +13742,13 @@ function portraitArtwork(p) {
     39,
     51,
   );
+  if (s) {
+    c.save();
+    c.translate(6, 1);
+    c.scale(1.5, 1.5);
+    drawLoadout(c, s, p, 13, 17);
+    c.restore();
+  }
   image.className = "companion-portrait";
   image.setAttribute("aria-hidden", "true");
   return image;
@@ -13384,18 +14454,69 @@ function drawCampScene(c, s) {
 }
 
 function drawLoadout(c, s, p, x, y) {
-  if (equippedItem(s, p, "helmet")) {
-    pixel(c, x - 4, y - 15, 9, 5, "#87918b");
-    pixel(c, x - 5, y - 11, 11, 2, "#bdc0a0");
+  const helmet = equippedItem(s, p, "helmet"),
+    shield = equippedItem(s, p, "shield"),
+    weapon = equippedItem(s, p, "weapon"),
+    armor = equippedItem(s, p, "armor");
+  const metal = (item) =>
+    item.durability === 0
+      ? "#766d59"
+      : item.tier === 3
+        ? "#bed1cd"
+        : item.tier === 2
+          ? "#bbc2b5"
+          : "#8d9891";
+  if (armor) {
+    pixel(c, x - 5, y - 1, 10, 8, metal(armor));
+    pixel(c, x - 3, y, 6, 7, armor.tier === 3 ? "#6d8790" : "#6d786e");
+    pixel(c, x - 5, y + 7, 10, 2, "#756144");
   }
-  if (equippedItem(s, p, "shield")) {
-    pixel(c, x - 12, y + 1, 8, 11, "#565e50");
-    pixel(c, x - 11, y + 2, 6, 8, "#ac9971");
-    pixel(c, x - 9, y + 5, 2, 2, "#c9c5a3");
+  if (helmet) {
+    pixel(c, x - 4, y - 15, 9, 5, metal(helmet));
+    pixel(c, x - 5, y - 11, 11, 2, "#c1bea0");
+    if (helmet.tier >= 2) pixel(c, x - 1, y - 16, 2, 7, "#d0c497");
+    if (helmet.tier === 3) {
+      pixel(c, x - 6, y - 16, 2, 5, "#718777");
+      pixel(c, x + 5, y - 16, 2, 5, "#718777");
+    }
   }
-  if (equippedItem(s, p, "weapon")?.twoHanded) {
-    pixel(c, x + 10, y - 14, 2, 24, "#c5c9ac");
-    pixel(c, x + 7, y + 4, 8, 2, "#7b6844");
+  if (shield) {
+    pixel(c, x - 12, y + 1, 8, 11, "#4e5a50");
+    pixel(c, x - 11, y + 2, 6, 8, metal(shield));
+    pixel(c, x - 9, y + 5, 2, 2, "#d8c690");
+  }
+  if (weapon) {
+    const steel = metal(weapon);
+    if (p.role === "Archer") {
+      pixel(c, x + 11, y - 11, 2, 4, steel);
+      pixel(c, x + 13, y - 7, 2, 12, steel);
+      pixel(c, x + 11, y + 5, 2, 4, steel);
+      pixel(c, x + 10, y - 8, 1, 14, "#ded6ac");
+    } else if (p.role === "Spearman") {
+      pixel(c, x + 10, y - 13, 2, 27, "#94764f");
+      pixel(c, x + 9, y - 18, 4, 6, steel);
+      pixel(c, x + 10, y - 20, 2, 3, steel);
+    } else if (p.role === "Shieldbearer") {
+      pixel(c, x + 9, y - 4, 2, 17, "#94764f");
+      pixel(c, x + 7, y - 8, 6, 7, steel);
+    } else if (p.role === "Wizard" || p.role === "Cleric") {
+      pixel(c, x + 10, y - 13, 2, 26, "#94764f");
+      pixel(c, x + 8, y - 17, 6, 5, steel);
+      pixel(c, x + 10, y - 16, 2, 3, weapon.tier === 3 ? "#acbddd" : "#d4c082");
+    } else {
+      pixel(
+        c,
+        x + 10,
+        y - (weapon.twoHanded ? 17 : 10),
+        2,
+        weapon.twoHanded ? 28 : 20,
+        steel,
+      );
+      pixel(c, x + 7, y + 5, 8, 2, "#aa8e57");
+      pixel(c, x + 10, y + 7, 2, 6, "#756144");
+    }
+    if (weapon.tier === 3 && weapon.durability > 0)
+      pixel(c, x + 10, y - 8, 2, 2, "#e2e4c2");
   }
 }
 
@@ -13477,7 +14598,7 @@ function drawSiteInterior(c, s) {
     }
   }
   for (let i = 0; i < s.party.length; i++)
-    if (!s.party[i].dead)
+    if (!s.party[i].dead) {
       drawCharacter(
         c,
         270 + i * 40,
@@ -13488,6 +14609,8 @@ function drawSiteInterior(c, s) {
         i,
         s.party[i],
       );
+      drawLoadout(c, s, s.party[i], 270 + i * 40, 340);
+    }
   drawMapLabel(c, places[e.site].name, 384, 22);
 }
 function drawDungeonInterior(c, s) {
@@ -13570,6 +14693,7 @@ function drawDungeonInterior(c, s) {
     p.id,
     p,
   );
+  drawLoadout(c, s, p, 136 + s.event.x * 62, 28 + s.event.y * 60);
 }
 
 function drawFarmInterior(c, s) {
@@ -13599,6 +14723,7 @@ function drawFarmInterior(c, s) {
   drawMapLabel(c, "Old well", 537, 187);
   const p = s.party.find((p) => !p.dead);
   drawCharacter(c, 410, 350, p.coat || partyCoats[0], 0, p.role, p.id, p);
+  drawLoadout(c, s, p, 410, 350);
 }
 
 function chestPreview(contents) {
@@ -13707,7 +14832,7 @@ function drawCompanyHome(c, s) {
   }
   s.party
     .filter((p) => !p.dead)
-    .forEach((p, i) =>
+    .forEach((p, i) => {
       drawCharacter(
         c,
         245 + i * 35,
@@ -13717,8 +14842,9 @@ function drawCompanyHome(c, s) {
         p.role,
         p.id,
         p,
-      ),
-    );
+      );
+      drawLoadout(c, s, p, 245 + i * 35, 335);
+    });
   c.fillStyle = "#4c4e39";
   c.font = "bold 14px monospace";
   c.textAlign = "center";
@@ -13764,7 +14890,7 @@ function button(text, fn, disabled = false, primary = false) {
   };
   return b;
 }
-function card(title, body) {
+function card(title, body = "") {
   const d = document.createElement("div");
   d.className = "card";
   const heading = document.createElement("h3");
@@ -14118,6 +15244,7 @@ function render() {
   panel.replaceChildren();
   if (tab === "Company") {
     appendExpeditionCompany(panel);
+    appendOdysseyCompany(panel);
     appendRealmCompany(panel);
     appendTravelJobs(panel);
     appendWagonPanel(panel);
@@ -14250,7 +15377,9 @@ function render() {
           "<p>Died of starvation. Starvation deaths are permanent; medicine and rest cannot revive this companion.</p>",
         );
         memorial.classList.add("fallen");
-        memorial.querySelector(".pixel-icon").replaceWith(portraitArtwork(p));
+        memorial
+          .querySelector(".pixel-icon")
+          .replaceWith(portraitArtwork(p, s));
         panel.append(memorial);
         return;
       }
@@ -14295,7 +15424,7 @@ function render() {
       character.append(connections);
       c.append(character, worn);
       c.classList.add("companion-card");
-      c.querySelector(".pixel-icon").replaceWith(portraitArtwork(p));
+      c.querySelector(".pixel-icon").replaceWith(portraitArtwork(p, s));
       if (p.points)
         c.append(
           button(
@@ -14494,6 +15623,8 @@ function render() {
     });
   }
   if (tab === "Camp") {
+    appendContinuationPanel(panel);
+    if (s.odyssey.prisoners.length) appendPrisoners(panel);
     appendWagonPanel(panel);
     appendTravelJobs(panel);
     panel.append(
@@ -14775,9 +15906,8 @@ function render() {
         ? `Equipped by ${owner.name}`
         : "In company stores";
       if (owner?.id !== p.id && canEquipEquipment(s, item, p)) {
-        const delta = item.bonus - (equippedItem(s, p, item.slot)?.bonus || 0);
         const comparison = document.createElement("p");
-        comparison.textContent = `For ${p.name}: ${delta >= 0 ? "+" : ""}${delta} ${item.slot === "weapon" ? "attack" : "armor"} compared with current gear.`;
+        comparison.textContent = `For ${p.name}: ${equipmentComparison(s, item, p).text}`;
         c.append(comparison);
       }
       c.append(
@@ -15050,6 +16180,7 @@ function render() {
       );
     if (tab === "Town") {
       appendTerritoryPanel(panel);
+      appendRegionalServices(panel);
       if (
         s.location === 0 &&
         s.campaign.phase !== "unstarted" &&
@@ -15530,7 +16661,20 @@ function render() {
     const raided =
       s.event.kind === "caravan-raid" &&
       s.patrols.find((p) => p.id === s.event.patrolId);
-    if (s.event.kind === "home") {
+    if (s.event.kind === "region") {
+      for (const [action, label] of [
+        ["specialist", "Find a route with a specialist · 1 hour"],
+        ["supplies", "Secure the crossing · 2 rations / 1 wood / 1 hour"],
+        ["detour", "Take the long way · 3 hours / fatigue"],
+      ])
+        c.append(
+          lockedButton(
+            label,
+            () => regionalChoice(s, action),
+            regionalChoiceLock(s, action),
+          ),
+        );
+    } else if (s.event.kind === "home") {
       appendHomePanel(c);
     } else if (s.event.kind === "travel-conversation") {
       for (const [choice, label] of [
@@ -15951,6 +17095,7 @@ function render() {
     );
     appendMissionCombat(a);
     appendCareerCombat(a);
+    appendOdysseyCombat(a);
     const actor = s.party[selected],
       unit = s.battle.units.find((u) => u.id === selected),
       skill = skillFor(actor);
@@ -16351,6 +17496,7 @@ function render() {
       `${places[s.location]?.name || terrainAt(s.position).toUpperCase()} · ${Math.round(s.position.x)}, ${Math.round(s.position.y)}`;
   }
   appendExpeditionWorld(a);
+  appendOdysseyWorld(a);
   appendRealmWorldActions(a);
   const rumorJournal = $("rumor-journal");
   rumorJournal.replaceChildren();
@@ -16822,6 +17968,13 @@ function draw() {
       drawLoadout(ctx, s, s.party[p.i], p.x, p.y);
     });
   ctx.globalAlpha = 1;
+  s.odyssey.prisoners.forEach((prisoner, index) => {
+    const point = partyPositions(s).at(-1) || s.position;
+    person(point.x - 15 - index * 13, point.y + 12, "#77796b", 0, "", index, {
+      race: prisoner.kind === "goblin" ? "orc" : "human",
+    });
+    rect(point.x - 17 - index * 13, point.y + 14, 5, 1, "#b6b2a1");
+  });
   if (isHidden(s))
     drawMapLabel(ctx, "HIDDEN", s.position.x, s.position.y - 35, true);
   if (s.wagon.owned) {
@@ -18022,10 +19175,11 @@ function lockedButton(label, fn, reason) {
   }
   return wrap;
 }
-function fold(title) {
+function fold(title, open = false) {
   const d = document.createElement("details"),
     s = document.createElement("summary");
   s.textContent = title;
+  d.open = open;
   d.append(s);
   return d;
 }
@@ -18542,6 +19696,254 @@ function inferActionRequirement(label) {
   if (s.event?.kind === "dungeon")
     return "Stand beside the relevant dungeon feature and bring the required profession or materials.";
   return "Check the action's listed location, resources, companion requirements, and one-time completion status.";
+}
+
+function appendOdysseyCompany(panel) {
+  const region = regionAt(s.position),
+    atlas = fold(`Regions · ${region.name}`);
+  for (const r of regions) {
+    const line = document.createElement("p");
+    line.textContent = `${r.name}${s.odyssey.visited[r.id] || r.id === region.id ? " · visited" : ""}: ${r.desc}`;
+    atlas.append(line);
+  }
+  atlas.append(
+    card(
+      "Regional travel",
+      "<p>Long journeys can encounter local obstacles once per region each day. Specialists save time; supplies or tiring detours provide alternatives. Mountains yield ore, haunted woods yield herbs. Village markets offer regional services.</p>",
+    ),
+  );
+  panel.append(atlas);
+  appendContinuationPanel(panel);
+  if (s.odyssey.prisoners.length) appendPrisoners(panel);
+  const relics = fold("Regional relics · finite tactical equipment");
+  for (const r of regionalRelics) {
+    const item = equipmentCatalog.find((v) => v.id === r.id),
+      line = document.createElement("p");
+    line.textContent = `${item.name}: ${equipmentPerks[item.perk]} ${r.desc} ${s.odyssey.relics[r.id] ? "Recovered." : `Two knowledge and ${r.amount} ${r.resource}.`}`;
+    relics.append(line);
+    if (s.discovered.includes(r.site) && !s.odyssey.relics[r.id])
+      relics.append(
+        button(
+          `Travel to relic: ${places[r.site].name}`,
+          () => moveTo(s, places[r.site].x, places[r.site].y),
+          !!s.battle || !!s.event || s.campOpen,
+        ),
+      );
+  }
+  panel.append(relics);
+}
+function appendPrisoners(panel) {
+  const menu = fold(`Prisoners · ${s.odyssey.prisoners.length}/3`, true),
+    guard = prisonerGuard(s);
+  const desc = document.createElement("p");
+  desc.textContent = `Each prisoner consumes one extra ration at dawn. Two fed days permit recruitment at camp for sixty crowns. Two hungry days cause escape; three days without supervision also cause escape. Supervisor: ${guard?.name || "none"}. Recruitment brings Mercenary wages and fifty resolve.`;
+  menu.append(desc);
+  for (const p of s.odyssey.prisoners) {
+    const c = card(p.name),
+      line = document.createElement("p");
+    line.textContent = `${p.kind} · trust ${p.trust}/2 · hungry days ${p.unfed} · captured day ${p.day}`;
+    c.append(line);
+    for (const [action, label] of [
+      [
+        "ransom",
+        `Deliver ${p.name} for bounty · ${p.kind === "mage" ? 45 : 30} crowns`,
+      ],
+      ["recruit", `Recruit ${p.name} · 60 crowns`],
+      ["release", `Release ${p.name}`],
+    ])
+      c.append(
+        lockedButton(
+          label,
+          () => prisonerAction(s, p.id, action),
+          prisonerActionLock(s, p.id, action),
+        ),
+      );
+    menu.append(c);
+  }
+  panel.append(menu);
+}
+function appendRegionalServices(panel) {
+  const r = regionAt(s.position),
+    c = card(r.name),
+    line = document.createElement("p");
+  line.textContent = r.desc;
+  c.append(line);
+  if (s.location === 0)
+    c.append(
+      lockedButton(
+        "Buy harvest bundle · 18 crowns / 12 rations",
+        () => regionalService(s, "provisions"),
+        regionalServiceLock(s, "provisions"),
+      ),
+    );
+  if (s.location === 3)
+    c.append(
+      lockedButton(
+        "Buy reed remedies · 20 crowns",
+        () => regionalService(s, "remedies"),
+        regionalServiceLock(s, "remedies"),
+      ),
+    );
+  if (s.location === 6) {
+    const gates = fold("Academy gates · fifty crowns and one level-two slot");
+    const hint = document.createElement("p");
+    hint.textContent =
+      "Passage takes two hours. Gates carry the company, but cannot transport a wagon, escorted travelers or prisoners.";
+    gates.append(hint);
+    for (const id of [0, 3])
+      gates.append(
+        lockedButton(
+          `Arcane passage to ${places[id].name}`,
+          () => regionalService(s, "transit", id),
+          regionalServiceLock(s, "transit", id),
+        ),
+      );
+    c.append(gates);
+  }
+  for (const p of livingParty(s)) {
+    const q = continuationInfo(s, p.id);
+    if (q?.stage === 1 && q.meet === s.location)
+      c.append(
+        lockedButton(
+          `Hear testimony for ${p.name}`,
+          () => continueCompanion(s, p.id, "meet"),
+          continuationLock(s, p.id, "meet"),
+        ),
+      );
+  }
+  panel.append(c);
+  if (s.odyssey.prisoners.length) appendPrisoners(panel);
+}
+function appendOdysseyWorld(a) {
+  if (s.battle || s.event || s.campOpen) return;
+  for (const p of livingParty(s)) {
+    const q = continuationInfo(s, p.id);
+    if (q?.stage === 2 && q.site === s.location)
+      a.append(
+        lockedButton(
+          `Recover evidence for ${p.name}`,
+          () => continueCompanion(s, p.id, "recover"),
+          continuationLock(s, p.id, "recover"),
+        ),
+      );
+  }
+  for (const r of regionalRelics)
+    if (r.site === s.location && !s.odyssey.relics[r.id])
+      a.append(
+        lockedButton(
+          `Recover ${equipmentCatalog.find((v) => v.id === r.id).name}`,
+          () => recoverRelic(s, r.id),
+          relicLock(s, r.id),
+        ),
+      );
+}
+function appendOdysseyCombat(a) {
+  const q = continuationInfo(s, selected);
+  if (q?.stage === 4 && ["swear", "reconcile"].includes(q.outcome)) {
+    const menu = fold(`Personal technique · ${q.perk}`),
+      targets =
+        s.party[selected].role === "Swordswoman"
+          ? s.battle.enemies.filter((e) => e.hp > 0)
+          : [null];
+    const hint = document.createElement("p");
+    hint.textContent = q.desc;
+    menu.append(hint);
+    for (const e of targets)
+      menu.append(
+        lockedButton(
+          `Use ${q.perk}${e ? ` on ${e.name || e.kind} ${e.id + 1}` : ""}`,
+          () => continuationTechnique(s, selected, e?.id ?? null),
+          continuationTechniqueLock(s, selected, e?.id ?? null),
+        ),
+      );
+    a.append(menu);
+  }
+  const offers = s.battle.enemies.filter((e) => e.hp > 0 && e.surrenderOffer);
+  if (offers.length) {
+    const menu = fold("Enemy surrender · decide their fate", true);
+    for (const e of offers) {
+      const line = document.createElement("p");
+      line.textContent = `${e.name || e.kind} ${e.id + 1} offers surrender. Capture costs food and supervision; safe passage pays eight crowns but lowers Warden reputation.`;
+      menu.append(line);
+      for (const [action, label] of [
+        ["capture", "Take prisoner"],
+        ["ransom", "Sell safe passage"],
+        ["release", "Release alive"],
+        ["refuse", "Refuse surrender"],
+      ])
+        menu.append(
+          lockedButton(
+            `${label}: ${e.kind} ${e.id + 1}`,
+            () => answerSurrender(s, e.id, action),
+            surrenderLock(s, e.id, action),
+          ),
+        );
+    }
+    a.append(menu);
+  }
+}
+
+function appendContinuationPanel(panel) {
+  const journeys = fold("Companion continuations · oaths and reconciliation");
+  for (const p of livingParty(s)) {
+    const q = continuationInfo(s, p.id);
+    if (!q) continue;
+    const partner = s.party[q.partner],
+      c = card(`${p.name} · ${q.title}`);
+    const line = document.createElement("p");
+    line.textContent = `${q.desc} ${q.stage === 0 ? "Finish their first personal journey, then begin this follow-up at camp." : q.stage === 1 ? `Hear testimony at ${places[q.meet].name}.` : q.stage === 2 ? `Recover evidence at ${places[q.site].name}; bring two ${q.resource}.` : q.stage === 3 ? `Discuss the evidence at camp. Partner: ${partner?.name || "none"}; bond ${partner ? bondValue(s, p.id, partner.id) : 0}.` : `Resolved: ${q.outcome}.`} `;
+    c.append(line);
+    if (q.stage >= 2) {
+      const story = document.createElement("p");
+      story.textContent = q.stage === 2 ? q.testimony : q.evidence;
+      c.append(story);
+    }
+    if (s.campOpen && q.stage > 0 && q.stage < 4) {
+      const partners = document.createElement("select");
+      partners.setAttribute("aria-label", `Journey partner: ${p.name}`);
+      partners.add(new Option("Choose a partner", ""));
+      for (const other of livingParty(s).filter(
+        (v) => v.id !== p.id && v.hp > 0,
+      ))
+        partners.add(
+          new Option(
+            `${other.name} · bond ${bondValue(s, p.id, other.id)}`,
+            String(other.id),
+          ),
+        );
+      partners.value = q.partner === null ? "" : String(q.partner);
+      partners.onchange = () => {
+        if (partners.value !== "")
+          chooseJourneyPartner(s, p.id, Number(partners.value));
+        render();
+      };
+      c.append(partners);
+    }
+    const choices =
+      q.stage === 0
+        ? [["begin", `Begin ${p.name}'s follow-up`]]
+        : q.stage === 1
+          ? [["meet", `Hear testimony for ${p.name}`]]
+          : q.stage === 2
+            ? [["recover", `Recover evidence for ${p.name}`]]
+            : q.stage === 3
+              ? [
+                  ["swear", `Swear an oath with ${p.name}`],
+                  ["reconcile", `Reconcile ${p.name}'s rivalry · 25 crowns`],
+                  ["depart", `Let ${p.name} leave peacefully`],
+                ]
+              : [];
+    for (const [action, label] of choices)
+      c.append(
+        lockedButton(
+          label,
+          () => continueCompanion(s, p.id, action),
+          continuationLock(s, p.id, action),
+        ),
+      );
+    journeys.append(c);
+  }
+  panel.append(journeys);
 }
 
 })();
