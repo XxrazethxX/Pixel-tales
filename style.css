@@ -1078,3 +1078,15 @@ nav button[data-count]::after {
   margin: 8px auto;
   image-rendering: pixelated;
 }
+
+#actions .battle-conditions {
+  background: #e4d4aef5;
+  border: 1px solid #948562;
+  padding: 9px 12px;
+  margin: 0;
+  max-width: 540px;
+  max-height: 220px;
+  overflow-y: auto;
+  font-size: 12px;
+  line-height: 1.5;
+}

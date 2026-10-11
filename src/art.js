@@ -1580,7 +1580,56 @@ export function chestPreview(contents) {
 export function drawFantasyEnemy(c, kind, x, y) {
   c.save();
   pixel(c, x - 11, y + 13, 23, 4, "#46513b66");
-  if (kind === "skeleton") {
+  if (["troll", "spider", "cultist", "knight"].includes(kind)) {
+    if (kind === "troll") {
+      pixel(c, x - 14, y - 14, 28, 25, "#697f58");
+      pixel(c, x - 9, y - 26, 20, 15, "#8d9a6d");
+      pixel(c, x - 20, y - 9, 8, 23, "#788b5d");
+      pixel(c, x + 12, y - 9, 8, 23, "#788b5d");
+      pixel(c, x - 12, y + 10, 8, 8, "#4b5d43");
+      pixel(c, x + 5, y + 10, 8, 8, "#4b5d43");
+      pixel(c, x - 5, y - 22, 3, 3, "#e3bc72");
+      pixel(c, x + 5, y - 22, 3, 3, "#e3bc72");
+      pixel(c, x - 4, y - 15, 11, 3, "#ded3b0");
+      pixel(c, x + 19, y - 1, 6, 22, "#816649");
+    }
+    if (kind === "spider") {
+      for (let i = 0; i < 4; i++) {
+        let dy = -10 + i * 7;
+        pixel(c, x - 21, y + dy, 13, 3, "#554a50");
+        pixel(c, x + 9, y + dy, 13, 3, "#554a50");
+        pixel(c, x - 24, y + dy - 4, 4, 8, "#554a50");
+        pixel(c, x + 21, y + dy - 4, 4, 8, "#554a50");
+      }
+      pixel(c, x - 10, y - 9, 21, 18, "#675a65");
+      pixel(c, x - 6, y + 6, 13, 10, "#877c84");
+      pixel(c, x - 4, y + 8, 3, 3, "#d1a15d");
+      pixel(c, x + 3, y + 8, 3, 3, "#d1a15d");
+      pixel(c, x - 9, y - 6, 5, 10, "#958991");
+    }
+    if (kind === "cultist") {
+      pixel(c, x - 8, y - 22, 17, 14, "#534959");
+      pixel(c, x - 4, y - 15, 9, 8, "#b6a583");
+      pixel(c, x - 9, y - 7, 19, 24, "#75616b");
+      pixel(c, x - 3, y - 7, 5, 24, "#a78976");
+      pixel(c, x - 4, y - 13, 9, 3, "#393a38");
+      pixel(c, x + 13, y - 8, 2, 25, "#917a53");
+      pixel(c, x + 9, y - 12, 10, 5, "#a6a58a");
+      pixel(c, x - 13, y + 1, 7, 10, "#b9aa89");
+    }
+    if (kind === "knight") {
+      pixel(c, x - 7, y - 23, 15, 15, "#909c98");
+      pixel(c, x - 5, y - 17, 11, 3, "#3e4a48");
+      pixel(c, x - 9, y - 7, 19, 20, "#737f7c");
+      pixel(c, x - 5, y - 5, 11, 13, "#aab4a4");
+      pixel(c, x - 8, y + 12, 6, 7, "#465450");
+      pixel(c, x + 3, y + 12, 6, 7, "#465450");
+      pixel(c, x - 18, y - 7, 11, 23, "#536867");
+      pixel(c, x - 16, y - 5, 7, 19, "#a49b70");
+      pixel(c, x + 13, y - 16, 3, 28, "#d0d4bb");
+      pixel(c, x + 9, y + 4, 11, 3, "#9c8354");
+    }
+  } else if (kind === "skeleton") {
     pixel(c, x - 6, y - 17, 13, 10, "#d6d3ad");
     pixel(c, x - 4, y - 14, 3, 3, "#424b3c");
     pixel(c, x + 2, y - 14, 3, 3, "#424b3c");
@@ -1667,4 +1716,106 @@ export function drawCompanyHome(c, s) {
   c.font = "bold 14px monospace";
   c.textAlign = "center";
   c.fillText(`WAYFARER ${h.style === "farm" ? "FARM" : "LODGE"}`, 384, 55);
+}
+
+export function drawCompanyBanner(c, s, x, y, scale = 1) {
+  const h = s.chronicle?.heraldry;
+  if (!h) return;
+  const fields = {
+      ashen: "#ad8057",
+      pine: "#72825a",
+      iron: "#85948c",
+      wine: "#986267",
+    },
+    trims = { gold: "#d8bb75", silver: "#c6d3cf", bone: "#e4d6af" };
+  c.save();
+  c.translate(x, y);
+  c.scale(scale, scale);
+  pixel(c, 0, 0, 2, 30, "#65533f");
+  pixel(c, 2, 2, 18, 19, trims[h.trim]);
+  pixel(c, 4, 4, 14, 15, fields[h.field]);
+  const shapes = {
+    sun: [
+      "0011100",
+      "0101010",
+      "1111111",
+      "0111110",
+      "1111111",
+      "0101010",
+      "0011100",
+    ],
+    tower: [
+      "1010101",
+      "1111111",
+      "0111110",
+      "0110110",
+      "0110110",
+      "0110110",
+      "1111111",
+    ],
+    wolf: [
+      "1100011",
+      "1110111",
+      "0111110",
+      "0110110",
+      "0011100",
+      "0011100",
+      "0001000",
+    ],
+    star: [
+      "0001000",
+      "0011100",
+      "1111111",
+      "0111110",
+      "0011100",
+      "0110110",
+      "0100010",
+    ],
+    leaf: [
+      "0001100",
+      "0011110",
+      "0111110",
+      "1111100",
+      "0111000",
+      "0010000",
+      "0100000",
+    ],
+  };
+  for (const [row, line] of (shapes[h.charge] || shapes.sun).entries())
+    for (let col = 0; col < line.length; col++)
+      if (line[col] === "1") pixel(c, 7 + col, 8 + row, 1, 1, trims[h.trim]);
+  c.restore();
+}
+export function drawLivingPlace(c, s, p, id) {
+  const t = s.chronicle?.towns[id];
+  if (t) {
+    if (t.condition < 35) {
+      pixel(c, p.x - 40, p.y + 27, 25, 3, "#765f48");
+      pixel(c, p.x - 35, p.y + 15, 3, 18, "#765f48");
+      pixel(c, p.x - 13, p.y + 19, 3, 14, "#765f48");
+      pixel(c, p.x + 17, p.y + 30, 12, 7, "#9c8867");
+      pixel(c, p.x - 20, p.y - 25, 6, 12, "#534e3d");
+    } else if (t.condition >= 80) {
+      for (let i = 0; i < 4; i++) {
+        pixel(c, p.x - 42 + i * 12, p.y + 34, 5, 4, "#c6ac74");
+        pixel(c, p.x - 41 + i * 12, p.y + 32, 3, 3, "#986267");
+      }
+      pixel(c, p.x + 24, p.y + 15, 18, 12, "#a88956");
+      pixel(c, p.x + 25, p.y + 13, 16, 3, "#d6bd80");
+      pixel(c, p.x + 28, p.y + 8, 4, 5, "#759058");
+    }
+  }
+  const q = Object.values(s.chronicle?.settlements || {}).find(
+    (q) => q.site === id && q.arrived,
+  );
+  if (q) {
+    house(c, p.x + 38, p.y + 7, q.helped ? "#927551" : "#8b8d71");
+    fence(c, p.x - 30, p.y + 30, q.helped ? 90 : 45);
+    pixel(c, p.x + 2, p.y + 15, 13, 10, "#9b8056");
+    pixel(c, p.x + 5, p.y + 12, 7, 4, "#c4b185");
+    drawCharacter(c, p.x + 18, p.y + 29, "#899365", 0, "", 0, {
+      gender: "female",
+    });
+    drawMapLabel(c, q.helped ? "REBUILT" : "SETTLERS", p.x, p.y - 48, true);
+  }
 }

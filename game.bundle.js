@@ -118,7 +118,7 @@ function researchLock(s, id) {
 }
 function fresh() {
   return {
-    version: 18,
+    version: 19,
     companyName: "The Ashen Company",
     difficulty: "standard",
     banner: "ashen",
@@ -182,6 +182,7 @@ function fresh() {
     realm: freshRealm(),
     expedition: freshExpedition(),
     odyssey: freshOdyssey(),
+    chronicle: freshChronicle(),
     stash: { found: false, unlocked: false, searched: [], clues: [], loot: {} },
     cargo: { grain: 0, cloth: 0, salt: 0, iron: 0 },
     markets: {},
@@ -241,6 +242,7 @@ function fresh() {
       talent: null,
       advancedSkill: null,
       equipment: { weapon: null, armor: null, shield: null, helmet: null },
+      wound: null,
     })),
   };
 }
@@ -545,6 +547,7 @@ function act(s, id, x, y) {
     )
       return false;
     const flank = p.role === "Archer" ? 0 : flankingBonus(s, u, e);
+    combatCue(s, p.role === "Archer" ? "arrow" : "strike", u, e);
     const damage = hitEnemy(
       s,
       e,
@@ -573,6 +576,7 @@ function act(s, id, x, y) {
 }
 function win(s) {
   if (!battleVictoryAllowed(s)) return false;
+  recordNewEnemyVictory(s);
   if (s.battle.mission) {
     finishMission(s);
     return true;
@@ -596,6 +600,7 @@ function win(s) {
   const patrolFight = s.battle.kind === "patrol";
   const bossFight = !patrolFight && s.contract?.kind === "boss";
   const raid = patrolFight && s.battle.caravanRaid;
+  if (raid) changeTownCondition(s, nearestVillage(s.position), -8);
   const wildlife = patrolFight && s.battle.wildlife;
   const difficulty = wildlife
     ? { tier: 1, knowledge: 1, xp: 20, salvage: 0, renown: 2 }
@@ -704,6 +709,11 @@ function endTurn(s) {
     );
     return true;
   }
+  resolveCompanyPoison(s);
+  b.enemies.forEach((e) => {
+    e.burningThisRound = false;
+    e.charging = false;
+  });
   resolveRealmMagic(s);
   b.enemies.forEach((e) => (e.stunnedThisRound = false));
   resolveBossThreat(s);
@@ -715,6 +725,7 @@ function endTurn(s) {
       if (e.hp === 0) continue;
     }
     if (e.burn > 0) {
+      e.burningThisRound = true;
       hitEnemy(s, e, 3 + enemyArmor(s, e));
       e.burn--;
       if (e.hp <= 0) continue;
@@ -758,12 +769,16 @@ function endTurn(s) {
     coordinateTargets(s, e, targets);
     const t = targets[0];
     if (!t) break;
-    const range = ["archer", "mage"].includes(e.kind) ? 4 : 1,
+    const range = ["archer", "mage", "cultist"].includes(e.kind) ? 4 : 1,
       dist = () => Math.abs(t.x - e.x) + Math.abs(t.y - e.y);
     const rooted = (e.root || 0) > 0;
     e.root = Math.max(0, (e.root || 0) - 1);
     const rush =
-      e.bossId === "ashfang" ? 3 : ["wolf", "goblin"].includes(e.kind) ? 2 : 1;
+      e.bossId === "ashfang"
+        ? 3
+        : ["wolf", "goblin", "spider"].includes(e.kind) || e.charging
+          ? 2
+          : 1;
     let movement = rush;
     for (
       let step = 0;
@@ -772,7 +787,7 @@ function endTurn(s) {
       step < rush &&
       (dist() > range ||
         !hasLineOfSight(s, e, t) ||
-        (["archer", "mage"].includes(e.kind) && dist() <= 1));
+        (["archer", "mage", "cultist"].includes(e.kind) && dist() <= 1));
       step++
     ) {
       let options = [
@@ -792,7 +807,8 @@ function endTurn(s) {
           ) &&
           !b.enemies.some((v) => v !== e && v.hp > 0 && v.x === x && v.y === y),
       );
-      const retreat = ["archer", "mage"].includes(e.kind) && dist() <= 1;
+      const retreat =
+        ["archer", "mage", "cultist"].includes(e.kind) && dist() <= 1;
       options.sort(
         (a, c) =>
           (Math.abs(a[0] - t.x) +
@@ -833,6 +849,7 @@ function endTurn(s) {
             (e.weakened > 0 ? 2 : 0),
         ) +
         adversaryPower(s, e) +
+        (e.charging ? 2 : 0) +
         (e.kind === "archer" ? 0 : flankingBonus(s, e, t, "enemies")) +
         (e.kind === "wolf" &&
         b.enemies.some(
@@ -844,12 +861,23 @@ function endTurn(s) {
         )
           ? 1
           : 0);
+      combatCue(
+        s,
+        e.kind === "archer"
+          ? "arrow"
+          : e.kind === "cultist"
+            ? "spell"
+            : "strike",
+        e,
+        t,
+      );
       const damage = damageCompanion(
         s,
         t,
         power,
-        ["archer", "mage"].includes(e.kind),
+        ["archer", "mage", "cultist"].includes(e.kind),
       );
+      if (e.kind === "spider" && p.hp > 0) t.poison = 2;
       if (
         p.hp > 0 &&
         t.guard &&
@@ -938,9 +966,9 @@ function restore(raw) {
   const base = fresh();
   if (
     !raw ||
-    ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18].includes(
-      raw.version,
-    ) ||
+    ![
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+    ].includes(raw.version) ||
     !Array.isArray(raw.party) ||
     raw.party.length < 1 ||
     raw.party.length > 6 ||
@@ -966,7 +994,7 @@ function restore(raw) {
   const result = {
     ...base,
     ...raw,
-    version: 18,
+    version: 19,
     inventory: { ...base.inventory, ...raw.inventory },
     explored: raw.explored || [],
     event: raw.event || null,
@@ -1786,6 +1814,7 @@ function restore(raw) {
   restoreRealm(result, raw);
   restoreExpedition(result, raw);
   restoreOdyssey(result, raw);
+  restoreChronicle(result, raw);
   updateCampaign(result);
   return result;
 }
@@ -1798,6 +1827,7 @@ function attackPower(s, p) {
     (s.research.includes("steel") ? 2 : 0) +
     (s.morale >= 85 ? 1 : 0) -
     (p.injury ? 1 : 0) -
+    (p.wound?.type === "eye" ? 2 : 0) -
     fatiguePenalty(p) -
     ((p.resolve ?? 65) < 25 ? 1 : 0) +
     (hasTrait(p, "mercenary") ? 1 : 0) +
@@ -1887,6 +1917,7 @@ function recruit(s, offerId = null) {
   delete s.realm.lineage[id];
   delete s.expedition.careers[id];
   delete s.odyssey.journeys[id];
+  if (s.party[id]) s.party[id].wound = null;
   if (vacancy >= 0) s.party[id] = companion;
   else s.party.push(companion);
   s.recruitSerial++;
@@ -1966,10 +1997,14 @@ function heal(s, id) {
     s.battle ||
     s.event ||
     s.inventory.medicine < 1 ||
-    (p.hp === p.max && !p.injury)
+    (p.hp === p.max && !p.injury && !p.wound)
   )
     return false;
   s.inventory.medicine--;
+  if (p.wound) {
+    p.wound.treated = true;
+    p.wound.remaining = Math.min(p.wound.remaining, 24);
+  }
   p.hp = Math.min(p.max, p.hp + healAmount(s));
   const herbalist = professional(s, "Herbalist");
   if (herbalist) {
@@ -2658,6 +2693,7 @@ function initialPatrols() {
       ],
       cleared: true,
     },
+    ...newEnemyPatrols(),
   ];
 }
 function advancePatrols(s, seconds) {
@@ -2672,6 +2708,7 @@ function advancePatrols(s, seconds) {
     return false;
   refreshStrongholds(s);
   refreshFantasyStrongholds(s);
+  updateWorldRoutes(s);
   refreshBorderPatrols(s);
   updateCampaign(s);
   updateRoadConflicts(s);
@@ -3190,11 +3227,14 @@ function attackRange(p, skill = false, s = null) {
 }
 function movementRange(p) {
   const career = activeCareer(p);
+  const limp = p.wound?.type === "sprain" ? 1 : 0;
   return (
     (career?.id === "outrider" ? 1 : 0) +
     Math.max(
       1,
-      (p.talent === "skirmisher" ? 3 : 2) - (fatiguePenalty(p) === 2 ? 1 : 0),
+      (p.talent === "skirmisher" ? 3 : 2) -
+        (fatiguePenalty(p) === 2 ? 1 : 0) -
+        limp,
     )
   );
 }
@@ -3236,6 +3276,7 @@ function useSkill(s, id, x, y) {
     !hasLineOfSight(s, u, { x, y })
   )
     return false;
+  combatCue(s, p.role === "Archer" ? "arrow" : "strike", u, enemy);
   b.valor -= skill.cost;
   u.acted = true;
   u.cooldown = skill.cooldown;
@@ -3768,6 +3809,12 @@ function settleDay(s, mealsProvided = false) {
     for (const p of livingParty(s)) changeResolve(p, 1);
     s.morale = Math.max(0, s.morale - 2);
   }
+  for (const p of livingParty(s))
+    if (p.wound?.type === "infection" && !p.wound.treated) {
+      if (p.hp > 0) p.hp = Math.max(1, p.hp - 2);
+      p.fatigue = Math.min(100, (p.fatigue || 0) + 5);
+      note(s, `${p.name} suffers from an untreated infected wound.`);
+    }
   const owed = wages + s.wageDebt;
   const paid = Math.min(s.gold, owed);
   s.gold -= paid;
@@ -3786,6 +3833,7 @@ function settleDay(s, mealsProvided = false) {
   );
   settleTravelPromises(s);
   settlePrisoners(s);
+  updateLivingWorld(s);
   for (const p of livingParty(s))
     if (
       s.wageDebt > 0 &&
@@ -3804,6 +3852,7 @@ function settleDay(s, mealsProvided = false) {
 function spendHours(s, hours, options = {}) {
   if (!Number.isFinite(hours) || hours <= 0 || companyLost(s)) return false;
   let remaining = Math.min(hours, 24 * 30);
+  let restSupplied = !!options.mealsProvided || s.food >= campCost(s);
   while (remaining > 0.000001 && !companyLost(s)) {
     const untilMidnight = 24 - s.timeOfDay;
     const amount = Math.min(remaining, untilMidnight);
@@ -3821,12 +3870,15 @@ function spendHours(s, hours, options = {}) {
                 ? 0
                 : weatherInfo(s).fatigue),
         );
+    if (options.resting && restSupplied && !s.hungerDays)
+      progressWounds(s, amount);
     s.timeOfDay += amount;
     remaining -= amount;
     if (s.timeOfDay >= 24 - 0.000001) {
       s.timeOfDay = 0;
       s.day++;
       settleDay(s, !!options.mealsProvided);
+      restSupplied = !s.hungerDays;
     }
   }
   return true;
@@ -4106,6 +4158,7 @@ function finishCampJobs(s, restHours) {
   }
   if (medic) {
     if (s.inventory.herbs >= 2) {
+      for (const p of livingParty(s)) if (p.wound) p.wound.treated = true;
       s.inventory.herbs -= 2;
       const recovery = 4 + professionRank(medic) * 2;
       for (const p of livingParty(s)) {
@@ -4927,10 +4980,12 @@ function damageCompanion(s, target, power, ranged = false) {
       aura -
       (ranged ? terrainCell(s, target.x, target.y).cover : 0),
   );
+  const before = p.hp;
   target.arcaneWard = 0;
   interruptConcentration(s, target.id);
   p.hp = Math.max(0, p.hp - damage);
   p.injury = p.hp < p.max / 2;
+  recordBattleWound(s, p, before, damage, ranged);
   if (target.riposte && p.hp > 0) {
     const enemy = s.battle.enemies.find(
       (e) =>
@@ -5182,6 +5237,8 @@ function changeReputation(s, id, amount) {
 }
 function purchaseModifier(s) {
   return (
+    livingPriceModifier(s) *
+    companyTitlePrice(s) *
     territoryPrice(s) *
     ((s.research.includes("barter") ? 0.8 : 1) *
       (s.reputation.guild >= 10 ? 0.9 : s.reputation.guild <= -10 ? 1.25 : 1))
@@ -7565,7 +7622,7 @@ function combatPreview(s, id, x, y, skillMode = false) {
       if (
         !u.safeMove &&
         e.hp > 0 &&
-        !["archer", "mage"].includes(e.kind) &&
+        !["archer", "mage", "cultist"].includes(e.kind) &&
         !e.stun &&
         !e.distracted &&
         !e.reacted &&
@@ -7698,6 +7755,7 @@ function refreshStrongholds(s) {
 function clearStronghold(s) {
   if (s.strongholds.briar.cleared) return false;
   s.strongholds.briar.cleared = true;
+  markResettlement(s, "briar", 12);
   refreshStrongholds(s);
   note(
     s,
@@ -8205,6 +8263,8 @@ function spellLock(s, id, spellId, x, y) {
     )
   )
     return "Silence prevents casting here.";
+  if (p.wound?.type === "concussion" && spell.level === 2)
+    return "Concussion prevents level-two casting until recovery.";
   if (spellSlots(p)[spell.level] < 1)
     return `No level ${spell.level} slots. Recover magic at camp or Emberfall.`;
   if (
@@ -8237,9 +8297,13 @@ function spellLock(s, id, spellId, x, y) {
     return ["damage", "illusion", "counter"].includes(spell.kind)
       ? "Select a living enemy."
       : "Select a conscious ally.";
-  if (spell.kind === "counter" && target.kind !== "mage")
+  if (spell.kind === "counter" && !["mage", "cultist"].includes(target.kind))
     return "Choose an enemy spellcaster.";
-  if (spell.kind === "heal" && s.party[target.id].hp >= s.party[target.id].max)
+  if (
+    spell.kind === "heal" &&
+    s.party[target.id].hp >= s.party[target.id].max &&
+    !target.poison
+  )
     return "That ally is already healthy.";
   return "";
 }
@@ -8253,6 +8317,12 @@ function castSpell(s, id, spellId, x, y) {
   s.inventory.herbs -= spell.herbs || 0;
   s.inventory.ore -= spell.ore || 0;
   u.acted = true;
+  combatCue(
+    s,
+    spell.kind === "heal" ? "heal" : spell.kind === "ward" ? "ward" : "spell",
+    u,
+    { x, y },
+  );
   if (castRealmMagic(s, p, u, spell, x, y)) return true;
   const targets = ["damage", "illusion"].includes(spell.kind)
     ? s.battle.enemies.filter(
@@ -8298,6 +8368,7 @@ function castSpell(s, id, spellId, x, y) {
       }
     } else if (spell.kind === "illusion") target.distracted = 2;
     else if (spell.kind === "heal") {
+      target.poison = 0;
       s.party[target.id].hp = Math.min(
         s.party[target.id].max,
         s.party[target.id].hp +
@@ -8764,6 +8835,7 @@ function infiltrateStronghold(s, action) {
     delete s.realm.lineage[id];
     delete s.expedition.careers[id];
     delete s.odyssey.journeys[id];
+    if (s.party[id]) s.party[id].wound = null;
     s.party[id] = {
       ...fresh().party[3],
       id,
@@ -9049,6 +9121,7 @@ function claimCaravanEscort(s) {
   const p = s.patrols.find((p) => p.id === e.patrolId);
   if (!p || p.cleared) return false;
   s.gold += e.reward;
+  changeTownCondition(s, e.destination, 6);
   s.renown += 2;
   s.knowledge++;
   changeReputation(s, "guild", 3);
@@ -9239,6 +9312,7 @@ function finishCaravanDefense(s) {
   const p = s.patrols.find((p) => p.id === s.battle.caravanDefense);
   if (!p) return;
   p.raid = null;
+  changeTownCondition(s, nearestVillage(p), 6);
   p.raidCooldown = s.day * 24 + s.timeOfDay + 8;
   changeReputation(s, "guild", 3);
   note(s, `${p.name} survives the attack. Its cargo remains aboard.`);
@@ -9403,6 +9477,9 @@ function learnSpellSchool(s, id, schoolId) {
 function enemyArmor(s, e) {
   return (
     (e.armor || 0) +
+    (e.kind === "knight" && e.guard && !e.stun && !knightFlanked(s, e)
+      ? 3
+      : 0) +
     (s.battle?.layoutId !== "legacy" &&
     ["mage", "archer", "raider"].includes(e.kind) &&
     s.battle.enemies.some(
@@ -9428,6 +9505,8 @@ function enemyArmor(s, e) {
   );
 }
 function enemyDescription(s, e) {
+  if (newEnemyFamilies.some((f) => f.id === e.kind))
+    return newEnemyReport(s, e);
   if (e.fleeing) return "Routed: attempting to escape at the eastern edge.";
   if (e.surrenderOffer)
     return "Offers surrender: capture, release, bargain or refuse.";
@@ -9444,6 +9523,10 @@ function deployFantasyEnemies(s, patrol) {
   if (!family && !patrol && !["boss", "story"].includes(s.contract?.kind)) {
     if ([2, 5, 8, 11].includes(s.location)) family = "skeleton";
     if (s.location === 14) family = "goblin";
+  }
+  if (newEnemyFamilies.some((f) => f.id === family)) {
+    deployNewEnemies(s, family);
+    return;
   }
   if (!family) return;
   s.battle.enemyFamily = family;
@@ -9488,6 +9571,7 @@ function deployFantasyEnemies(s, patrol) {
   }
 }
 function enemySpecialTurn(s, e) {
+  if (newEnemyTurn(s, e)) return true;
   if (
     e.kind === "skeleton" &&
     s.battle.turn <= 2 &&
@@ -9822,6 +9906,7 @@ function defeatFantasyStronghold(s, id) {
   const h = fantasyStrongholds.find((v) => v.id === id);
   if (!h || realmHold(s, id).cleared) return;
   realmHold(s, id).cleared = true;
+  markResettlement(s, id, h.site);
   if (id === "arcane") {
     s.realm.shards += 2;
     note(s, "The spire yields two aether shards for frontier spell recovery.");
@@ -10533,7 +10618,10 @@ function resolveRealmMagic(s) {
       (v) =>
         v.hp > 0 && Math.abs(v.x - surface.x) + Math.abs(v.y - surface.y) <= 1,
     )) {
-      if (surface.kind === "fire") hitEnemy(s, e, 3 + enemyArmor(s, e));
+      if (surface.kind === "fire") {
+        e.burningThisRound = true;
+        hitEnemy(s, e, 3 + enemyArmor(s, e));
+      }
       if (surface.kind === "silence") {
         e.casting = null;
         e.silenced = 1;
@@ -11941,6 +12029,7 @@ function restAtHome(s) {
     treatment = medic && s.inventory.medicine > 0;
   if (treatment) {
     s.inventory.medicine--;
+    for (const p of livingParty(s)) if (p.wound) p.wound.treated = true;
     practice(s, medic, 1);
   }
   spendHours(s, 12, { resting: true, mealsProvided: true });
@@ -13190,6 +13279,899 @@ function restoreOdyssey(s, raw) {
       e.surrendered = e.surrendered === true && e.hp === 0;
     }
     for (const u of s.battle.units) u.questUsed = u.questUsed === true;
+  }
+}
+
+function freshChronicle() {
+  return {
+    heraldry: { field: "ashen", charge: "sun", trim: "gold", title: null },
+    towns: {
+      0: { condition: 55, aidDay: 0 },
+      3: { condition: 60, aidDay: 0 },
+      6: { condition: 75, aidDay: 0 },
+    },
+    settlements: {},
+    routes: {},
+    scouted: {},
+    kills: {},
+    lastWorldDay: 1,
+  };
+}
+const newEnemyFamilies = [
+  {
+    id: "troll",
+    name: "Crag trolls",
+    counter:
+      "Burning prevents regeneration; leave the marked smash area before the next enemy turn.",
+    site: 9,
+  },
+  {
+    id: "spider",
+    name: "Silkfang spiders",
+    counter:
+      "Avoid web tiles or disarm them with an Archer or Thief; healing spells cleanse venom.",
+    site: 7,
+  },
+  {
+    id: "cultist",
+    name: "Hollow Star cult",
+    counter:
+      "Interrupt or silence the marked prayer before it heals an ally. Prayer slots remain spent.",
+    site: 8,
+  },
+  {
+    id: "knight",
+    name: "Iron Oath deserters",
+    counter:
+      "Engage from two adjacent sides to break the shield bonus; armor-piercing spells and sunder also help.",
+    site: 5,
+  },
+];
+function newEnemyPatrols() {
+  return newEnemyFamilies.map((f, i) => {
+    const p = places[f.site];
+    return {
+      id: `new-${f.id}`,
+      name: f.name,
+      kind: "fantasy",
+      enemyFamily: f.id,
+      x: p.x + 65,
+      y: p.y + 55,
+      route: [
+        { x: p.x + 65, y: p.y + 55 },
+        { x: Math.min(WORLD.width - 20, p.x + 125), y: p.y + 95 },
+        { x: p.x + 30, y: p.y + 65 },
+      ],
+      waypoint: 0,
+      cleared: false,
+      hostile: true,
+    };
+  });
+}
+function deployNewEnemies(s, family) {
+  const b = s.battle;
+  b.enemyFamily = family;
+  b.traps = [];
+  b.feedback = [];
+  b.fxSerial = 0;
+  const kinds =
+    family === "cultist"
+      ? ["cultist", "raider", "raider"]
+      : family === "knight"
+        ? ["knight", "archer", "knight"]
+        : family === "troll"
+          ? ["troll", "goblin"]
+          : ["spider", "spider", "spider"];
+  b.enemies = kinds.map((kind, id) => ({
+    id,
+    kind,
+    name:
+      kind === "troll"
+        ? "Crag troll"
+        : kind === "spider"
+          ? "Silkfang"
+          : kind === "cultist"
+            ? "Hollow celebrant"
+            : kind === "knight"
+              ? "Iron Oath knight"
+              : kind === "archer"
+                ? "Oath archer"
+                : kind === "goblin"
+                  ? "Crag scavenger"
+                  : "Cult blade",
+    x: 7,
+    y: 1 + id * 2,
+    hp: kind === "troll" ? 40 : kind === "knight" ? 26 : 18,
+    max: kind === "troll" ? 40 : kind === "knight" ? 26 : 18,
+    damage:
+      kind === "troll" ? 7 : kind === "spider" ? 4 : kind === "cultist" ? 3 : 5,
+    armor: kind === "knight" ? 2 : kind === "troll" ? 1 : 0,
+    mana: kind === "cultist" ? 2 : 0,
+    webs: kind === "spider" ? 2 : 0,
+    guard: kind === "knight",
+    snares: 0,
+  }));
+  note(
+    s,
+    `${newEnemyFamilies.find((f) => f.id === family).name} encountered. Scout their patrol before fighting to learn its counters.`,
+  );
+}
+function knightFlanked(s, e) {
+  return (
+    s.battle.units.filter(
+      (u) =>
+        s.party[u.id].hp > 0 && Math.abs(u.x - e.x) + Math.abs(u.y - e.y) === 1,
+    ).length >= 2
+  );
+}
+function newEnemyTurn(s, e) {
+  const b = s.battle;
+  if (!newEnemyFamilies.some((f) => f.id === e.kind)) return false;
+  const targets = b.units
+      .filter((u) => s.party[u.id].hp > 0)
+      .sort(
+        (a, c) =>
+          Math.abs(a.x - e.x) +
+          Math.abs(a.y - e.y) -
+          Math.abs(c.x - e.x) -
+          Math.abs(c.y - e.y),
+      ),
+    t = targets[0];
+  if (!t) return false;
+  if (e.kind === "troll") {
+    if (!e.burningThisRound && !e.burn && e.hp < e.max) {
+      e.hp = Math.min(e.max, e.hp + 4);
+      combatCue(s, "heal", e, e);
+      note(
+        s,
+        "The troll regenerates four health. Fire prevents this regeneration.",
+      );
+    }
+    if (e.smash) {
+      const tile = e.smash;
+      e.smash = null;
+      combatCue(s, "smash", e, tile);
+      for (const u of b.units.filter(
+        (u) =>
+          s.party[u.id].hp > 0 &&
+          Math.abs(u.x - tile.x) + Math.abs(u.y - tile.y) <= 1,
+      ))
+        damageCompanion(s, u, 9);
+      note(
+        s,
+        "The troll smashes its marked area. Moving out would have avoided the blow.",
+      );
+      return true;
+    }
+    if (Math.abs(t.x - e.x) + Math.abs(t.y - e.y) <= 2) {
+      e.smash = { x: t.x, y: t.y };
+      note(
+        s,
+        `Troll smash incoming at ${t.x + 1},${t.y + 1} and adjacent tiles. Move before the next enemy turn.`,
+      );
+      return true;
+    }
+  }
+  if (e.kind === "spider" && e.webs > 0) {
+    const x = e.x - 1,
+      y = e.y;
+    if (
+      x >= 0 &&
+      !terrainCell(s, x, y).blocked &&
+      !b.traps.some((v) => !v.used && v.x === x && v.y === y) &&
+      !b.units.some((u) => s.party[u.id].hp > 0 && u.x === x && u.y === y) &&
+      !b.enemies.some((v) => v.hp > 0 && v.x === x && v.y === y)
+    ) {
+      b.traps.push({ x, y, used: false, kind: "web" });
+      e.webs--;
+      combatCue(s, "web", e, { x, y });
+      note(
+        s,
+        "A Silkfang spins a visible web. It snares movement; an Archer or Thief can disarm it.",
+      );
+      return true;
+    }
+  }
+  if (e.kind === "cultist") {
+    if (e.silenced > 0) {
+      e.silenced--;
+      e.casting = null;
+      return true;
+    }
+    if (e.casting) {
+      const tile = e.casting;
+      e.casting = null;
+      const ally = b.enemies.find(
+        (v) => v.hp > 0 && v.x === tile.x && v.y === tile.y,
+      );
+      if (ally && hasLineOfSight(s, e, ally)) {
+        ally.hp = Math.min(ally.max, ally.hp + 8);
+        combatCue(s, "heal", e, ally);
+        note(
+          s,
+          "The cultist's prepared prayer restores eight health to its marked ally.",
+        );
+      }
+      return true;
+    }
+    const ally = b.enemies
+      .filter(
+        (v) =>
+          v !== e &&
+          v.hp > 0 &&
+          v.hp < v.max &&
+          Math.abs(v.x - e.x) + Math.abs(v.y - e.y) <= 4 &&
+          hasLineOfSight(s, e, v),
+      )
+      .sort((a, c) => a.hp / a.max - c.hp / c.max)[0];
+    if (ally && e.mana > 0 && !e.distracted) {
+      e.mana--;
+      e.casting = { x: ally.x, y: ally.y, heal: true };
+      note(
+        s,
+        "The cultist spends a prayer slot and marks an ally. Stun, silence or counter it before the next turn.",
+      );
+      return true;
+    }
+  }
+  if (e.kind === "knight") {
+    e.guard = !knightFlanked(s, e);
+    if (e.charge) {
+      e.charge = null;
+      e.charging = true;
+      return false;
+    }
+    const d = Math.abs(t.x - e.x) + Math.abs(t.y - e.y);
+    if (d >= 3 && d <= 4 && !e.root && hasLineOfSight(s, e, t)) {
+      e.charge = { x: t.x, y: t.y };
+      note(
+        s,
+        "The knight lowers its shield for a charge next turn. Break the line or brace for the approach.",
+      );
+      return true;
+    }
+  }
+  return false;
+}
+function newEnemyReport(s, e) {
+  const f = newEnemyFamilies.find((v) => v.id === e.kind);
+  return `${f?.counter || ""}${e.kind === "cultist" ? ` Prayer slots ${e.mana || 0}/2${e.casting ? " · PRAYER PREPARED" : ""}` : ""}${e.kind === "knight" ? ` Shield ${knightFlanked(s, e) ? "flanked" : "holding"}${e.charge ? " · CHARGE PREPARED" : ""}` : ""}${e.kind === "troll" && e.smash ? " · SMASH PREPARED" : ""}`;
+}
+function scoutEnemyLock(s, id) {
+  const p = s.patrols.find((p) => p.id === id && !p.cleared),
+    f = newEnemyFamilies.find((f) => f.id === p?.enemyFamily);
+  return !p || !f
+    ? "No new enemy patrol here."
+    : s.battle || s.event || s.campOpen || companyLost(s)
+      ? "Return to free exploration."
+      : !companyScout(s)
+        ? "Requires a conscious Archer or Thief."
+        : Math.hypot(p.x - s.position.x, p.y - s.position.y) > 125
+          ? "Approach within 125 pixels to scout the patrol."
+          : s.chronicle.scouted[id]
+            ? "Already scouted."
+            : null;
+}
+function scoutEnemy(s, id) {
+  if (scoutEnemyLock(s, id)) return false;
+  const p = s.patrols.find((p) => p.id === id),
+    f = newEnemyFamilies.find((f) => f.id === p.enemyFamily);
+  spendHours(s, 1);
+  s.chronicle.scouted[id] = true;
+  s.knowledge++;
+  note(s, `${f.name}: ${f.counter}`);
+  return true;
+}
+function recordNewEnemyVictory(s) {
+  const f = newEnemyFamilies.find((f) => f.id === s.battle?.enemyFamily);
+  if (f) s.chronicle.kills[f.id] = (s.chronicle.kills[f.id] || 0) + 1;
+}
+function combatCue(s, type, from, to) {
+  const b = s.battle;
+  if (!b) return;
+  b.feedback ||= [];
+  b.fxSerial = (b.fxSerial || 0) + 1;
+  b.feedback.push({
+    id: b.fxSerial,
+    type,
+    from: { x: from.x, y: from.y },
+    to: { x: to.x, y: to.y },
+  });
+  b.feedback = b.feedback.slice(-30);
+}
+function battleStatuses(s, entity, side = "enemy") {
+  const u = entity,
+    p = side === "party" ? s.party[u.id] : null,
+    flags = [];
+  if (u.stun) flags.push("Stunned");
+  if (u.root || u.snared) flags.push("Rooted");
+  if (
+    u.silenced ||
+    s.battle?.realmMagic?.surfaces.some(
+      (v) =>
+        v.kind === "silence" && Math.abs(v.x - u.x) + Math.abs(v.y - u.y) <= 1,
+    )
+  )
+    flags.push("Silenced");
+  if (u.poison) flags.push("Poisoned");
+  if (u.burn) flags.push("Burning");
+  if (u.bleed) flags.push("Bleeding");
+  if (u.guard) flags.push("Braced");
+  if (u.arcaneWard) flags.push("Warded");
+  if (u.surrenderOffer) flags.push("Surrender");
+  if (u.fleeing) flags.push("Fleeing");
+  if (u.exposed) flags.push("Marked");
+  if (u.casting) flags.push("Channeling");
+  if (u.smash || u.charge) flags.push("Windup");
+  if (p?.wound)
+    flags.push(
+      woundTypes.find((w) => w.id === p.wound.type)?.name || "Wounded",
+    );
+  if (terrainCell(s, u.x, u.y).cover > 0) flags.push("Cover");
+  return flags;
+}
+function resolveCompanyPoison(s) {
+  for (const u of s.battle.units) {
+    if (u.poison > 0 && s.party[u.id].hp > 0) {
+      damageCompanion(
+        s,
+        u,
+        2 +
+          armorPower(s, s.party[u.id]) +
+          (s.party[u.id].role === "Shieldbearer" ? 2 : 0),
+      );
+      u.poison--;
+      note(
+        s,
+        `${s.party[u.id].name} suffers venom damage. Healing magic cleanses it.`,
+      );
+    }
+  }
+}
+
+const woundTypes = [
+  {
+    id: "sprain",
+    name: "Sprained leg",
+    desc: "One fewer movement tile, down to a minimum of one.",
+  },
+  {
+    id: "eye",
+    name: "Damaged aim",
+    desc: "Two less attack power until recovered.",
+  },
+  {
+    id: "concussion",
+    name: "Concussion",
+    desc: "Cannot cast level-two spells until recovered.",
+  },
+  {
+    id: "infection",
+    name: "Infected wound",
+    desc: "Untreated: lose two health and gain five fatigue daily; damage cannot kill outright.",
+  },
+];
+function inflictWound(s, id, type, severity = 1) {
+  const p = s.party[id];
+  if (
+    !Number.isFinite(severity) ||
+    !p ||
+    p.dead ||
+    p.wound ||
+    !woundTypes.some((w) => w.id === type)
+  )
+    return false;
+  const n = Math.max(1, Math.min(3, Math.floor(severity)));
+  p.wound = { type, severity: n, remaining: n * 24, treated: false };
+  p.injury = true;
+  note(
+    s,
+    `${p.name} suffers ${woundTypes.find((w) => w.id === type).name.toLowerCase()}. Treatment and fed rest are needed.`,
+  );
+  return true;
+}
+function recordBattleWound(s, p, before, damage, ranged) {
+  if (p.wound || p.dead || before <= 0) return;
+  if (p.hp === 0 || (damage >= 8 && p.hp < p.max / 2)) {
+    const type = isCaster(p)
+      ? "concussion"
+      : p.role === "Archer"
+        ? "eye"
+        : ranged
+          ? "infection"
+          : "sprain";
+    inflictWound(s, p.id, type, p.hp === 0 ? 2 : 1);
+  }
+}
+function progressWounds(s, hours) {
+  if (!Number.isFinite(hours) || hours <= 0) return;
+  for (const p of livingParty(s)) {
+    if (!p.wound) continue;
+    p.wound.remaining = Math.max(
+      0,
+      p.wound.remaining - hours * (p.wound.treated ? 1 : 0.25),
+    );
+    if (p.wound.remaining === 0) {
+      p.wound = null;
+      if (p.hp >= p.max / 2) p.injury = false;
+      note(s, `${p.name}'s lasting wound has recovered.`);
+    }
+  }
+}
+function woundTreatmentLock(s, id, method) {
+  const p = s.party[id];
+  if (
+    !p ||
+    p.dead ||
+    !p.wound ||
+    s.battle ||
+    (s.event && s.event.kind !== "home") ||
+    companyLost(s)
+  )
+    return "Treat a living wounded companion outside combat.";
+  if (method === "bandage")
+    return s.inventory.medicine < 1
+      ? "Requires one medicine and two hours."
+      : null;
+  if (method === "herbal")
+    return !professional(s, "Herbalist")
+      ? "Requires a conscious Herbalist."
+      : s.inventory.herbs < 3
+        ? "Requires three herbs and three hours."
+        : null;
+  if (method === "surgery")
+    return s.campOpen || places[s.location]?.type !== "town"
+      ? "Visit a village surgeon."
+      : townAccessLock(s) ||
+          (s.gold < 40 || s.inventory.medicine < 1
+            ? "Requires forty crowns, one medicine and six hours."
+            : null);
+  return "Unknown treatment.";
+}
+function treatWound(s, id, method) {
+  if (woundTreatmentLock(s, id, method)) return false;
+  const p = s.party[id];
+  p.wound.treated = true;
+  if (method === "bandage") {
+    s.inventory.medicine--;
+    p.wound.remaining = Math.min(p.wound.remaining, 24);
+    spendHours(s, 2, { resting: true });
+  }
+  if (method === "herbal") {
+    s.inventory.herbs -= 3;
+    p.wound.remaining = Math.max(1, p.wound.remaining - 12);
+    practice(s, professional(s, "Herbalist"), 1);
+    spendHours(s, 3, { resting: true });
+  }
+  if (method === "surgery") {
+    s.gold -= 40;
+    s.inventory.medicine--;
+    spendHours(s, 6, { resting: true });
+    p.wound = null;
+    p.injury = false;
+  }
+  if (!p.dead) p.hp = Math.min(p.max, p.hp + 4);
+  note(
+    s,
+    `${p.name}: ${method} treatment; ${p.wound ? `${Math.ceil(p.wound.remaining)} hours of fed rest still needed` : "lasting wound healed"}.`,
+  );
+  return true;
+}
+
+const heraldicCharges = [
+  { id: "sun", name: "Sun", symbol: "☀" },
+  { id: "tower", name: "Tower", symbol: "▥" },
+  { id: "wolf", name: "Wolf", symbol: "◆" },
+  { id: "star", name: "Star", symbol: "✦" },
+  { id: "leaf", name: "Leaf", symbol: "♠" },
+];
+const heraldicTrims = [
+  { id: "gold", name: "Gold", color: "#d8bb75" },
+  { id: "silver", name: "Silver", color: "#c6d3cf" },
+  { id: "bone", name: "Bone", color: "#e4d6af" },
+];
+const earnedTitles = [
+  {
+    id: "roadwardens",
+    name: "Roadwardens",
+    faction: "wardens",
+    desc: "Earned by clearing Briarhide or a fantasy stronghold. Friendly Wardens recognize the title.",
+  },
+  {
+    id: "leaguefriends",
+    name: "League Friends",
+    faction: "guild",
+    desc: "Earned at fifteen League reputation. Friendly League merchants reduce prices by five percent.",
+  },
+  {
+    id: "grovekeepers",
+    name: "Grovekeepers",
+    faction: "freefolk",
+    desc: "Earned at fifteen Freefolk reputation. Grove communities recognize your protection.",
+  },
+  {
+    id: "monsterhunters",
+    name: "Monster Hunters",
+    faction: "wardens",
+    desc: "Earned after defeating two of the new enemy families.",
+  },
+];
+function titleUnlocked(s, id) {
+  return id === "roadwardens"
+    ? s.strongholds.briar.cleared ||
+        fantasyStrongholds.some((h) => realmHold(s, h.id).cleared)
+    : id === "leaguefriends"
+      ? s.reputation.guild >= 15
+      : id === "grovekeepers"
+        ? s.reputation.freefolk >= 15
+        : id === "monsterhunters"
+          ? Object.keys(s.chronicle.kills).filter(
+              (k) => s.chronicle.kills[k] > 0,
+            ).length >= 2
+          : false;
+}
+function customizeHeraldry(s, field, charge, trim) {
+  if (
+    s.battle ||
+    s.event ||
+    companyLost(s) ||
+    !companyBanners.some((b) => b.id === field) ||
+    !heraldicCharges.some((c) => c.id === charge) ||
+    !heraldicTrims.some((t) => t.id === trim)
+  )
+    return false;
+  s.chronicle.heraldry = { ...s.chronicle.heraldry, field, charge, trim };
+  note(s, "Company heraldry updated. The banner travels with the company.");
+  return true;
+}
+function adoptTitle(s, id) {
+  if (
+    s.battle ||
+    s.event ||
+    companyLost(s) ||
+    (id !== null && !titleUnlocked(s, id))
+  )
+    return false;
+  s.chronicle.heraldry.title = id;
+  note(
+    s,
+    id
+      ? `The company adopts the title ${earnedTitles.find((t) => t.id === id).name}.`
+      : "The company travels under its name alone.",
+  );
+  return true;
+}
+function companyTitlePrice(s) {
+  return s.chronicle?.heraldry.title === "leaguefriends" &&
+    titleUnlocked(s, "leaguefriends") &&
+    s.reputation.guild >= 15
+    ? 0.95
+    : 1;
+}
+function factionReaction(s, id) {
+  const f = factions.find((f) => f.id === id),
+    standing = s.reputation[id],
+    title = earnedTitles.find((t) => t.id === s.chronicle.heraldry.title);
+  return standing <= -10
+    ? `${f.name} remembers the company's hostile actions; your banner brings suspicion.`
+    : title?.faction === id && titleUnlocked(s, title.id)
+      ? `${f.name} recognizes the ${title.name}. ${id === "guild" ? "League Friends receive a further five-percent purchase discount." : "Your earned title is welcomed, but services still follow local reputation."}`
+      : standing >= 10
+        ? `${f.name} welcomes your company banner as a known ally.`
+        : `${f.name} knows the company by its deeds, and awaits proof of trust.`;
+}
+
+function nearestVillage(point) {
+  return [0, 3, 6].sort(
+    (a, b) =>
+      Math.hypot(point.x - places[a].x, point.y - places[a].y) -
+      Math.hypot(point.x - places[b].x, point.y - places[b].y),
+  )[0];
+}
+function townCondition(s, id = s.location) {
+  return s.chronicle.towns[id]?.condition ?? 55;
+}
+function townConditionLabel(s, id = s.location) {
+  const n = townCondition(s, id);
+  return n < 35 ? "Struggling" : n >= 80 ? "Thriving" : "Recovering";
+}
+function changeTownCondition(s, id, amount) {
+  const t = s.chronicle.towns[id];
+  if (t) t.condition = Math.max(10, Math.min(100, t.condition + amount));
+}
+function livingPriceModifier(s) {
+  return townCondition(s) < 35 ? 1.15 : townCondition(s) >= 80 ? 0.9 : 1;
+}
+function regionalThreats(s, id) {
+  const p = places[id];
+  return s.patrols.filter(
+    (v) =>
+      !v.cleared &&
+      !v.faction &&
+      ["bandits", "fantasy"].includes(v.kind) &&
+      Math.hypot(p.x - v.x, p.y - v.y) < 260,
+  ).length;
+}
+function updateLivingWorld(s) {
+  const c = s.chronicle;
+  if (c.lastWorldDay >= s.day) return false;
+  const days = Math.min(30, s.day - c.lastWorldDay);
+  c.lastWorldDay = s.day;
+  for (const id of [0, 3, 6]) {
+    const pressure = regionalThreats(s, id);
+    changeTownCondition(
+      s,
+      id,
+      (pressure
+        ? Math.max(-4, -pressure * 2)
+        : s.travelers.farmRebuilt
+          ? 3
+          : 2) * days,
+    );
+  }
+  for (const [id, state] of Object.entries(c.settlements))
+    if (!state.arrived && s.day - state.clearedDay >= 3) {
+      state.arrived = true;
+      changeTownCondition(s, nearestVillage(places[state.site]), 8);
+      note(
+        s,
+        `Settlers arrive at ${places[state.site].name}. The former stronghold now offers supplies and a chance to help rebuild.`,
+      );
+    }
+  updateWorldRoutes(s);
+  return true;
+}
+function townAidLock(s, action) {
+  if (
+    s.battle ||
+    s.event ||
+    s.campOpen ||
+    companyLost(s) ||
+    ![0, 3, 6].includes(s.location) ||
+    townAccessLock(s)
+  )
+    return "Visit an accessible village.";
+  if (s.chronicle.towns[s.location].aidDay === s.day)
+    return "The village has already received aid today.";
+  return action === "repair"
+    ? s.gold < 20 || s.inventory.wood < 3
+      ? "Requires twenty crowns, three timber and two hours."
+      : null
+    : action === "food"
+      ? s.food < 6
+        ? "Requires six rations and one hour."
+        : null
+      : "Unknown village aid.";
+}
+function aidVillage(s, action) {
+  if (townAidLock(s, action)) return false;
+  const id = s.location;
+  s.chronicle.towns[id].aidDay = s.day;
+  if (action === "repair") {
+    s.gold -= 20;
+    s.inventory.wood -= 3;
+    spendHours(s, 2);
+    changeTownCondition(s, id, 12);
+  } else {
+    s.food -= 6;
+    spendHours(s, 1);
+    changeTownCondition(s, id, 8);
+  }
+  changeReputation(s, territoryOwner(s, id) || "freefolk", 2);
+  note(
+    s,
+    `${places[id].name} improves to ${townConditionLabel(s, id)} (${townCondition(s, id)}/100).`,
+  );
+  return true;
+}
+function markResettlement(s, id, site) {
+  if (!s.chronicle.settlements[id])
+    s.chronicle.settlements[id] = {
+      site,
+      clearedDay: s.day,
+      arrived: false,
+      tradeDay: 0,
+      helped: false,
+    };
+}
+function settlementLock(s, id, action) {
+  const q = s.chronicle.settlements[id];
+  if (
+    !q?.arrived ||
+    q.site !== s.location ||
+    s.battle ||
+    s.event ||
+    s.campOpen ||
+    companyLost(s)
+  )
+    return "Visit a resettled stronghold outside an encounter.";
+  return action === "trade"
+    ? q.tradeDay === s.day
+      ? "Settler supplies have already been purchased today."
+      : s.gold < 8
+        ? "Requires eight crowns."
+        : null
+    : action === "rebuild"
+      ? q.helped
+        ? "The settlement has already been rebuilt."
+        : s.gold < 25 || s.inventory.wood < 5
+          ? "Requires twenty-five crowns, five timber and four hours."
+          : null
+      : "Unknown settler action.";
+}
+function helpSettlement(s, id, action) {
+  if (settlementLock(s, id, action)) return false;
+  const q = s.chronicle.settlements[id];
+  if (action === "trade") {
+    q.tradeDay = s.day;
+    s.gold -= 8;
+    s.food += 6;
+  } else {
+    q.helped = true;
+    s.gold -= 25;
+    s.inventory.wood -= 5;
+    spendHours(s, 4);
+    s.knowledge += 2;
+    changeTownCondition(s, nearestVillage(places[q.site]), 10);
+    changeReputation(s, "freefolk", 3);
+  }
+  note(
+    s,
+    `${places[q.site].name}: ${action === "trade" ? "settlers sell six rations" : "the company helps build permanent roofs and fences"}.`,
+  );
+  return true;
+}
+function updateWorldRoutes(s) {
+  if (s.day < 2) return;
+  for (const p of s.patrols.filter(
+    (p) =>
+      p.kind === "merchant" &&
+      !p.cleared &&
+      !p.hostile &&
+      !p.raid &&
+      p.id !== s.caravanEscort?.patrolId,
+  )) {
+    const original = initialPatrols().find((v) => v.id === p.id);
+    if (!original) continue;
+    const danger = s.patrols.some(
+      (v) =>
+        !v.cleared &&
+        !v.faction &&
+        v.kind === "bandits" &&
+        original.route.some(
+          (point) =>
+            Math.hypot(point.x - v.x, point.y - v.y) < (p.detoured ? 180 : 120),
+        ),
+    );
+    if ((s.chronicle.routes[p.id] || false) === danger) continue;
+    s.chronicle.routes[p.id] = danger;
+    p.route = original.route.map((point) => ({
+      x: point.x,
+      y: Math.max(
+        20,
+        Math.min(WORLD.height - 20, point.y + (danger ? -120 : 0)),
+      ),
+    }));
+    p.waypoint = 0;
+    p.detoured = danger;
+    note(
+      s,
+      `${p.name} ${danger ? "takes a northern detour around active raiders" : "returns to its original route as the road becomes safer"}.`,
+    );
+  }
+}
+function restoreChronicle(s, raw) {
+  const c = freshChronicle(),
+    r = raw.chronicle || {},
+    number = (v, min, max, fallback) =>
+      Number.isFinite(v) ? Math.max(min, Math.min(max, v)) : fallback;
+  c.lastWorldDay = Math.floor(number(r.lastWorldDay, 1, s.day, s.day));
+  for (const p of s.party) {
+    const w = raw.party[p.id]?.wound;
+    p.wound =
+      w &&
+      woundTypes.some((t) => t.id === w.type) &&
+      Number.isFinite(w.remaining) &&
+      w.remaining > 0
+        ? {
+            type: w.type,
+            severity: Math.floor(number(w.severity, 1, 3, 1)),
+            remaining: number(w.remaining, 1, 72, 24),
+            treated: w.treated === true,
+          }
+        : null;
+  }
+  const h = r.heraldry || {};
+  c.heraldry = {
+    field: companyBanners.some((v) => v.id === h.field) ? h.field : s.banner,
+    charge: heraldicCharges.some((v) => v.id === h.charge) ? h.charge : "sun",
+    trim: heraldicTrims.some((v) => v.id === h.trim) ? h.trim : "gold",
+    title: earnedTitles.some((v) => v.id === h.title) ? h.title : null,
+  };
+  for (const id of [0, 3, 6])
+    c.towns[id] = {
+      condition: Math.floor(
+        number(r.towns?.[id]?.condition, 10, 100, c.towns[id].condition),
+      ),
+      aidDay: Math.floor(number(r.towns?.[id]?.aidDay, 0, s.day, 0)),
+    };
+  for (const [id, site] of [
+    ["briar", 12],
+    ...fantasyStrongholds.map((h) => [h.id, h.site]),
+  ]) {
+    const q = r.settlements?.[id],
+      cleared =
+        id === "briar" ? s.strongholds.briar.cleared : realmHold(s, id).cleared;
+    if (cleared)
+      c.settlements[id] = {
+        site,
+        clearedDay: Math.floor(number(q?.clearedDay, 1, s.day, s.day)),
+        arrived:
+          q?.arrived === true &&
+          s.day - Math.floor(number(q?.clearedDay, 1, s.day, s.day)) >= 3,
+        tradeDay: Math.floor(number(q?.tradeDay, 0, s.day, 0)),
+        helped: q?.helped === true,
+      };
+  }
+  for (const f of newEnemyFamilies) {
+    c.kills[f.id] = Math.floor(number(r.kills?.[f.id], 0, 1000, 0));
+    if (r.scouted?.[`new-${f.id}`] === true) c.scouted[`new-${f.id}`] = true;
+  }
+  s.chronicle = c;
+  if (c.heraldry.title && !titleUnlocked(s, c.heraldry.title))
+    c.heraldry.title = null;
+  for (const p of s.patrols.filter((p) => p.kind === "merchant")) {
+    if (r.routes?.[p.id] === true && p.id !== s.caravanEscort?.patrolId) {
+      c.routes[p.id] = true;
+      const original = initialPatrols().find((v) => v.id === p.id);
+      p.route = original.route.map((point) => ({
+        ...point,
+        y: Math.max(20, Math.min(WORLD.height - 20, point.y - 120)),
+      }));
+      p.detoured = true;
+    }
+  }
+  if (s.battle) {
+    s.battle.feedback = [];
+    s.battle.fxSerial = 0;
+    for (const u of s.battle.units)
+      u.poison = Math.floor(number(u.poison, 0, 2, 0));
+    for (const e of s.battle.enemies) {
+      e.webs = Math.floor(number(e.webs, 0, 2, 0));
+      if (e.kind === "cultist") {
+        e.mana = Math.floor(number(e.mana, 0, 2, 2));
+        const a = e.casting;
+        e.casting =
+          a &&
+          Number.isInteger(a.x) &&
+          Number.isInteger(a.y) &&
+          a.x >= 0 &&
+          a.x < 9 &&
+          a.y >= 0 &&
+          a.y < 7
+            ? { x: a.x, y: a.y, heal: true }
+            : null;
+      }
+      for (const key of ["smash", "charge"]) {
+        const a = e[key];
+        e[key] =
+          a &&
+          Number.isInteger(a.x) &&
+          Number.isInteger(a.y) &&
+          a.x >= 0 &&
+          a.x < 9 &&
+          a.y >= 0 &&
+          a.y < 7
+            ? { x: a.x, y: a.y }
+            : null;
+      }
+    }
+    for (const t of s.battle.traps || [])
+      t.kind =
+        raw.battle?.traps?.find((v) => v.x === t.x && v.y === t.y)?.kind ===
+        "web"
+          ? "web"
+          : "snare";
   }
 }
 
@@ -14762,7 +15744,56 @@ function chestPreview(contents) {
 function drawFantasyEnemy(c, kind, x, y) {
   c.save();
   pixel(c, x - 11, y + 13, 23, 4, "#46513b66");
-  if (kind === "skeleton") {
+  if (["troll", "spider", "cultist", "knight"].includes(kind)) {
+    if (kind === "troll") {
+      pixel(c, x - 14, y - 14, 28, 25, "#697f58");
+      pixel(c, x - 9, y - 26, 20, 15, "#8d9a6d");
+      pixel(c, x - 20, y - 9, 8, 23, "#788b5d");
+      pixel(c, x + 12, y - 9, 8, 23, "#788b5d");
+      pixel(c, x - 12, y + 10, 8, 8, "#4b5d43");
+      pixel(c, x + 5, y + 10, 8, 8, "#4b5d43");
+      pixel(c, x - 5, y - 22, 3, 3, "#e3bc72");
+      pixel(c, x + 5, y - 22, 3, 3, "#e3bc72");
+      pixel(c, x - 4, y - 15, 11, 3, "#ded3b0");
+      pixel(c, x + 19, y - 1, 6, 22, "#816649");
+    }
+    if (kind === "spider") {
+      for (let i = 0; i < 4; i++) {
+        let dy = -10 + i * 7;
+        pixel(c, x - 21, y + dy, 13, 3, "#554a50");
+        pixel(c, x + 9, y + dy, 13, 3, "#554a50");
+        pixel(c, x - 24, y + dy - 4, 4, 8, "#554a50");
+        pixel(c, x + 21, y + dy - 4, 4, 8, "#554a50");
+      }
+      pixel(c, x - 10, y - 9, 21, 18, "#675a65");
+      pixel(c, x - 6, y + 6, 13, 10, "#877c84");
+      pixel(c, x - 4, y + 8, 3, 3, "#d1a15d");
+      pixel(c, x + 3, y + 8, 3, 3, "#d1a15d");
+      pixel(c, x - 9, y - 6, 5, 10, "#958991");
+    }
+    if (kind === "cultist") {
+      pixel(c, x - 8, y - 22, 17, 14, "#534959");
+      pixel(c, x - 4, y - 15, 9, 8, "#b6a583");
+      pixel(c, x - 9, y - 7, 19, 24, "#75616b");
+      pixel(c, x - 3, y - 7, 5, 24, "#a78976");
+      pixel(c, x - 4, y - 13, 9, 3, "#393a38");
+      pixel(c, x + 13, y - 8, 2, 25, "#917a53");
+      pixel(c, x + 9, y - 12, 10, 5, "#a6a58a");
+      pixel(c, x - 13, y + 1, 7, 10, "#b9aa89");
+    }
+    if (kind === "knight") {
+      pixel(c, x - 7, y - 23, 15, 15, "#909c98");
+      pixel(c, x - 5, y - 17, 11, 3, "#3e4a48");
+      pixel(c, x - 9, y - 7, 19, 20, "#737f7c");
+      pixel(c, x - 5, y - 5, 11, 13, "#aab4a4");
+      pixel(c, x - 8, y + 12, 6, 7, "#465450");
+      pixel(c, x + 3, y + 12, 6, 7, "#465450");
+      pixel(c, x - 18, y - 7, 11, 23, "#536867");
+      pixel(c, x - 16, y - 5, 7, 19, "#a49b70");
+      pixel(c, x + 13, y - 16, 3, 28, "#d0d4bb");
+      pixel(c, x + 9, y + 4, 11, 3, "#9c8354");
+    }
+  } else if (kind === "skeleton") {
     pixel(c, x - 6, y - 17, 13, 10, "#d6d3ad");
     pixel(c, x - 4, y - 14, 3, 3, "#424b3c");
     pixel(c, x + 2, y - 14, 3, 3, "#424b3c");
@@ -14849,6 +15880,108 @@ function drawCompanyHome(c, s) {
   c.font = "bold 14px monospace";
   c.textAlign = "center";
   c.fillText(`WAYFARER ${h.style === "farm" ? "FARM" : "LODGE"}`, 384, 55);
+}
+
+function drawCompanyBanner(c, s, x, y, scale = 1) {
+  const h = s.chronicle?.heraldry;
+  if (!h) return;
+  const fields = {
+      ashen: "#ad8057",
+      pine: "#72825a",
+      iron: "#85948c",
+      wine: "#986267",
+    },
+    trims = { gold: "#d8bb75", silver: "#c6d3cf", bone: "#e4d6af" };
+  c.save();
+  c.translate(x, y);
+  c.scale(scale, scale);
+  pixel(c, 0, 0, 2, 30, "#65533f");
+  pixel(c, 2, 2, 18, 19, trims[h.trim]);
+  pixel(c, 4, 4, 14, 15, fields[h.field]);
+  const shapes = {
+    sun: [
+      "0011100",
+      "0101010",
+      "1111111",
+      "0111110",
+      "1111111",
+      "0101010",
+      "0011100",
+    ],
+    tower: [
+      "1010101",
+      "1111111",
+      "0111110",
+      "0110110",
+      "0110110",
+      "0110110",
+      "1111111",
+    ],
+    wolf: [
+      "1100011",
+      "1110111",
+      "0111110",
+      "0110110",
+      "0011100",
+      "0011100",
+      "0001000",
+    ],
+    star: [
+      "0001000",
+      "0011100",
+      "1111111",
+      "0111110",
+      "0011100",
+      "0110110",
+      "0100010",
+    ],
+    leaf: [
+      "0001100",
+      "0011110",
+      "0111110",
+      "1111100",
+      "0111000",
+      "0010000",
+      "0100000",
+    ],
+  };
+  for (const [row, line] of (shapes[h.charge] || shapes.sun).entries())
+    for (let col = 0; col < line.length; col++)
+      if (line[col] === "1") pixel(c, 7 + col, 8 + row, 1, 1, trims[h.trim]);
+  c.restore();
+}
+function drawLivingPlace(c, s, p, id) {
+  const t = s.chronicle?.towns[id];
+  if (t) {
+    if (t.condition < 35) {
+      pixel(c, p.x - 40, p.y + 27, 25, 3, "#765f48");
+      pixel(c, p.x - 35, p.y + 15, 3, 18, "#765f48");
+      pixel(c, p.x - 13, p.y + 19, 3, 14, "#765f48");
+      pixel(c, p.x + 17, p.y + 30, 12, 7, "#9c8867");
+      pixel(c, p.x - 20, p.y - 25, 6, 12, "#534e3d");
+    } else if (t.condition >= 80) {
+      for (let i = 0; i < 4; i++) {
+        pixel(c, p.x - 42 + i * 12, p.y + 34, 5, 4, "#c6ac74");
+        pixel(c, p.x - 41 + i * 12, p.y + 32, 3, 3, "#986267");
+      }
+      pixel(c, p.x + 24, p.y + 15, 18, 12, "#a88956");
+      pixel(c, p.x + 25, p.y + 13, 16, 3, "#d6bd80");
+      pixel(c, p.x + 28, p.y + 8, 4, 5, "#759058");
+    }
+  }
+  const q = Object.values(s.chronicle?.settlements || {}).find(
+    (q) => q.site === id && q.arrived,
+  );
+  if (q) {
+    house(c, p.x + 38, p.y + 7, q.helped ? "#927551" : "#8b8d71");
+    fence(c, p.x - 30, p.y + 30, q.helped ? 90 : 45);
+    pixel(c, p.x + 2, p.y + 15, 13, 10, "#9b8056");
+    pixel(c, p.x + 5, p.y + 12, 7, 4, "#c4b185");
+    drawCharacter(c, p.x + 18, p.y + 29, "#899365", 0, "", 0, {
+      gender: "female",
+    });
+    drawMapLabel(c, q.helped ? "REBUILT" : "SETTLERS", p.x, p.y - 48, true);
+  }
 }
 
 let gameActive = false;
@@ -14998,13 +16131,17 @@ function objective() {
 let battleVisual = null,
   visualSnapshot = new Map(),
   combatEffects = [],
-  combatMotion = new Map();
+  combatMotion = new Map(),
+  attackEffects = [],
+  lastCue = 0;
 function captureCombatFeedback() {
   if (battleVisual !== s.battle) {
     battleVisual = s.battle;
     visualSnapshot = new Map();
     combatMotion.clear();
     combatEffects = [];
+    attackEffects = [];
+    lastCue = 0;
   }
   if (!s.battle) return;
   const now = performance.now(),
@@ -15026,6 +16163,11 @@ function captureCombatFeedback() {
     next.set(e.key, { x: e.x, y: e.y, hp: e.hp });
   }
   visualSnapshot = next;
+  for (const cue of s.battle.feedback || [])
+    if (cue.id > lastCue) {
+      attackEffects.push({ ...cue, start: now });
+      lastCue = cue.id;
+    }
 }
 function combatPosition(key, entity) {
   const motion = combatMotion.get(key);
@@ -15039,6 +16181,7 @@ function combatPosition(key, entity) {
   };
 }
 function drawCombatEffects() {
+  drawAttackEffects();
   const now = performance.now();
   combatEffects = combatEffects.filter((e) => now - e.start < 950);
   for (const e of combatEffects) {
@@ -15115,9 +16258,16 @@ function render() {
     spellMode = null;
   captureCombatFeedback();
   document.querySelector(".brand small").textContent =
-    s.companyName.toUpperCase();
+    `${s.companyName}${s.chronicle.heraldry.title ? " · " + earnedTitles.find((t) => t.id === s.chronicle.heraldry.title).name : ""}`.toUpperCase();
   document.querySelector(".brand-mark").textContent =
-    companyBanners.find((b) => b.id === s.banner)?.symbol || "✦";
+    heraldicCharges.find((b) => b.id === s.chronicle.heraldry.charge)?.symbol ||
+    "✦";
+  document.querySelector(".brand-mark").style.color = heraldicTrims.find(
+    (t) => t.id === s.chronicle.heraldry.trim,
+  ).color;
+  document.querySelector(".brand-mark").style.background = companyBanners.find(
+    (b) => b.id === s.chronicle.heraldry.field,
+  ).color;
   if (companyLost(s)) {
     tab = "Company";
     drawerOpen = true;
@@ -15245,6 +16395,7 @@ function render() {
   if (tab === "Company") {
     appendExpeditionCompany(panel);
     appendOdysseyCompany(panel);
+    appendChronicleCompany(panel);
     appendRealmCompany(panel);
     appendTravelJobs(panel);
     appendWagonPanel(panel);
@@ -15624,6 +16775,7 @@ function render() {
   }
   if (tab === "Camp") {
     appendContinuationPanel(panel);
+    appendWoundPanel(panel);
     if (s.odyssey.prisoners.length) appendPrisoners(panel);
     appendWagonPanel(panel);
     appendTravelJobs(panel);
@@ -16181,6 +17333,8 @@ function render() {
     if (tab === "Town") {
       appendTerritoryPanel(panel);
       appendRegionalServices(panel);
+      appendLivingVillage(panel);
+      appendWoundPanel(panel);
       if (
         s.location === 0 &&
         s.campaign.phase !== "unstarted" &&
@@ -17096,6 +18250,7 @@ function render() {
     appendMissionCombat(a);
     appendCareerCombat(a);
     appendOdysseyCombat(a);
+    appendBattleConditions(a);
     const actor = s.party[selected],
       unit = s.battle.units.find((u) => u.id === selected),
       skill = skillFor(actor);
@@ -17497,6 +18652,7 @@ function render() {
   }
   appendExpeditionWorld(a);
   appendOdysseyWorld(a);
+  appendChronicleWorld(a);
   appendRealmWorldActions(a);
   const rumorJournal = $("rumor-journal");
   rumorJournal.replaceChildren();
@@ -17630,6 +18786,7 @@ function draw() {
   );
   if (s.campOpen) {
     drawCampScene(ctx, s);
+    drawCompanyBanner(ctx, s, 610, 230, 2);
     return;
   }
   if (s.battle) {
@@ -17732,7 +18889,17 @@ function draw() {
         );
         if (e.kind === "wolf")
           drawWolf(ctx, 136 + visual.x * 62, 28 + visual.y * 60);
-        else if (["goblin", "skeleton", "mage"].includes(e.kind))
+        else if (
+          [
+            "goblin",
+            "skeleton",
+            "mage",
+            "troll",
+            "spider",
+            "cultist",
+            "knight",
+          ].includes(e.kind)
+        )
           drawFantasyEnemy(
             ctx,
             e.kind,
@@ -17830,6 +18997,7 @@ function draw() {
           "#a2b477",
         );
       });
+    drawBattleSignals();
     drawCombatEffects();
     drawLighting(ctx, s, canvas.width, canvas.height);
     drawWeather(ctx, s);
@@ -17851,6 +19019,7 @@ function draw() {
       ctx.restore();
     }
     drawLandmark(ctx, p, i);
+    drawLivingPlace(ctx, s, p, i);
     if (territoryOwner(s, i))
       drawMapLabel(
         ctx,
@@ -17975,6 +19144,7 @@ function draw() {
     });
     rect(point.x - 17 - index * 13, point.y + 14, 5, 1, "#b6b2a1");
   });
+  drawCompanyBanner(ctx, s, s.position.x + 29, s.position.y - 12);
   if (isHidden(s))
     drawMapLabel(ctx, "HIDDEN", s.position.x, s.position.y - 35, true);
   if (s.wagon.owned) {
@@ -18167,7 +19337,7 @@ function animate(time) {
     if (time - motion.start >= 320) combatMotion.delete(key);
   if (
     s.battle &&
-    (combatEffects.length || combatMotion.size) &&
+    (combatEffects.length || attackEffects.length || combatMotion.size) &&
     !document.hidden
   )
     draw();
@@ -19944,6 +21114,282 @@ function appendContinuationPanel(panel) {
     journeys.append(c);
   }
   panel.append(journeys);
+}
+
+function appendWoundPanel(panel) {
+  const wounded = livingParty(s).filter((p) => p.wound);
+  if (!wounded.length) return;
+  const section = fold("Lasting wounds · treatment and recovery", true);
+  for (const p of wounded) {
+    const w = woundTypes.find((w) => w.id === p.wound.type),
+      c = card(`${p.name} · ${w.name}`);
+    const text = document.createElement("p");
+    text.textContent = `${w.desc} ${p.wound.treated ? "Treated" : "Untreated"} · ${Math.ceil(p.wound.remaining)} recovery hours remaining. Fed rest restores one hour per hour after treatment; untreated recovery is four times slower. Empty supplies prevent recovery.`;
+    c.append(text);
+    for (const [method, label] of [
+      ["bandage", "Bandage · 1 medicine, 2h"],
+      ["herbal", "Herbal care · 3 herbs, 3h"],
+      ["surgery", "Surgery · 40 crowns, 1 medicine, 6h"],
+    ])
+      c.append(
+        lockedButton(
+          `${label}: ${p.name}`,
+          () => treatWound(s, p.id, method),
+          woundTreatmentLock(s, p.id, method),
+        ),
+      );
+    section.append(c);
+  }
+  panel.append(section);
+}
+function appendChronicleCompany(panel) {
+  const h = s.chronicle.heraldry,
+    section = fold("Company heraldry and earned titles", true),
+    preview = document.createElement("canvas");
+  preview.width = 96;
+  preview.height = 100;
+  preview.style.width = "96px";
+  preview.setAttribute("aria-label", "Company heraldry preview");
+  drawCompanyBanner(preview.getContext("2d"), s, 25, 8, 3);
+  section.append(preview);
+  const select = (label, items, value) => {
+    const l = document.createElement("label"),
+      el = document.createElement("select");
+    l.textContent = label;
+    el.setAttribute("aria-label", label);
+    for (const item of items) {
+      const o = document.createElement("option");
+      o.value = item.id;
+      o.textContent = item.name;
+      el.append(o);
+    }
+    el.value = value;
+    l.append(el);
+    section.append(l);
+    return el;
+  };
+  const field = select("Banner field", companyBanners, h.field),
+    charge = select("Banner emblem", heraldicCharges, h.charge),
+    trim = select("Banner trim", heraldicTrims, h.trim);
+  section.append(
+    button(
+      "Apply heraldry",
+      () => customizeHeraldry(s, field.value, charge.value, trim.value),
+      !!s.battle || !!s.event,
+    ),
+  );
+  for (const t of earnedTitles) {
+    const c = card(t.name + (h.title === t.id ? " · adopted" : ""));
+    const p = document.createElement("p");
+    p.textContent = t.desc;
+    c.append(
+      p,
+      lockedButton(
+        `Adopt ${t.name}`,
+        () => adoptTitle(s, t.id),
+        titleUnlocked(s, t.id)
+          ? null
+          : "Earn this title through the listed deeds.",
+      ),
+    );
+    section.append(c);
+  }
+  if (h.title)
+    section.append(button("Remove company title", () => adoptTitle(s, null)));
+  panel.append(section);
+  const world = fold("Living villages, factions and settlements");
+  for (const id of [0, 3, 6]) {
+    const p = document.createElement("p");
+    p.textContent = `${places[id].name}: ${townConditionLabel(s, id)} · ${townCondition(s, id)}/100. ${townCondition(s, id) < 35 ? "Shortage prices +15%." : townCondition(s, id) >= 80 ? "Prosperity prices −10%." : "Ordinary prices."}`;
+    world.append(p);
+  }
+  for (const f of factions) {
+    const p = document.createElement("p");
+    p.textContent = factionReaction(s, f.id);
+    world.append(p);
+  }
+  for (const q of Object.values(s.chronicle.settlements)) {
+    const p = document.createElement("p");
+    p.textContent = `${places[q.site].name}: ${q.arrived ? (q.helped ? "Rebuilt settlement" : "Settlers have arrived") : `Settlers expected in ${Math.max(0, 3 - (s.day - q.clearedDay))} days`}.`;
+    world.append(p);
+  }
+  panel.append(world);
+  appendWoundPanel(panel);
+}
+function appendLivingVillage(panel) {
+  const owner = territoryOwner(s, s.location);
+  if (owner) {
+    const greeting = document.createElement("p");
+    greeting.textContent = factionReaction(s, owner);
+    panel.append(greeting);
+  }
+  const c = card(`${townConditionLabel(s)} village · ${townCondition(s)}/100`);
+  const p = document.createElement("p");
+  p.textContent =
+    "Nearby raiders damage prosperity each day. Safe roads, protected trade and donated supplies help villages recover. Struggling markets cost 15% more; thriving markets cost 10% less.";
+  c.append(
+    p,
+    lockedButton(
+      "Repair village · 20 crowns, 3 timber, 2h",
+      () => aidVillage(s, "repair"),
+      townAidLock(s, "repair"),
+    ),
+    lockedButton(
+      "Donate village food · 6 rations, 1h",
+      () => aidVillage(s, "food"),
+      townAidLock(s, "food"),
+    ),
+  );
+  panel.append(c);
+}
+function appendChronicleWorld(a) {
+  if (s.battle || s.event || s.campOpen) return;
+  for (const patrol of s.patrols.filter(
+    (p) =>
+      !p.cleared &&
+      newEnemyFamilies.some((f) => f.id === p.enemyFamily) &&
+      Math.hypot(p.x - s.position.x, p.y - s.position.y) <= 125,
+  )) {
+    const f = newEnemyFamilies.find((f) => f.id === patrol.enemyFamily);
+    a.append(
+      lockedButton(
+        `Scout ${f.name} · 1h`,
+        () => scoutEnemy(s, patrol.id),
+        scoutEnemyLock(s, patrol.id),
+      ),
+    );
+    if (s.chronicle.scouted[patrol.id]) {
+      const p = document.createElement("p");
+      p.textContent = f.counter;
+      a.append(p);
+    }
+  }
+  for (const [id, q] of Object.entries(s.chronicle.settlements))
+    if (q.arrived && q.site === s.location) {
+      a.append(
+        lockedButton(
+          "Trade with settlers · 8 crowns for 6 rations",
+          () => helpSettlement(s, id, "trade"),
+          settlementLock(s, id, "trade"),
+        ),
+        lockedButton(
+          "Rebuild settlement · 25 crowns, 5 timber, 4h",
+          () => helpSettlement(s, id, "rebuild"),
+          settlementLock(s, id, "rebuild"),
+        ),
+      );
+    }
+}
+function appendBattleConditions(a) {
+  const d = fold("Battle conditions and enemy intentions");
+  d.className = "battle-conditions";
+  for (const u of s.battle.units.filter((u) => s.party[u.id].hp > 0)) {
+    const p = document.createElement("p");
+    p.textContent = `${s.party[u.id].name}: ${battleStatuses(s, u, "party").join(" · ") || "Ready"}`;
+    d.append(p);
+  }
+  for (const e of s.battle.enemies.filter((e) => e.hp > 0)) {
+    const p = document.createElement("p");
+    p.textContent = `${e.name || e.kind}: ${battleStatuses(s, e).join(" · ") || "Ready"}. ${newEnemyReport(s, e)}`;
+    d.append(p);
+  }
+  a.append(d);
+}
+function drawBattleSignals() {
+  for (const e of s.battle.enemies.filter((e) => e.hp > 0)) {
+    const mark =
+      e.smash || e.charge || (e.kind === "cultist" ? e.casting : null);
+    if (mark) {
+      ctx.save();
+      ctx.strokeStyle = e.casting ? "#668e59" : "#b65e43";
+      ctx.lineWidth = 3;
+      ctx.strokeRect(109 + mark.x * 62, 4 + mark.y * 60, 51, 49);
+      if (e.smash)
+        for (const [dx, dy] of [
+          [1, 0],
+          [-1, 0],
+          [0, 1],
+          [0, -1],
+        ])
+          if (
+            mark.x + dx >= 0 &&
+            mark.x + dx < 9 &&
+            mark.y + dy >= 0 &&
+            mark.y + dy < 7
+          )
+            ctx.strokeRect(
+              109 + (mark.x + dx) * 62,
+              4 + (mark.y + dy) * 60,
+              51,
+              49,
+            );
+      ctx.restore();
+    }
+    const statuses = battleStatuses(s, e);
+    if (statuses.length)
+      drawMapLabel(
+        ctx,
+        statuses.map((v) => v.slice(0, 3).toUpperCase()).join(" "),
+        136 + e.x * 62,
+        70 + e.y * 60,
+        true,
+      );
+  }
+}
+function drawAttackEffects() {
+  const now = performance.now();
+  attackEffects = attackEffects.filter((e) => now - e.start < 650);
+  for (const e of attackEffects) {
+    const t = (now - e.start) / 650,
+      from = { x: 136 + e.from.x * 62, y: 28 + e.from.y * 60 },
+      to = { x: 136 + e.to.x * 62, y: 28 + e.to.y * 60 };
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, (1 - t) * 3);
+    ctx.lineWidth = 3;
+    ctx.strokeStyle =
+      e.type === "heal"
+        ? "#77a46a"
+        : e.type === "spell"
+          ? "#af8bbb"
+          : "#eed69a";
+    ctx.fillStyle = ctx.strokeStyle;
+    if (e.type === "arrow") {
+      const f = menuSettings.reduceMotion ? 1 : Math.min(1, t * 2),
+        x = from.x + (to.x - from.x) * f,
+        y = from.y + (to.y - from.y) * f;
+      ctx.beginPath();
+      ctx.moveTo(x - 9, y + 3);
+      ctx.lineTo(x + 9, y - 3);
+      ctx.stroke();
+      ctx.fillRect(x + 5, y - 5, 4, 4);
+    } else if (e.type === "strike") {
+      ctx.beginPath();
+      ctx.arc(
+        to.x,
+        to.y,
+        18,
+        menuSettings.reduceMotion ? 0 : t * 4,
+        menuSettings.reduceMotion ? 2 : t * 4 + 2,
+      );
+      ctx.stroke();
+    } else {
+      for (let i = 0; i < 8; i++) {
+        const a = (i * Math.PI) / 4,
+          r = menuSettings.reduceMotion ? 15 : 8 + t * 24;
+        ctx.fillRect(
+          to.x + Math.cos(a) * r - 2,
+          to.y + Math.sin(a) * r - 2,
+          4,
+          4,
+        );
+      }
+      if (e.type === "heal") {
+        ctx.fillRect(to.x - 2, to.y - 9, 4, 18);
+        ctx.fillRect(to.x - 9, to.y - 2, 18, 4);
+      }
+    }
+    ctx.restore();
+  }
 }
 
 })();

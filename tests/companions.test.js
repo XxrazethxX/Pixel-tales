@@ -231,7 +231,7 @@ test("save migration retains personality, bonds and hired offers while sanitizin
   s.lastConversationDay = 1;
   s.party[0].resolve = 20;
   const loaded = restore(JSON.parse(JSON.stringify(s)));
-  assert.equal(loaded.version, 18);
+  assert.equal(loaded.version, 19);
   assert.equal(loaded.party[0].resolve, 20);
   assert.equal(bondValue(loaded, 1, 0), 50);
   assert.equal(loaded.lastConversationDay, 1);

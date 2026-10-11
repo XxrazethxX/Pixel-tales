@@ -1,4 +1,28 @@
 import {
+  newEnemyFamilies,
+  scoutEnemy,
+  scoutEnemyLock,
+  newEnemyReport,
+  battleStatuses,
+  woundTypes,
+  treatWound,
+  woundTreatmentLock,
+  heraldicCharges,
+  heraldicTrims,
+  earnedTitles,
+  titleUnlocked,
+  customizeHeraldry,
+  adoptTitle,
+  factionReaction,
+  townCondition,
+  townConditionLabel,
+  aidVillage,
+  townAidLock,
+  helpSettlement,
+  settlementLock,
+} from "./game.js";
+import { drawCompanyBanner, drawLivingPlace } from "./art.js";
+import {
   tacticalMissions,
   missionLock,
   acceptMission,
@@ -482,13 +506,17 @@ function objective() {
 let battleVisual = null,
   visualSnapshot = new Map(),
   combatEffects = [],
-  combatMotion = new Map();
+  combatMotion = new Map(),
+  attackEffects = [],
+  lastCue = 0;
 function captureCombatFeedback() {
   if (battleVisual !== s.battle) {
     battleVisual = s.battle;
     visualSnapshot = new Map();
     combatMotion.clear();
     combatEffects = [];
+    attackEffects = [];
+    lastCue = 0;
   }
   if (!s.battle) return;
   const now = performance.now(),
@@ -510,6 +538,11 @@ function captureCombatFeedback() {
     next.set(e.key, { x: e.x, y: e.y, hp: e.hp });
   }
   visualSnapshot = next;
+  for (const cue of s.battle.feedback || [])
+    if (cue.id > lastCue) {
+      attackEffects.push({ ...cue, start: now });
+      lastCue = cue.id;
+    }
 }
 function combatPosition(key, entity) {
   const motion = combatMotion.get(key);
@@ -523,6 +556,7 @@ function combatPosition(key, entity) {
   };
 }
 function drawCombatEffects() {
+  drawAttackEffects();
   const now = performance.now();
   combatEffects = combatEffects.filter((e) => now - e.start < 950);
   for (const e of combatEffects) {
@@ -599,9 +633,16 @@ function render() {
     spellMode = null;
   captureCombatFeedback();
   document.querySelector(".brand small").textContent =
-    s.companyName.toUpperCase();
+    `${s.companyName}${s.chronicle.heraldry.title ? " · " + earnedTitles.find((t) => t.id === s.chronicle.heraldry.title).name : ""}`.toUpperCase();
   document.querySelector(".brand-mark").textContent =
-    companyBanners.find((b) => b.id === s.banner)?.symbol || "✦";
+    heraldicCharges.find((b) => b.id === s.chronicle.heraldry.charge)?.symbol ||
+    "✦";
+  document.querySelector(".brand-mark").style.color = heraldicTrims.find(
+    (t) => t.id === s.chronicle.heraldry.trim,
+  ).color;
+  document.querySelector(".brand-mark").style.background = companyBanners.find(
+    (b) => b.id === s.chronicle.heraldry.field,
+  ).color;
   if (companyLost(s)) {
     tab = "Company";
     drawerOpen = true;
@@ -729,6 +770,7 @@ function render() {
   if (tab === "Company") {
     appendExpeditionCompany(panel);
     appendOdysseyCompany(panel);
+    appendChronicleCompany(panel);
     appendRealmCompany(panel);
     appendTravelJobs(panel);
     appendWagonPanel(panel);
@@ -1108,6 +1150,7 @@ function render() {
   }
   if (tab === "Camp") {
     appendContinuationPanel(panel);
+    appendWoundPanel(panel);
     if (s.odyssey.prisoners.length) appendPrisoners(panel);
     appendWagonPanel(panel);
     appendTravelJobs(panel);
@@ -1665,6 +1708,8 @@ function render() {
     if (tab === "Town") {
       appendTerritoryPanel(panel);
       appendRegionalServices(panel);
+      appendLivingVillage(panel);
+      appendWoundPanel(panel);
       if (
         s.location === 0 &&
         s.campaign.phase !== "unstarted" &&
@@ -2580,6 +2625,7 @@ function render() {
     appendMissionCombat(a);
     appendCareerCombat(a);
     appendOdysseyCombat(a);
+    appendBattleConditions(a);
     const actor = s.party[selected],
       unit = s.battle.units.find((u) => u.id === selected),
       skill = skillFor(actor);
@@ -2981,6 +3027,7 @@ function render() {
   }
   appendExpeditionWorld(a);
   appendOdysseyWorld(a);
+  appendChronicleWorld(a);
   appendRealmWorldActions(a);
   const rumorJournal = $("rumor-journal");
   rumorJournal.replaceChildren();
@@ -3114,6 +3161,7 @@ function draw() {
   );
   if (s.campOpen) {
     drawCampScene(ctx, s);
+    drawCompanyBanner(ctx, s, 610, 230, 2);
     return;
   }
   if (s.battle) {
@@ -3216,7 +3264,17 @@ function draw() {
         );
         if (e.kind === "wolf")
           drawWolf(ctx, 136 + visual.x * 62, 28 + visual.y * 60);
-        else if (["goblin", "skeleton", "mage"].includes(e.kind))
+        else if (
+          [
+            "goblin",
+            "skeleton",
+            "mage",
+            "troll",
+            "spider",
+            "cultist",
+            "knight",
+          ].includes(e.kind)
+        )
           drawFantasyEnemy(
             ctx,
             e.kind,
@@ -3314,6 +3372,7 @@ function draw() {
           "#a2b477",
         );
       });
+    drawBattleSignals();
     drawCombatEffects();
     drawLighting(ctx, s, canvas.width, canvas.height);
     drawWeather(ctx, s);
@@ -3335,6 +3394,7 @@ function draw() {
       ctx.restore();
     }
     drawLandmark(ctx, p, i);
+    drawLivingPlace(ctx, s, p, i);
     if (territoryOwner(s, i))
       drawMapLabel(
         ctx,
@@ -3459,6 +3519,7 @@ function draw() {
     });
     rect(point.x - 17 - index * 13, point.y + 14, 5, 1, "#b6b2a1");
   });
+  drawCompanyBanner(ctx, s, s.position.x + 29, s.position.y - 12);
   if (isHidden(s))
     drawMapLabel(ctx, "HIDDEN", s.position.x, s.position.y - 35, true);
   if (s.wagon.owned) {
@@ -3651,7 +3712,7 @@ function animate(time) {
     if (time - motion.start >= 320) combatMotion.delete(key);
   if (
     s.battle &&
-    (combatEffects.length || combatMotion.size) &&
+    (combatEffects.length || attackEffects.length || combatMotion.size) &&
     !document.hidden
   )
     draw();
@@ -5428,4 +5489,280 @@ function appendContinuationPanel(panel) {
     journeys.append(c);
   }
   panel.append(journeys);
+}
+
+function appendWoundPanel(panel) {
+  const wounded = livingParty(s).filter((p) => p.wound);
+  if (!wounded.length) return;
+  const section = fold("Lasting wounds · treatment and recovery", true);
+  for (const p of wounded) {
+    const w = woundTypes.find((w) => w.id === p.wound.type),
+      c = card(`${p.name} · ${w.name}`);
+    const text = document.createElement("p");
+    text.textContent = `${w.desc} ${p.wound.treated ? "Treated" : "Untreated"} · ${Math.ceil(p.wound.remaining)} recovery hours remaining. Fed rest restores one hour per hour after treatment; untreated recovery is four times slower. Empty supplies prevent recovery.`;
+    c.append(text);
+    for (const [method, label] of [
+      ["bandage", "Bandage · 1 medicine, 2h"],
+      ["herbal", "Herbal care · 3 herbs, 3h"],
+      ["surgery", "Surgery · 40 crowns, 1 medicine, 6h"],
+    ])
+      c.append(
+        lockedButton(
+          `${label}: ${p.name}`,
+          () => treatWound(s, p.id, method),
+          woundTreatmentLock(s, p.id, method),
+        ),
+      );
+    section.append(c);
+  }
+  panel.append(section);
+}
+function appendChronicleCompany(panel) {
+  const h = s.chronicle.heraldry,
+    section = fold("Company heraldry and earned titles", true),
+    preview = document.createElement("canvas");
+  preview.width = 96;
+  preview.height = 100;
+  preview.style.width = "96px";
+  preview.setAttribute("aria-label", "Company heraldry preview");
+  drawCompanyBanner(preview.getContext("2d"), s, 25, 8, 3);
+  section.append(preview);
+  const select = (label, items, value) => {
+    const l = document.createElement("label"),
+      el = document.createElement("select");
+    l.textContent = label;
+    el.setAttribute("aria-label", label);
+    for (const item of items) {
+      const o = document.createElement("option");
+      o.value = item.id;
+      o.textContent = item.name;
+      el.append(o);
+    }
+    el.value = value;
+    l.append(el);
+    section.append(l);
+    return el;
+  };
+  const field = select("Banner field", companyBanners, h.field),
+    charge = select("Banner emblem", heraldicCharges, h.charge),
+    trim = select("Banner trim", heraldicTrims, h.trim);
+  section.append(
+    button(
+      "Apply heraldry",
+      () => customizeHeraldry(s, field.value, charge.value, trim.value),
+      !!s.battle || !!s.event,
+    ),
+  );
+  for (const t of earnedTitles) {
+    const c = card(t.name + (h.title === t.id ? " · adopted" : ""));
+    const p = document.createElement("p");
+    p.textContent = t.desc;
+    c.append(
+      p,
+      lockedButton(
+        `Adopt ${t.name}`,
+        () => adoptTitle(s, t.id),
+        titleUnlocked(s, t.id)
+          ? null
+          : "Earn this title through the listed deeds.",
+      ),
+    );
+    section.append(c);
+  }
+  if (h.title)
+    section.append(button("Remove company title", () => adoptTitle(s, null)));
+  panel.append(section);
+  const world = fold("Living villages, factions and settlements");
+  for (const id of [0, 3, 6]) {
+    const p = document.createElement("p");
+    p.textContent = `${places[id].name}: ${townConditionLabel(s, id)} · ${townCondition(s, id)}/100. ${townCondition(s, id) < 35 ? "Shortage prices +15%." : townCondition(s, id) >= 80 ? "Prosperity prices −10%." : "Ordinary prices."}`;
+    world.append(p);
+  }
+  for (const f of factions) {
+    const p = document.createElement("p");
+    p.textContent = factionReaction(s, f.id);
+    world.append(p);
+  }
+  for (const q of Object.values(s.chronicle.settlements)) {
+    const p = document.createElement("p");
+    p.textContent = `${places[q.site].name}: ${q.arrived ? (q.helped ? "Rebuilt settlement" : "Settlers have arrived") : `Settlers expected in ${Math.max(0, 3 - (s.day - q.clearedDay))} days`}.`;
+    world.append(p);
+  }
+  panel.append(world);
+  appendWoundPanel(panel);
+}
+function appendLivingVillage(panel) {
+  const owner = territoryOwner(s, s.location);
+  if (owner) {
+    const greeting = document.createElement("p");
+    greeting.textContent = factionReaction(s, owner);
+    panel.append(greeting);
+  }
+  const c = card(`${townConditionLabel(s)} village · ${townCondition(s)}/100`);
+  const p = document.createElement("p");
+  p.textContent =
+    "Nearby raiders damage prosperity each day. Safe roads, protected trade and donated supplies help villages recover. Struggling markets cost 15% more; thriving markets cost 10% less.";
+  c.append(
+    p,
+    lockedButton(
+      "Repair village · 20 crowns, 3 timber, 2h",
+      () => aidVillage(s, "repair"),
+      townAidLock(s, "repair"),
+    ),
+    lockedButton(
+      "Donate village food · 6 rations, 1h",
+      () => aidVillage(s, "food"),
+      townAidLock(s, "food"),
+    ),
+  );
+  panel.append(c);
+}
+function appendChronicleWorld(a) {
+  if (s.battle || s.event || s.campOpen) return;
+  for (const patrol of s.patrols.filter(
+    (p) =>
+      !p.cleared &&
+      newEnemyFamilies.some((f) => f.id === p.enemyFamily) &&
+      Math.hypot(p.x - s.position.x, p.y - s.position.y) <= 125,
+  )) {
+    const f = newEnemyFamilies.find((f) => f.id === patrol.enemyFamily);
+    a.append(
+      lockedButton(
+        `Scout ${f.name} · 1h`,
+        () => scoutEnemy(s, patrol.id),
+        scoutEnemyLock(s, patrol.id),
+      ),
+    );
+    if (s.chronicle.scouted[patrol.id]) {
+      const p = document.createElement("p");
+      p.textContent = f.counter;
+      a.append(p);
+    }
+  }
+  for (const [id, q] of Object.entries(s.chronicle.settlements))
+    if (q.arrived && q.site === s.location) {
+      a.append(
+        lockedButton(
+          "Trade with settlers · 8 crowns for 6 rations",
+          () => helpSettlement(s, id, "trade"),
+          settlementLock(s, id, "trade"),
+        ),
+        lockedButton(
+          "Rebuild settlement · 25 crowns, 5 timber, 4h",
+          () => helpSettlement(s, id, "rebuild"),
+          settlementLock(s, id, "rebuild"),
+        ),
+      );
+    }
+}
+function appendBattleConditions(a) {
+  const d = fold("Battle conditions and enemy intentions");
+  d.className = "battle-conditions";
+  for (const u of s.battle.units.filter((u) => s.party[u.id].hp > 0)) {
+    const p = document.createElement("p");
+    p.textContent = `${s.party[u.id].name}: ${battleStatuses(s, u, "party").join(" · ") || "Ready"}`;
+    d.append(p);
+  }
+  for (const e of s.battle.enemies.filter((e) => e.hp > 0)) {
+    const p = document.createElement("p");
+    p.textContent = `${e.name || e.kind}: ${battleStatuses(s, e).join(" · ") || "Ready"}. ${newEnemyReport(s, e)}`;
+    d.append(p);
+  }
+  a.append(d);
+}
+function drawBattleSignals() {
+  for (const e of s.battle.enemies.filter((e) => e.hp > 0)) {
+    const mark =
+      e.smash || e.charge || (e.kind === "cultist" ? e.casting : null);
+    if (mark) {
+      ctx.save();
+      ctx.strokeStyle = e.casting ? "#668e59" : "#b65e43";
+      ctx.lineWidth = 3;
+      ctx.strokeRect(109 + mark.x * 62, 4 + mark.y * 60, 51, 49);
+      if (e.smash)
+        for (const [dx, dy] of [
+          [1, 0],
+          [-1, 0],
+          [0, 1],
+          [0, -1],
+        ])
+          if (
+            mark.x + dx >= 0 &&
+            mark.x + dx < 9 &&
+            mark.y + dy >= 0 &&
+            mark.y + dy < 7
+          )
+            ctx.strokeRect(
+              109 + (mark.x + dx) * 62,
+              4 + (mark.y + dy) * 60,
+              51,
+              49,
+            );
+      ctx.restore();
+    }
+    const statuses = battleStatuses(s, e);
+    if (statuses.length)
+      drawMapLabel(
+        ctx,
+        statuses.map((v) => v.slice(0, 3).toUpperCase()).join(" "),
+        136 + e.x * 62,
+        70 + e.y * 60,
+        true,
+      );
+  }
+}
+function drawAttackEffects() {
+  const now = performance.now();
+  attackEffects = attackEffects.filter((e) => now - e.start < 650);
+  for (const e of attackEffects) {
+    const t = (now - e.start) / 650,
+      from = { x: 136 + e.from.x * 62, y: 28 + e.from.y * 60 },
+      to = { x: 136 + e.to.x * 62, y: 28 + e.to.y * 60 };
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, (1 - t) * 3);
+    ctx.lineWidth = 3;
+    ctx.strokeStyle =
+      e.type === "heal"
+        ? "#77a46a"
+        : e.type === "spell"
+          ? "#af8bbb"
+          : "#eed69a";
+    ctx.fillStyle = ctx.strokeStyle;
+    if (e.type === "arrow") {
+      const f = menuSettings.reduceMotion ? 1 : Math.min(1, t * 2),
+        x = from.x + (to.x - from.x) * f,
+        y = from.y + (to.y - from.y) * f;
+      ctx.beginPath();
+      ctx.moveTo(x - 9, y + 3);
+      ctx.lineTo(x + 9, y - 3);
+      ctx.stroke();
+      ctx.fillRect(x + 5, y - 5, 4, 4);
+    } else if (e.type === "strike") {
+      ctx.beginPath();
+      ctx.arc(
+        to.x,
+        to.y,
+        18,
+        menuSettings.reduceMotion ? 0 : t * 4,
+        menuSettings.reduceMotion ? 2 : t * 4 + 2,
+      );
+      ctx.stroke();
+    } else {
+      for (let i = 0; i < 8; i++) {
+        const a = (i * Math.PI) / 4,
+          r = menuSettings.reduceMotion ? 15 : 8 + t * 24;
+        ctx.fillRect(
+          to.x + Math.cos(a) * r - 2,
+          to.y + Math.sin(a) * r - 2,
+          4,
+          4,
+        );
+      }
+      if (e.type === "heal") {
+        ctx.fillRect(to.x - 2, to.y - 9, 4, 18);
+        ctx.fillRect(to.x - 9, to.y - 2, 18, 4);
+      }
+    }
+    ctx.restore();
+  }
 }
