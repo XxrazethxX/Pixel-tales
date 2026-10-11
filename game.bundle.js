@@ -117,7 +117,7 @@ function researchLock(s, id) {
 }
 function fresh() {
   return {
-    version: 12,
+    version: 13,
     companyName: "The Ashen Company",
     difficulty: "standard",
     banner: "ashen",
@@ -155,6 +155,14 @@ function fresh() {
     siteProgress: {},
     forageLedger: {},
     helpSeen: {},
+    campaign: { phase: "unstarted", branch: null },
+    strongholds: { briar: { cleared: false, lastSpawn: 1, waves: 0 } },
+    travelers: {
+      tamsin: "unknown",
+      merrit: "waiting",
+      farmRebuilt: false,
+      harvestDay: -1,
+    },
     crime: { wanted: 0, stolen: false },
     campFurniture: {},
     ambushReady: false,
@@ -594,6 +602,7 @@ function win(s) {
   }
   if (!patrolFight && !storyBattleWon(s)) s.contract = null;
   s.battle = null;
+  if (dungeonReturn?.site === 12) clearStronghold(s);
   if (dungeonReturn) {
     s.siteProgress[`guard-${dungeonReturn.site}`] = true;
     s.event = dungeonReturn;
@@ -689,10 +698,17 @@ function endTurn(s) {
             : [];
       }
       if (options.length) {
+        if (shieldLaneBlocked(s, e, { x: options[0][0], y: options[0][1] })) {
+          note(s, "A braced shield stops an enemy from crossing the line.");
+          break;
+        }
+        spearApproach(s, e, { x: options[0][0], y: options[0][1] });
+        if (e.hp <= 0) break;
         enemyDisengagement(s, e, options[0]);
         if (e.hp <= 0) break;
         movement -= terrainCell(s, options[0][0], options[0][1]).cost;
         [e.x, e.y] = options[0];
+        if (e.root) break;
       }
     }
     triggerOverwatch(s, e);
@@ -734,6 +750,7 @@ function endTurn(s) {
     return true;
   }
   if (s.party.every((p) => p.hp === 0)) {
+    loseEscort(s);
     wearBattleEquipment(s, "defeat");
     s.battle = null;
     if (b.kind !== "patrol" && !["story", "boss"].includes(s.contract?.kind))
@@ -764,6 +781,7 @@ function endTurn(s) {
       u.reacted = false;
       u.safeMove = false;
       u.overwatch = false;
+      u.spearBrace = false;
     });
   }
   if (s.battle && s.battle.enemies.every((e) => e.hp <= 0)) win(s);
@@ -774,7 +792,7 @@ function restore(raw) {
   const base = fresh();
   if (
     !raw ||
-    ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].includes(raw.version) ||
+    ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13].includes(raw.version) ||
     !Array.isArray(raw.party) ||
     raw.party.length < 1 ||
     raw.party.length > 6 ||
@@ -800,7 +818,7 @@ function restore(raw) {
   const result = {
     ...base,
     ...raw,
-    version: 12,
+    version: 13,
     inventory: { ...base.inventory, ...raw.inventory },
     explored: raw.explored || [],
     event: raw.event || null,
@@ -843,6 +861,57 @@ function restore(raw) {
             kind: "farm",
             site: 13,
             message: safeCompanyName(result.event.message, "", 180),
+          }
+        : null;
+  result.campaign = {
+    phase: ["unstarted", "inquiry", "grain", "return", "completed"].includes(
+      raw.campaign?.phase,
+    )
+      ? raw.campaign.phase
+      : "unstarted",
+    branch: ["league", "villagers", "company"].includes(raw.campaign?.branch)
+      ? raw.campaign.branch
+      : null,
+  };
+  if (
+    ["return", "completed"].includes(result.campaign.phase) &&
+    !result.campaign.branch
+  )
+    result.campaign.phase = "inquiry";
+  result.strongholds = {
+    briar: {
+      cleared:
+        raw.strongholds?.briar?.cleared === true ||
+        result.siteProgress["guard-12"] === true,
+      lastSpawn: Number.isInteger(raw.strongholds?.briar?.lastSpawn)
+        ? Math.max(1, Math.min(result.day, raw.strongholds.briar.lastSpawn))
+        : 1,
+      waves: Number.isInteger(raw.strongholds?.briar?.waves)
+        ? Math.max(0, Math.min(999, raw.strongholds.briar.waves))
+        : 0,
+    },
+  };
+  result.travelers = {
+    tamsin: ["unknown", "rescued", "settled"].includes(raw.travelers?.tamsin)
+      ? raw.travelers.tamsin
+      : "unknown",
+    merrit: ["waiting", "escorting", "arrived", "settled"].includes(
+      raw.travelers?.merrit,
+    )
+      ? raw.travelers.merrit
+      : "waiting",
+    farmRebuilt: raw.travelers?.farmRebuilt === true,
+    harvestDay: Number.isInteger(raw.travelers?.harvestDay)
+      ? Math.max(-1, Math.min(result.day, raw.travelers.harvestDay))
+      : -1,
+  };
+  if (result.event?.kind === "campaign")
+    result.event =
+      result.campaign.phase === "grain" && raw.location === 12
+        ? {
+            kind: "campaign",
+            title: "The missing grain",
+            text: "Captured grain bears the League's seal. Hungry families claim it was taken from their harvest. League: 90 crowns and cheaper food. Villagers: 55 crowns, a restored farm and cheaper food. Company: 16 rations and 25 crowns, but wanted status and lasting shortages.",
           }
         : null;
   result.crime = {
@@ -1052,6 +1121,7 @@ function restore(raw) {
       cleared: saved?.cleared === true,
     });
   }
+  refreshStrongholds(result);
   discoverNearby(result, false);
   result.party = result.party.map((p, id) => ({
     ...base.party[0],
@@ -1063,6 +1133,36 @@ function restore(raw) {
       ? Math.max(0, Math.min(100, p.fatigue))
       : 0,
     ...avatarAppearance(p),
+    personalQuest: {
+      stage: Number.isInteger(p.personalQuest?.stage)
+        ? Math.max(0, Math.min(3, p.personalQuest.stage))
+        : p.storyComplete === "supported"
+          ? 1
+          : 0,
+      outcome: ["shared", "claimed", "reconciled"].includes(
+        p.personalQuest?.outcome,
+      )
+        ? p.personalQuest.outcome
+        : null,
+    },
+    personalPerk: [
+      "linebreaker",
+      "guardian",
+      "keeneye",
+      "watchful",
+      "arcanefocus",
+      "restorer",
+    ].includes(p.personalPerk)
+      ? p.personalPerk
+      : null,
+    spellSpent: Object.fromEntries(
+      [1, 2].map((level) => [
+        level,
+        Number.isInteger(p.spellSpent?.[level])
+          ? Math.max(0, Math.min(9, p.spellSpent[level]))
+          : 0,
+      ]),
+    ),
     name: safeCompanyName(p.name, `Companion ${id + 1}`, 18),
     coat: /^#[0-9a-f]{6}$/i.test(p.coat || "") ? p.coat : undefined,
     profession: p.profession || "Cook",
@@ -1193,7 +1293,9 @@ function restore(raw) {
         ...new Set(
           raw.hiredRecruits.filter(
             (id) =>
-              typeof id === "string" && /^(0|3|6)-(veteran|ranger)$/.test(id),
+              typeof id === "string" &&
+              (/^(0|3|6)-(veteran|ranger)$/.test(id) ||
+                ["ember-wizard", "ember-cleric"].includes(id)),
           ),
         ),
       ]
@@ -1465,7 +1567,10 @@ function attackPower(s, p) {
     fatiguePenalty(p) -
     ((p.resolve ?? 65) < 25 ? 1 : 0) +
     (hasTrait(p, "mercenary") ? 1 : 0) +
-    bondSupport(s, p)
+    bondSupport(s, p) +
+    weaponPositionBonus(s, p) +
+    (p.personalPerk === "linebreaker" ? 1 : 0) +
+    (p.race === "orc" && p.role !== "Archer" && !isCaster(p) ? 1 : 0)
   );
 }
 function guard(s, id) {
@@ -1523,7 +1628,7 @@ function recruit(s, offerId = null) {
     role: offer.role,
     max: offer.max,
     hp: offer.max,
-    damage: 6,
+    damage: isCaster(offer) ? founderRoles[offer.role].damage : 6,
     level: 1,
     xp: 0,
     points: 0,
@@ -1532,6 +1637,9 @@ function recruit(s, offerId = null) {
     fatigue: 0,
     resolve: 65,
     traits: [...offer.traits],
+    race: offer.race || "human",
+    personalQuest: { stage: 0, outcome: null },
+    spellSpent: { 1: 0, 2: 0 },
     armor: 0,
     weapon: 0,
     profession: offer.profession,
@@ -2035,6 +2143,7 @@ function advanceMovement(s, seconds) {
       arrived = true;
     }
   }
+  updateCampaign(s);
   return { changed, arrived };
 }
 function partyPositions(s) {
@@ -2193,6 +2302,20 @@ function initialPatrols() {
       ],
       cleared: false,
     },
+    {
+      id: "briar-raiders",
+      name: "Briarhide raiding party",
+      kind: "bandits",
+      x: 470,
+      y: 490,
+      waypoint: 0,
+      route: [
+        { x: 330, y: 420 },
+        { x: 185, y: 480 },
+        { x: 470, y: 490 },
+      ],
+      cleared: true,
+    },
   ];
 }
 function advancePatrols(s, seconds) {
@@ -2205,6 +2328,8 @@ function advancePatrols(s, seconds) {
     seconds <= 0
   )
     return false;
+  refreshStrongholds(s);
+  updateCampaign(s);
   for (const p of s.patrols.filter((p) => !p.cleared)) {
     if (p.id === "warden-pursuit") {
       p.route = [{ ...s.position }];
@@ -2250,6 +2375,13 @@ function advancePatrols(s, seconds) {
     Math.hypot(pursuer.x - s.position.x, pursuer.y - s.position.y) <= 36
   )
     startBattle(s, pursuer.id);
+  const raider = s.patrols.find((p) => p.id === "briar-raiders" && !p.cleared);
+  if (
+    !s.battle &&
+    raider &&
+    Math.hypot(raider.x - s.position.x, raider.y - s.position.y) <= 34
+  )
+    startBattle(s, raider.id);
   return true;
 }
 function nearbyPatrols(s) {
@@ -2368,7 +2500,8 @@ function campCost(s) {
     ? Math.max(
         1,
         count +
-          livingParty(s).filter((p) => hasTrait(p, "hearty")).length -
+          livingParty(s).filter((p) => hasTrait(p, "hearty")).length +
+          livingParty(s).filter((p) => p.race === "orc").length -
           Math.min(2, professionBonus(s, "Cook")) -
           (s.research.includes("rations") ? 1 : 0) -
           (s.research.includes("preservation") ? 1 : 0) -
@@ -2906,6 +3039,8 @@ function gearOwner(s, id) {
 function armorPower(s, p) {
   return (
     (p.armor || 0) +
+    (p.race === "dwarf" ? 1 : 0) +
+    (p.personalPerk === "guardian" ? 1 : 0) +
     ["armor", "helmet", "shield"].reduce(
       (total, slot) => total + (equippedItem(s, p, slot)?.bonus || 0),
       0,
@@ -2966,6 +3101,7 @@ function wearBattleEquipment(s, outcome = "victory") {
 }
 function retreatBattle(s) {
   if (!s.battle) return false;
+  loseEscort(s);
   wearBattleEquipment(s, "retreat");
   s.gold = Math.max(0, s.gold - 15);
   s.morale = Math.max(0, s.morale - 10);
@@ -3081,6 +3217,7 @@ function equipmentPrice(s, item) {
 }
 function buyEquipment(s, templateId) {
   const item = equipmentCatalog.find((item) => item.id === templateId);
+  if (templateId === "beacon-staff" && s.location !== 6) return false;
   if (
     !item ||
     item.tier > 2 ||
@@ -3233,7 +3370,7 @@ function settleDay(s, mealsProvided = false) {
     if (
       s.wageDebt > 0 &&
       (p.resolve ?? 65) <= 10 &&
-      p.storyComplete === "refused"
+      (p.storyComplete === "refused" || p.personalQuest?.outcome === "claimed")
     )
       departCompanion(s, p);
   if (companyLost(s)) {
@@ -3623,7 +3760,11 @@ function traitSummary(p) {
   );
 }
 function companionWages(p) {
-  return hasTrait(p, "mercenary") ? 3 : 2;
+  return (
+    (hasTrait(p, "mercenary") ? 3 : 2) +
+    (["elf", "dwarf"].includes(p.race) ? 1 : 0) +
+    (isCaster(p) ? 1 : 0)
+  );
 }
 function changeResolve(p, amount) {
   if (p.dead) return;
@@ -3798,6 +3939,29 @@ function recruitmentOffers(s) {
       traits: ["hearty"],
     },
   ];
+  if (s.location === 6)
+    offers.push(
+      {
+        id: "ember-wizard",
+        name: "Ilyra",
+        role: "Wizard",
+        race: "elf",
+        profession: "Herbalist",
+        max: 20,
+        cost: 100,
+        traits: ["resolute"],
+      },
+      {
+        id: "ember-cleric",
+        name: "Dorren",
+        role: "Cleric",
+        race: "dwarf",
+        profession: "Cook",
+        max: 26,
+        cost: 95,
+        traits: ["compassionate"],
+      },
+    );
   return offers.filter(
     (offer) => offer.standard || !s.hiredRecruits.includes(offer.id),
   );
@@ -4222,6 +4386,7 @@ function damageCompanion(s, target, power, ranged = false) {
   const damage = Math.max(
     1,
     power -
+      (target.arcaneWard || 0) -
       (p.role === "Shieldbearer" ? 2 : 0) -
       armorPower(s, p) -
       (target.guard ? 2 + (gearPerk(s, p, "bastion") ? 2 : 0) : 0) -
@@ -4229,6 +4394,7 @@ function damageCompanion(s, target, power, ranged = false) {
       aura -
       (ranged ? terrainCell(s, target.x, target.y).cover : 0),
   );
+  target.arcaneWard = 0;
   p.hp = Math.max(0, p.hp - damage);
   p.injury = p.hp < p.max / 2;
   return damage;
@@ -4478,7 +4644,12 @@ function supplyOffer(s, item) {
   return offer && region
     ? {
         quantity: offer[1],
-        price: Math.ceil(offer[0] * region.supply[item] * purchaseModifier(s)),
+        price: Math.ceil(
+          offer[0] *
+            region.supply[item] *
+            purchaseModifier(s) *
+            (item === "food" ? roadFoodModifier(s) : 1),
+        ),
       }
     : null;
 }
@@ -5306,6 +5477,17 @@ function resolveTrailEncounter(s, choiceId) {
     for (const p of livingParty(s))
       if (hasTrait(p, "compassionate")) changeResolve(p, choice.compassionate);
   if (worker && choice.practice) practice(s, worker, choice.practice);
+  if (
+    event.templateId === "tracker" &&
+    ["help", "herbalist"].includes(choiceId) &&
+    s.travelers.tamsin === "unknown"
+  ) {
+    s.travelers.tamsin = "rescued";
+    note(
+      s,
+      "The injured traveler is Sella of Ashbrook. She remembers your help and will meet you in Greyhaven.",
+    );
+  }
   s.encounterJournal.unshift({
     id: event.id,
     templateId: event.templateId,
@@ -5769,6 +5951,8 @@ const founderRoles = {
   Shieldbearer: { max: 34, damage: 5 },
   Archer: { max: 22, damage: 6 },
   Spearman: { max: 26, damage: 6 },
+  Wizard: { max: 20, damage: 4 },
+  Cleric: { max: 26, damage: 5 },
 };
 function safeCompanyName(
   value,
@@ -5878,6 +6062,7 @@ const avatarSkins = ["#e2c396", "#bd946e", "#8f624b", "#614637"];
 const avatarHair = ["#4b4635", "#927344", "#b5a68a", "#a25e3b"];
 function avatarAppearance(p = {}) {
   return {
+    race: fantasyRaces.some((r) => r.id === p.race) ? p.race : "human",
     sex: p.sex === "male" ? "male" : "female",
     skin: avatarSkins.includes(p.skin) ? p.skin : avatarSkins[0],
     hair: avatarHair.includes(p.hair) ? p.hair : avatarHair[0],
@@ -5889,7 +6074,7 @@ function avatarAppearance(p = {}) {
 function customizeAvatar(s, id, appearance) {
   const p = s.party[id];
   if (!p || p.dead || s.battle || s.event) return false;
-  Object.assign(p, avatarAppearance(appearance));
+  Object.assign(p, avatarAppearance({ ...appearance, race: p.race }));
   if (companyBanners.some((b) => b.color === appearance.coat))
     p.coat = appearance.coat;
   return true;
@@ -6178,6 +6363,7 @@ function companionStory(s, id, choice) {
           bondValue(s, p.id, q.id) + 1,
         );
     p.storyComplete = "supported";
+    p.personalQuest = { stage: 1, outcome: null };
   } else if (choice === "refuse") {
     changeResolve(p, -15);
     p.storyComplete = "refused";
@@ -6521,6 +6707,21 @@ function dungeonAction(s, action, x, y) {
     s.contract = contract;
     s.battle.kind = "patrol";
     s.battle.dungeonReturn = { ...e };
+    if (e.site === 12) {
+      const leader = s.battle.enemies[0];
+      leader.name = "Captain Venn";
+      leader.hp = leader.max = Math.ceil(
+        36 *
+          (s.difficulty === "forgiving"
+            ? 0.8
+            : s.difficulty === "veteran"
+              ? 1.2
+              : 1),
+      );
+      leader.damage += 1;
+      leader.armor = 2;
+      s.battle.stronghold = "briar";
+    }
     note(
       s,
       "Sentries guard the treasure chamber. Defeat them to open the vault.",
@@ -6730,6 +6931,747 @@ const fieldGuide = {
     "Search the farm's ledger before opening the cellar. Clues mark new destinations without revealing the surrounding terrain. Supplies and discoveries can only be collected once.",
   ],
 };
+
+const fantasyRaces = [
+  { id: "human", name: "Human", desc: "Versatile travelers; standard upkeep." },
+  {
+    id: "elf",
+    name: "Elf",
+    desc: "Spells reach one extra tile; one additional daily crown.",
+  },
+  {
+    id: "dwarf",
+    name: "Dwarf",
+    desc: "One extra armor; one additional daily crown.",
+  },
+  {
+    id: "orc",
+    name: "Orc",
+    desc: "One extra nonmagical melee attack; one additional daily ration.",
+  },
+];
+function campaignTasks(s) {
+  return [
+    {
+      id: "farm",
+      name: "Investigate Ashbrook Farm",
+      done: !!s.siteProgress["farm-clue-13"],
+      target: 13,
+    },
+    {
+      id: "escort",
+      name: "Escort Merrit to Saltbridge",
+      done: ["arrived", "settled"].includes(s.travelers.merrit),
+      target: 3,
+    },
+    {
+      id: "stronghold",
+      name: "Defeat Captain Venn at Briarhide",
+      done: s.strongholds.briar.cleared,
+      target: 12,
+    },
+  ];
+}
+function beginCampaign(s) {
+  if (
+    s.location !== 0 ||
+    s.battle ||
+    s.event ||
+    s.campOpen ||
+    companyLost(s) ||
+    s.campaign.phase !== "unstarted"
+  )
+    return false;
+  s.campaign = { phase: "inquiry", branch: null };
+  for (const site of [12, 13])
+    if (!s.discovered.includes(site)) s.discovered.push(site);
+  note(
+    s,
+    "The Broken Road — Hungry Roads: investigate Ashbrook, escort Merrit, and break Briarhide. Greyhaven's food shortage raises prices until grain returns.",
+  );
+  updateCampaign(s);
+  return true;
+}
+function refreshStrongholds(s) {
+  const h = s.strongholds?.briar;
+  if (!h) return;
+  const wave = s.patrols.find((p) => p.id === "briar-raiders");
+  if (h.cleared) {
+    for (const p of s.patrols)
+      if (["briar-raiders", "road-bandits"].includes(p.id)) p.cleared = true;
+    return;
+  }
+  if (wave?.cleared && s.day - h.lastSpawn >= 2) {
+    Object.assign(wave, { x: 470, y: 490, waypoint: 0, cleared: false });
+    h.lastSpawn = s.day;
+    h.waves++;
+    note(
+      s,
+      "Briarhide sends another raiding party onto the Greyhaven road. Defeat its leader to stop the raids.",
+    );
+  }
+}
+function clearStronghold(s) {
+  if (s.strongholds.briar.cleared) return false;
+  s.strongholds.briar.cleared = true;
+  refreshStrongholds(s);
+  note(
+    s,
+    "Captain Venn is defeated. Briarhide stops sending raiders; the nearby road is safer. Sealed grain and a weapons invoice remain in the stockade.",
+  );
+  updateCampaign(s);
+  return true;
+}
+function updateCampaign(s) {
+  if (
+    s.travelers?.merrit === "escorting" &&
+    s.location === 3 &&
+    !s.battle &&
+    !s.event &&
+    Math.hypot(s.position.x - places[3].x, s.position.y - places[3].y) <= 28
+  ) {
+    s.travelers.merrit = "arrived";
+    note(
+      s,
+      "Merrit reaches Saltbridge safely. Visit him in the village to collect the escort payment.",
+    );
+  }
+  if (
+    s.campaign?.phase === "inquiry" &&
+    campaignTasks(s).every((t) => t.done)
+  ) {
+    s.campaign.phase = "grain";
+    note(
+      s,
+      "The trail is complete. Return to Briarhide and decide who receives the recovered grain.",
+    );
+  }
+}
+function campaignAction(s, action) {
+  if (s.battle || s.event || s.campOpen || companyLost(s)) return false;
+  if (
+    action === "escort" &&
+    s.location === 0 &&
+    s.campaign.phase !== "unstarted" &&
+    s.travelers.merrit === "waiting"
+  ) {
+    s.travelers.merrit = "escorting";
+    note(
+      s,
+      "Merrit and his cart join the company for the trip to Saltbridge. Defeat or retreat loses the escort; you can retry from Greyhaven.",
+    );
+    return true;
+  }
+  if (action === "grain" && s.location === 12 && s.campaign.phase === "grain") {
+    s.event = {
+      kind: "campaign",
+      title: "The missing grain",
+      text: "Captured grain bears the League's seal. Hungry families claim it was taken from their harvest. League: 90 crowns and cheaper food. Villagers: 55 crowns, a restored farm and cheaper food. Company: 16 rations and 25 crowns, but wanted status and lasting shortages.",
+    };
+    return true;
+  }
+  if (
+    action === "report" &&
+    s.location === 0 &&
+    s.campaign.phase === "return"
+  ) {
+    s.campaign.phase = "completed";
+    s.gold +=
+      s.campaign.branch === "league"
+        ? 90
+        : s.campaign.branch === "villagers"
+          ? 55
+          : 25;
+    s.knowledge += 3;
+    s.renown += 5;
+    if (s.campaign.branch === "league") {
+      changeReputation(s, "guild", 8);
+      changeReputation(s, "freefolk", -2);
+    } else if (s.campaign.branch === "villagers") {
+      changeReputation(s, "freefolk", 8);
+      changeReputation(s, "guild", -2);
+    } else {
+      changeReputation(s, "guild", -8);
+      registerCrime(s, true);
+    }
+    grantEquipment(s, "roadwarden-spear");
+    note(
+      s,
+      "Hungry Roads completed. Venn's invoice points to Iron Hollow, setting up the next chapter. Your grain decision changes Greyhaven's food prices.",
+    );
+    return true;
+  }
+  return false;
+}
+function chooseGrain(s, branch) {
+  if (
+    s.event?.kind !== "campaign" ||
+    s.campaign.phase !== "grain" ||
+    !["league", "villagers", "company"].includes(branch)
+  )
+    return false;
+  s.campaign.branch = branch;
+  s.campaign.phase = "return";
+  if (branch === "company") s.food += 16;
+  else if (branch === "villagers") s.travelers.farmRebuilt = true;
+  s.event = null;
+  note(
+    s,
+    `Recovered grain: ${branch === "league" ? "return it to the League" : branch === "villagers" ? "feed the villages" : "keep sixteen rations"}. Return to Greyhaven for the chapter payment.`,
+  );
+  return true;
+}
+function loseEscort(s) {
+  if (s.travelers?.merrit === "escorting") {
+    s.travelers.merrit = "waiting";
+    note(
+      s,
+      "Merrit abandons the dangerous escort. He waits in Greyhaven for another attempt.",
+    );
+  }
+}
+function roadFoodModifier(s) {
+  if (s.location === 3 && s.travelers?.merrit === "settled") return 0.9;
+  if (s.location !== 0) return 1;
+  let value =
+    s.campaign?.phase === "unstarted"
+      ? 1
+      : s.campaign?.phase === "completed"
+        ? s.campaign.branch === "company"
+          ? 1.25
+          : 0.85
+        : 1.25;
+  if (s.travelers?.farmRebuilt) value *= 0.9;
+  return value;
+}
+function travelerAction(s, action) {
+  if (
+    s.battle ||
+    (s.event && s.event.kind !== "farm") ||
+    s.campOpen ||
+    companyLost(s)
+  )
+    return false;
+  if (
+    action === "rescue" &&
+    s.location === 13 &&
+    s.travelers.tamsin === "unknown" &&
+    s.inventory.medicine >= 1
+  ) {
+    s.inventory.medicine--;
+    s.travelers.tamsin = "rescued";
+    changeReputation(s, "freefolk", 2);
+    note(
+      s,
+      "Sella, an injured farmhand, returns to Greyhaven. Meet her there once she recovers.",
+    );
+    return true;
+  }
+  if (
+    action === "meet" &&
+    s.location === 0 &&
+    s.travelers.tamsin === "rescued"
+  ) {
+    s.travelers.tamsin = "settled";
+    s.inventory.herbs += 4;
+    note(
+      s,
+      "Sella remembers your help. She brings four herbs and offers to rebuild Ashbrook Farm.",
+    );
+    return true;
+  }
+  if (
+    action === "rebuild" &&
+    s.location === 13 &&
+    !s.travelers.farmRebuilt &&
+    s.inventory.wood >= 6 &&
+    s.gold >= 20 &&
+    ["rescued", "settled"].includes(s.travelers.tamsin)
+  ) {
+    s.inventory.wood -= 6;
+    s.gold -= 20;
+    s.travelers.farmRebuilt = true;
+    spendHours(s, 4);
+    note(
+      s,
+      "Ashbrook Farm is rebuilt. Fields return to cultivation, Greyhaven food costs fall, and the farm yields four rations every three days.",
+    );
+    return true;
+  }
+  if (
+    action === "harvest" &&
+    s.location === 13 &&
+    s.travelers.farmRebuilt &&
+    (s.travelers.harvestDay < 0 || s.day - s.travelers.harvestDay >= 3)
+  ) {
+    s.travelers.harvestDay = s.day;
+    s.food += 4;
+    note(
+      s,
+      "Ashbrook's farmers remember the company: four rations from the new harvest.",
+    );
+    return true;
+  }
+  if (
+    action === "merrit" &&
+    s.location === 3 &&
+    s.travelers.merrit === "arrived"
+  ) {
+    s.travelers.merrit = "settled";
+    s.gold += 50;
+    changeReputation(s, "guild", 3);
+    note(
+      s,
+      "Merrit pays fifty crowns and settles in Saltbridge. Your escort helped restore this trade connection.",
+    );
+    return true;
+  }
+  return false;
+}
+function personalQuestInfo(p) {
+  return p.profession === "Smith"
+    ? { target: 4, goal: "Find the lost smith's tools at Iron Hollow" }
+    : p.profession === "Herbalist"
+      ? { target: 13, goal: "Gather family remedies at Ashbrook Farm" }
+      : { target: 12, goal: "Find proof of a safe home beyond Briarhide" };
+}
+function advancePersonalQuest(s, id, choice) {
+  const p = s.party[id];
+  if (!p || p.dead || s.battle || s.event || companyLost(s)) return false;
+  p.personalQuest ||= {
+    stage: p.storyComplete === "supported" ? 1 : 0,
+    outcome: null,
+  };
+  const q = p.personalQuest;
+  if (
+    choice === "reconcile" &&
+    s.campOpen &&
+    q.stage === 3 &&
+    q.outcome === "claimed" &&
+    s.gold >= 15
+  ) {
+    s.gold -= 15;
+    q.outcome = "reconciled";
+    changeResolve(p, 15);
+    growPartyBonds(s, 5);
+    note(s, `${p.name}'s rivalry softens after an honest apology.`);
+    return true;
+  }
+  if (
+    choice === "reconcile" &&
+    s.campOpen &&
+    p.storyComplete === "refused" &&
+    q.stage === 0 &&
+    s.gold >= 15
+  ) {
+    s.gold -= 15;
+    p.storyComplete = "supported";
+    q.stage = 1;
+    changeResolve(p, 10);
+    growPartyBonds(s, 2);
+    note(
+      s,
+      `${p.name} accepts an apology. Their personal journey can continue.`,
+    );
+    return true;
+  }
+  if (
+    choice === "investigate" &&
+    !s.campOpen &&
+    q.stage === 1 &&
+    s.location === personalQuestInfo(p).target
+  ) {
+    if (s.location === 12 && !s.strongholds.briar.cleared) return false;
+    if (
+      s.location === 4 &&
+      !s.siteProgress["cart-4"] &&
+      !s.siteProgress["deposit-4-1"] &&
+      !s.siteProgress["deposit-4-5"]
+    ) {
+      note(
+        s,
+        "Search Iron Hollow's cart or mine a deposit before recovering the smith's keepsake.",
+      );
+      return false;
+    }
+    if (s.location === 13 && !s.siteProgress["farm-well-13"]) {
+      note(s, "Search Ashbrook's well before gathering the family remedies.");
+      return false;
+    }
+    q.stage = 2;
+    note(
+      s,
+      `${p.name}: a personal discovery at ${places[s.location].name}. Discuss its future at camp.`,
+    );
+    return true;
+  }
+  if (s.campOpen && q.stage === 2 && ["share", "claim"].includes(choice)) {
+    q.stage = 3;
+    q.outcome = choice === "share" ? "shared" : "claimed";
+    if (choice === "share") {
+      p.personalPerk =
+        p.role === "Wizard"
+          ? "arcanefocus"
+          : p.role === "Cleric"
+            ? "restorer"
+            : p.role === "Shieldbearer"
+              ? "guardian"
+              : p.role === "Archer"
+                ? "keeneye"
+                : p.role === "Spearman"
+                  ? "watchful"
+                  : "linebreaker";
+      changeResolve(p, 15);
+      for (const other of livingParty(s))
+        if (other !== p)
+          s.bonds[bondKey(id, other.id)] = Math.min(
+            100,
+            bondValue(s, id, other.id) + 5,
+          );
+      note(
+        s,
+        `${p.name} shares their discovery and earns ${p.personalPerk}. Bonds strengthen.`,
+      );
+    } else {
+      s.gold += 35;
+      changeResolve(p, -25);
+      const rival = livingParty(s).find((other) => other !== p);
+      if (rival)
+        s.bonds[bondKey(id, rival.id)] = Math.max(
+          0,
+          bondValue(s, id, rival.id) - 15,
+        );
+      note(
+        s,
+        `${p.name}'s discovery is sold for thirty-five crowns. A rivalry grows; low loyalty and unpaid wages can lead to departure.`,
+      );
+    }
+    return true;
+  }
+  return false;
+}
+function weaponPositionBonus(s, p) {
+  const u = s.battle?.units.find((u) => u.id === p.id);
+  return p.role === "Archer" &&
+    u &&
+    !u.moved &&
+    ((equippedItem(s, p, "weapon")?.durability || 0) > 0 ||
+      p.personalPerk === "keeneye")
+    ? 2 + (p.personalPerk === "keeneye" ? 1 : 0)
+    : 0;
+}
+function braceSpear(s, id) {
+  const u = s.battle?.units.find((u) => u.id === id),
+    p = s.party[id],
+    weapon = p && equippedItem(s, p, "weapon");
+  if (
+    !u ||
+    u.acted ||
+    p.hp <= 0 ||
+    p.role !== "Spearman" ||
+    !weapon ||
+    weapon.durability <= 0
+  )
+    return false;
+  u.acted = true;
+  u.spearBrace = true;
+  note(
+    s,
+    `${p.name} braces their spear: the next enemy entering two-tile reach takes a reaction hit and stops.`,
+  );
+  return true;
+}
+function spearApproach(s, e, to) {
+  for (const u of s.battle.units) {
+    const p = s.party[u.id];
+    if (
+      !u.spearBrace ||
+      p.hp <= 0 ||
+      Math.abs(e.x - u.x) + Math.abs(e.y - u.y) <= 2 ||
+      Math.abs(to.x - u.x) + Math.abs(to.y - u.y) > 2 ||
+      !hasLineOfSight(s, u, to)
+    )
+      continue;
+    u.spearBrace = false;
+    hitEnemy(s, e, attackPower(s, p) + (p.personalPerk === "watchful" ? 2 : 0));
+    e.root = 1;
+    note(s, `${p.name}'s spear intercepts ${e.name || e.kind}.`);
+    break;
+  }
+}
+function shieldLaneBlocked(s, from, to) {
+  return (
+    s.battle?.units.some(
+      (u) =>
+        s.party[u.id].hp > 0 &&
+        u.guard &&
+        (equippedItem(s, s.party[u.id], "shield")?.durability || 0) > 0 &&
+        Math.abs(from.x - u.x) + Math.abs(from.y - u.y) === 1 &&
+        Math.abs(to.x - u.x) + Math.abs(to.y - u.y) > 1,
+    ) || false
+  );
+}
+equipmentCatalog.push({
+  id: "roadwarden-spear",
+  name: "Roadwarden spear",
+  role: "Spearman",
+  slot: "weapon",
+  tier: 2,
+  rarity: "Unique",
+  bonus: 3,
+  price: 95,
+  perk: "reach",
+  uniqueBoss: "broken-road",
+});
+function isCaster(p) {
+  return ["Wizard", "Cleric"].includes(p?.role);
+}
+const spellBook = [
+  {
+    id: "aether",
+    name: "Aether dart",
+    role: "Wizard",
+    level: 1,
+    range: 4,
+    power: 7,
+    kind: "damage",
+    piercing: true,
+  },
+  {
+    id: "veil",
+    name: "Stone veil",
+    role: "Wizard",
+    level: 1,
+    range: 3,
+    kind: "ward",
+    power: 4,
+  },
+  {
+    id: "cinder",
+    name: "Cinder bloom",
+    role: "Wizard",
+    level: 2,
+    range: 4,
+    power: 9,
+    kind: "damage",
+    area: true,
+    ore: 1,
+  },
+  {
+    id: "mend",
+    name: "Restoring light",
+    role: "Cleric",
+    level: 1,
+    range: 3,
+    power: 8,
+    kind: "heal",
+    herbs: 1,
+  },
+  {
+    id: "sun",
+    name: "Sun lance",
+    role: "Cleric",
+    level: 2,
+    range: 4,
+    power: 10,
+    kind: "damage",
+    herbs: 1,
+    piercing: true,
+  },
+  {
+    id: "oath",
+    name: "Shelter oath",
+    role: "Cleric",
+    level: 2,
+    range: 3,
+    power: 5,
+    kind: "ward",
+    area: true,
+    herbs: 1,
+  },
+];
+function spellSlots(p) {
+  if (!isCaster(p)) return { 1: 0, 2: 0 };
+  return {
+    1: Math.max(
+      0,
+      Math.min(4, 2 + Math.floor((p.level - 1) / 2)) - (p.spellSpent?.[1] || 0),
+    ),
+    2: Math.max(
+      0,
+      (p.level >= 3 ? Math.min(2, 1 + Math.floor((p.level - 3) / 3)) : 0) -
+        (p.spellSpent?.[2] || 0),
+    ),
+  };
+}
+function spellLock(s, id, spellId, x, y) {
+  const p = s.party[id],
+    u = s.battle?.units.find((u) => u.id === id),
+    spell = spellBook.find((v) => v.id === spellId && v.role === p?.role);
+  if (!spell || !u || p.hp <= 0 || p.dead || u.acted)
+    return "Caster unavailable or action spent.";
+  if (spellSlots(p)[spell.level] < 1)
+    return `No level ${spell.level} slots. Recover magic at camp or Emberfall.`;
+  if (
+    s.inventory.herbs < (spell.herbs || 0) ||
+    s.inventory.ore < (spell.ore || 0)
+  )
+    return "Missing spell reagents.";
+  if (
+    !Number.isInteger(x) ||
+    !Number.isInteger(y) ||
+    x < 0 ||
+    x > 8 ||
+    y < 0 ||
+    y > 6
+  )
+    return "Select a battlefield target.";
+  if (
+    Math.abs(x - u.x) + Math.abs(y - u.y) >
+      spell.range + (p.race === "elf" ? 1 : 0) ||
+    !hasLineOfSight(s, u, { x, y })
+  )
+    return "Target out of range or sight.";
+  const target =
+    spell.kind === "damage"
+      ? s.battle.enemies.find((e) => e.hp > 0 && e.x === x && e.y === y)
+      : s.battle.units.find(
+          (v) => s.party[v.id].hp > 0 && v.x === x && v.y === y,
+        );
+  if (!target)
+    return spell.kind === "damage"
+      ? "Select a living enemy."
+      : "Select a conscious ally.";
+  if (spell.kind === "heal" && s.party[target.id].hp >= s.party[target.id].max)
+    return "That ally is already healthy.";
+  return "";
+}
+function castSpell(s, id, spellId, x, y) {
+  if (spellLock(s, id, spellId, x, y)) return false;
+  const p = s.party[id],
+    u = s.battle.units.find((u) => u.id === id),
+    spell = spellBook.find((v) => v.id === spellId);
+  p.spellSpent ||= { 1: 0, 2: 0 };
+  p.spellSpent[spell.level] = (p.spellSpent[spell.level] || 0) + 1;
+  s.inventory.herbs -= spell.herbs || 0;
+  s.inventory.ore -= spell.ore || 0;
+  u.acted = true;
+  const targets =
+    spell.kind === "damage"
+      ? s.battle.enemies.filter(
+          (e) =>
+            e.hp > 0 &&
+            (spell.area
+              ? Math.abs(e.x - x) + Math.abs(e.y - y) <= 1
+              : e.x === x && e.y === y),
+        )
+      : s.battle.units.filter(
+          (v) =>
+            s.party[v.id].hp > 0 &&
+            (spell.area
+              ? Math.abs(v.x - x) + Math.abs(v.y - y) <= 1
+              : v.x === x && v.y === y),
+        );
+  for (const target of targets) {
+    if (!hasLineOfSight(s, u, target)) continue;
+    if (spell.kind === "damage")
+      hitEnemy(
+        s,
+        target,
+        spell.power +
+          (p.personalPerk === "arcanefocus" ? 2 : 0) +
+          (gearPerk(s, p, "focus") ? 2 : 0) +
+          Math.floor(p.level / 2) +
+          (spell.piercing ? target.armor || 0 : 0),
+      );
+    else if (spell.kind === "heal")
+      s.party[target.id].hp = Math.min(
+        s.party[target.id].max,
+        s.party[target.id].hp +
+          spell.power +
+          p.level +
+          (p.personalPerk === "restorer" ? 2 : 0),
+      );
+    else target.arcaneWard = spell.power + (gearPerk(s, p, "focus") ? 2 : 0);
+  }
+  note(
+    s,
+    `${p.name} casts ${spell.name}; one level ${spell.level} slot spent${spell.herbs ? " and herbs consumed" : spell.ore ? " and ore consumed" : ""}.`,
+  );
+  if (s.battle.enemies.every((e) => e.hp === 0)) win(s);
+  return true;
+}
+function recoverMagic(s) {
+  const casters = livingParty(s).filter(
+    (p) => isCaster(p) && Object.values(p.spellSpent || {}).some((v) => v > 0),
+  );
+  if (!casters.length || s.battle || s.event || companyLost(s)) return false;
+  if (s.campOpen) {
+    if (s.food < casters.length * 2 || s.inventory.herbs < casters.length * 2)
+      return false;
+    s.food -= casters.length * 2;
+    s.inventory.herbs -= casters.length * 2;
+    spendHours(s, 6, { resting: true });
+  } else {
+    if (s.location !== 6 || s.gold < casters.length * 15) return false;
+    s.gold -= casters.length * 15;
+    spendHours(s, 2);
+  }
+  for (const p of casters) if (!p.dead) p.spellSpent = { 1: 0, 2: 0 };
+  note(
+    s,
+    "Spell slots restored. Camp meditation consumes food, herbs, and six hours; Emberfall temple services charge crowns.",
+  );
+  return true;
+}
+
+equipmentPerks.focus =
+  "Spell damage and wards gain two power; slots and reagents are still consumed.";
+equipmentCatalog.push({
+  id: "beacon-staff",
+  name: "Beacon focus staff",
+  role: "Wizard",
+  slot: "weapon",
+  tier: 2,
+  rarity: "Fine",
+  bonus: 2,
+  price: 90,
+  perk: "focus",
+});
+function fieldHealing(s, id, targetId) {
+  const p = s.party[id],
+    target = s.party[targetId];
+  if (
+    s.battle ||
+    s.event ||
+    s.campOpen ||
+    companyLost(s) ||
+    p?.role !== "Cleric" ||
+    p.dead ||
+    p.hp <= 0 ||
+    !target ||
+    target.dead ||
+    target.hp <= 0 ||
+    target.hp >= target.max ||
+    spellSlots(p)[1] < 1 ||
+    s.inventory.herbs < 1
+  )
+    return false;
+  p.spellSpent ||= { 1: 0, 2: 0 };
+  p.spellSpent[1] = (p.spellSpent[1] || 0) + 1;
+  s.inventory.herbs--;
+  target.hp = Math.min(
+    target.max,
+    target.hp + 8 + p.level + (p.personalPerk === "restorer" ? 2 : 0),
+  );
+  if (target.hp === target.max) target.injury = false;
+  spendHours(s, 1);
+  note(
+    s,
+    `${p.name} treats ${target.name} with Restoring light. One level-one slot, one herb and one hour spent.`,
+  );
+  return true;
+}
 
 // Original, hand-built pixel artwork. All coordinates are logical pixels.
 const artPalette = {
@@ -7069,7 +8011,7 @@ function worldArtwork() {
   return landscape;
 }
 function characterImage(role, coat, step, variant, appearance = {}) {
-  const key = `${role}:${coat}:${step}:${variant}:${appearance.sex}:${appearance.skin}:${appearance.hair}:${appearance.hairStyle}`;
+  const key = `${role}:${coat}:${step}:${variant}:${appearance.sex}:${appearance.skin}:${appearance.hair}:${appearance.hairStyle}:${appearance.race}`;
   if (characterImages.has(key)) return characterImages.get(key);
   const image = surface(26, 34),
     c = image.getContext("2d");
@@ -7143,6 +8085,37 @@ function characterImage(role, coat, step, variant, appearance = {}) {
   if (appearance.hairStyle === "long" || appearance.hairStyle === "braid") {
     pixel(c, 9, 7, 2, 11, hair);
     pixel(c, 18, 7, appearance.hairStyle === "braid" ? 1 : 2, 12, hair);
+  }
+  if (appearance.race === "elf") {
+    pixel(c, 7, 8, 3, 2, skin);
+    pixel(c, 20, 8, 3, 2, skin);
+    pixel(c, 7, 7, 1, 2, skin);
+    pixel(c, 22, 7, 1, 2, skin);
+  }
+  if (appearance.race === "dwarf") {
+    pixel(c, 8, 13, 13, 6, hair);
+    pixel(c, 10, 19, 9, 3, hair);
+    pixel(c, 8, 18, 13, 2, "#b99a5e");
+  }
+  if (appearance.race === "orc") {
+    pixel(c, 9, 6, 12, 7, "#7d9266");
+    pixel(c, 11, 10, 2, 1, "#343b2d");
+    pixel(c, 17, 10, 2, 1, "#343b2d");
+    pixel(c, 10, 13, 2, 3, "#e2d4a8");
+    pixel(c, 18, 13, 2, 3, "#e2d4a8");
+  }
+  if (role === "Wizard") {
+    pixel(c, 8, 2, 12, 4, "#6f748c");
+    pixel(c, 11, 0, 6, 3, "#9398ae");
+    pixel(c, 23, 5, 2, 25, "#86734c");
+    pixel(c, 21, 3, 6, 5, "#a5c8c2");
+    pixel(c, 22, 4, 3, 2, "#d0e3cc");
+  }
+  if (role === "Cleric") {
+    pixel(c, 10, 17, 9, 3, "#dad1aa");
+    pixel(c, 13, 14, 3, 9, "#dad1aa");
+    pixel(c, 22, 14, 3, 12, "#8d7450");
+    pixel(c, 21, 12, 5, 5, "#c3c5ae");
   }
   if (appearance.sex === "male") pixel(c, 11, 12, 7, 2, "#9b755c");
   characterImages.set(key, image);
@@ -8008,7 +8981,7 @@ function drawDungeonInterior(c, s) {
 }
 
 function drawFarmInterior(c, s) {
-  pixel(c, 0, 0, 768, 432, "#8e986b");
+  pixel(c, 0, 0, 768, 432, s.travelers?.farmRebuilt ? "#a3ad76" : "#8e986b");
   pixel(c, 90, 48, 300, 275, "#7a674f");
   pixel(c, 103, 60, 274, 250, "#baa17a");
   for (let y = 70; y < 300; y += 18) pixel(c, 105, y, 270, 1, "#a78d69");
@@ -8023,6 +8996,12 @@ function drawFarmInterior(c, s) {
       pixel(c, x, y, 4, 14, "#a59651");
       pixel(c, x - 4, y + 4, 12, 3, "#ceb66f");
     }
+  if (s.travelers?.farmRebuilt) {
+    for (let x = 455; x < 690; x += 27) pixel(c, x - 3, 227, 10, 4, "#d9c376");
+    drawMapLabel(c, "RESTORED FARM", 540, 365);
+  }
+  if (s.travelers?.tamsin === "unknown")
+    drawCharacter(c, 430, 335, "#ae8a62", 0, "", 3, { sex: "female" });
   drawMapLabel(c, "Ledger", 157, 132);
   drawMapLabel(c, "Cellar", 293, 269);
   drawMapLabel(c, "Old well", 537, 187);
@@ -8052,7 +9031,8 @@ let tab = "Company",
   selected = 0,
   craftTarget = 0,
   gearTarget = 0,
-  caravanId = null;
+  caravanId = null,
+  spellMode = null;
 const $ = (id) => document.getElementById(id),
   canvas = $("map"),
   ctx = canvas.getContext("2d");
@@ -8156,6 +9136,8 @@ function objective() {
   if (s.battle) {
     const p = s.party[selected],
       u = s.battle.units.find((u) => u.id === selected);
+    if (spellMode)
+      return `Spell prepared: ${spellBook.find((v) => v.id === spellMode)?.name}. Select an outlined target or use Spell targets below. Slots persist between battles.`;
     if (abilityMode)
       return `${skillFor(p).name} armed: click an outlined enemy within ${attackRange(p, true, s)} tiles. ${skillFor(p).desc} Costs ${skillFor(p).cost} valor.`;
     return `${battlefield(s).name} · Round ${s.battle.turn} · Valor ${s.battle.valor}/5 · ${p.name}: ${u?.moved ? "movement used" : `move up to ${movementRange(p)} tiles`}, ${u?.acted ? "action used" : "attack or brace"}. ${resolveLabel(p)} · ${fatigueLabel(p)} · Fatigue ${Math.round(p.fatigue || 0)}/100. ${bondSupport(s, p) ? "Trusted support +1 attack. " : ""}${battlefield(s).text} Cover blocks 2 ranged damage; mud costs 2; Melee flanking +2. Disengage before leaving melee reach.${s.battle.wildlife ? " Wolves rush wounded targets and gain pack damage." : ""}${s.battle.bossId ? ` ${namedAdversaries.find((boss) => boss.id === s.battle.bossId).name}: ${bossThreat(s) ? "FIRE INCOMING: move off marked tiles or stun Maela." : "Hover the named enemy for its special mechanic."}` : ""}`;
@@ -8276,6 +9258,14 @@ function renderHelp() {
   };
 }
 function render() {
+  if (
+    !s.battle ||
+    !isCaster(s.party[selected]) ||
+    (spellMode &&
+      spellBook.find((spell) => spell.id === spellMode)?.role !==
+        s.party[selected]?.role)
+  )
+    spellMode = null;
   captureCombatFeedback();
   document.querySelector(".brand small").textContent =
     s.companyName.toUpperCase();
@@ -8419,6 +9409,22 @@ function render() {
       }),
     );
     panel.append(guide);
+    const campaign = card(
+      "The Broken Road · Hungry Roads",
+      `<p>${s.campaign.phase === "unstarted" ? "Greyhaven's contract board has a lead on missing grain and caravans." : s.campaign.phase === "completed" ? `Chapter complete: grain went to ${s.campaign.branch}. Venn's invoice implicates Iron Hollow; the next chapter is still to come.` : s.campaign.phase === "grain" ? "Return to Briarhide to decide who receives the grain." : s.campaign.phase === "return" ? "Report your decision in Greyhaven." : "Investigate the farm, escort Merrit, and defeat Briarhide's captain."}</p>`,
+    );
+    if (s.campaign.phase !== "unstarted")
+      for (const task of campaignTasks(s)) {
+        const row = document.createElement("p");
+        row.textContent = `${task.done ? "✓" : "○"} ${task.name}`;
+        campaign.append(row);
+      }
+    campaign.append(
+      document.createTextNode(
+        `Briarhide: ${s.strongholds.briar.cleared ? "cleared · no new raids" : "active · raiders replenish every two days after defeat"}`,
+      ),
+    );
+    panel.append(campaign);
     const forecast = supplyForecast(s);
     panel.append(
       card(
@@ -8652,6 +9658,9 @@ function render() {
         render();
       };
       c.append(professionSelect);
+      const lineage = document.createElement("p");
+      lineage.textContent = `${fantasyRaces.find((r) => r.id === avatarAppearance(p).race).name}: ${fantasyRaces.find((r) => r.id === avatarAppearance(p).race).desc}${p.personalPerk ? ` · Personal ability: ${p.personalPerk}` : ""}`;
+      c.append(lineage);
       const progression = document.createElement("details"),
         summary = document.createElement("summary");
       summary.textContent = "Class abilities & specialization";
@@ -8659,12 +9668,29 @@ function render() {
       progression.open = p.points > 0 && (!p.talent || !p.advancedSkill);
       const ability = document.createElement("p");
       ability.className = "hint";
-      ability.textContent = `${skillFor(p).name} · ${skillFor(p).cost} valor · ${skillFor(p).desc}`;
+      ability.textContent = isCaster(p)
+        ? `Spell slots: level 1 ${spellSlots(p)[1]} · level 2 ${spellSlots(p)[2]}. Recharge at camp or Emberfall. ${spellBook
+            .filter((v) => v.role === p.role)
+            .map((v) => v.name)
+            .join(", ")}`
+        : `${skillFor(p).name} · ${skillFor(p).cost} valor · ${skillFor(p).desc}`;
       progression.append(ability);
+      if (p.role === "Cleric" && !s.battle && !s.event && !s.campOpen)
+        for (const target of livingParty(s).filter(
+          (t) => t.hp > 0 && t.hp < t.max,
+        ))
+          progression.append(
+            button(
+              `Heal ${target.name} with ${p.name} · 1 slot / 1 herb / 1 hour`,
+              () => fieldHealing(s, p.id, target.id),
+              spellSlots(p)[1] < 1 || s.inventory.herbs < 1,
+            ),
+          );
       const hint = document.createElement("p");
       hint.className = "hint";
-      hint.textContent =
-        "Choose one permanent specialization at level 2 for one training point. Uses the same points as strength and vitality.";
+      hint.textContent = isCaster(p)
+        ? "Spell slots increase with level. Second-level magic becomes available at level 3. Slots persist through combat and ordinary rests."
+        : "Choose one permanent specialization at level 2 for one training point. Uses the same points as strength and vitality.";
       progression.append(hint);
       talentsFor(p).forEach((t) => {
         const text = document.createElement("p");
@@ -8687,8 +9713,9 @@ function render() {
       });
       const advancedHint = document.createElement("p");
       advancedHint.className = "hint";
-      advancedHint.textContent =
-        "At level 4, spend two training points to permanently upgrade your class action. Requires a specialization. Choose one path; it replaces the basic skill and keeps your specialization's effects.";
+      advancedHint.textContent = isCaster(p)
+        ? "Magic is scarce outside Emberfall. Meditation consumes herbs and rations; temple recovery costs crowns."
+        : "At level 4, spend two training points to permanently upgrade your class action. Requires a specialization. Choose one path; it replaces the basic skill and keeps your specialization's effects.";
       progression.append(advancedHint);
       for (const choice of advancedSkillsFor(p)) {
         const text = document.createElement("p");
@@ -8819,6 +9846,45 @@ function render() {
         );
       panel.append(c);
     }
+    for (const p of livingParty(s)) {
+      const stage =
+        p.personalQuest?.stage || (p.storyComplete === "supported" ? 1 : 0);
+      if (stage > 0 || p.storyComplete === "refused") {
+        const journey = card(
+          `${p.name} · personal journey`,
+          `<p>${personalQuestInfo(p).goal}. ${stage === 1 ? "Travel to their objective, then investigate together." : stage === 2 ? "Discovery recovered. Share it to earn an ability and strengthen bonds, or sell it for thirty-five crowns and risk a rivalry." : stage === 3 ? `Resolved: ${p.personalQuest?.outcome}. ${p.personalPerk ? `Ability: ${p.personalPerk}.` : "Trust can be repaired at camp."}` : "A refused companion may accept an apology."}</p>`,
+        );
+        if (
+          p.storyComplete === "refused" ||
+          p.personalQuest?.outcome === "claimed"
+        )
+          journey.append(
+            button(
+              `Reconcile with ${p.name} · 15 crowns`,
+              () => advancePersonalQuest(s, p.id, "reconcile"),
+              s.gold < 15,
+            ),
+          );
+        if (stage === 2)
+          journey.append(
+            button(`Share ${p.name}'s discovery`, () =>
+              advancePersonalQuest(s, p.id, "share"),
+            ),
+            button(`Sell ${p.name}'s discovery`, () =>
+              advancePersonalQuest(s, p.id, "claim"),
+            ),
+          );
+        panel.append(journey);
+      }
+    }
+    if (livingParty(s).some(isCaster))
+      panel.append(
+        card(
+          "Recover magic",
+          "<p>Each exhausted caster needs two rations and two herbs for six hours of meditation. Daily upkeep still applies if midnight passes. Ordinary rest does not replenish slots.</p>",
+        ),
+        button("Meditate · restore spell slots", () => recoverMagic(s)),
+      );
     const duties = card(
       "Camp duties",
       "<p>Choose one job per conscious companion. Build its station first. Jobs use current professions and operate on fed rests of at least six hours, once per day. Workers recover 3 fatigue per hour; resting companions recover 5.</p>",
@@ -8982,6 +10048,23 @@ function render() {
         );
       panel.append(c);
     }
+  }
+  if (tab === "Contracts" && s.location === 0) {
+    const chapter = card(
+      "The Broken Road · Hungry Roads",
+      "<p>Three connected jobs: investigate Ashbrook Farm, escort Merrit to Saltbridge, and defeat Captain Venn. Recover the grain and choose whether the League, villagers, or your company receives it. Regular contracts remain available between objectives.</p>",
+    );
+    if (s.campaign.phase === "unstarted")
+      chapter.append(
+        button("Begin Hungry Roads", () => beginCampaign(s), false, true),
+      );
+    else
+      chapter.append(
+        document.createTextNode(
+          `Campaign: ${s.campaign.phase}. Track objectives in Company.`,
+        ),
+      );
+    panel.append(chapter);
   }
   if (tab === "Contracts") {
     panel.append(
@@ -9194,6 +10277,57 @@ function render() {
         }),
       );
     if (tab === "Town") {
+      if (
+        s.location === 0 &&
+        s.campaign.phase !== "unstarted" &&
+        s.travelers.merrit === "waiting"
+      )
+        panel.append(
+          card(
+            "Merrit's escort",
+            "<p>Merrit needs a safe journey to Saltbridge. Fifty crowns on arrival. His cart follows your company; retreat or defeat loses the escort.</p>",
+          ),
+          button("Escort Merrit to Saltbridge", () =>
+            campaignAction(s, "escort"),
+          ),
+        );
+      if (s.location === 0 && s.travelers.tamsin === "rescued")
+        panel.append(
+          button("Meet Sella again", () => travelerAction(s, "meet")),
+        );
+      if (s.location === 3 && s.travelers.merrit === "settled")
+        panel.append(
+          card(
+            "Merrit’s new stall",
+            "<p>Your former escort remembers the company. Restored deliveries lower Saltbridge food prices by ten percent.</p>",
+          ),
+        );
+      if (s.location === 3 && s.travelers.merrit === "arrived")
+        panel.append(
+          button("Meet Merrit · collect 50 crowns", () =>
+            travelerAction(s, "merrit"),
+          ),
+        );
+      if (s.location === 0 && s.campaign.phase === "return")
+        panel.append(
+          button(
+            "Report recovered grain",
+            () => campaignAction(s, "report"),
+            false,
+            true,
+          ),
+        );
+      if (s.location === 6) {
+        const magic = card(
+          "Temple of the Beacon",
+          "<p>Magic is scarce in frontier villages. Emberfall's flourishing temples and academies train casters and replenish spell slots. Recovery costs fifteen crowns per exhausted caster and two hours.</p>",
+        );
+        magic.append(
+          button("Restore spell slots at temple", () => recoverMagic(s)),
+        );
+        panel.append(magic);
+      }
+
       if (s.crime.wanted) {
         const c = card(
           "Village guard",
@@ -9507,7 +10641,10 @@ function render() {
         "<p>Named gear goes into company stores for assignment. Fine stock requires 5 renown; rare gear is recovered from elite battles. Permanent improvements above remain separate from equipment.</p>",
       ),
     );
-    for (const item of equipmentCatalog.filter((item) => item.tier <= 2)) {
+    for (const item of equipmentCatalog.filter(
+      (item) =>
+        item.tier <= 2 && (item.id !== "beacon-staff" || s.location === 6),
+    )) {
       const c = equipmentCard(item),
         price = equipmentPrice(s, item);
       c.append(
@@ -9666,6 +10803,14 @@ function render() {
         button("Leave dungeon", () => dungeonAction(s, "leave")),
       );
       a.append(c);
+    } else if (s.event.kind === "campaign") {
+      c.append(
+        button("Return grain to the League", () => chooseGrain(s, "league")),
+        button("Give grain to hungry villagers", () =>
+          chooseGrain(s, "villagers"),
+        ),
+        button("Keep grain · 16 rations", () => chooseGrain(s, "company")),
+      );
     } else if (s.event.kind === "farm") {
       const c = card("Ashbrook Farm", `<p>${s.event.message}</p>`);
       c.id = "event";
@@ -9679,6 +10824,30 @@ function render() {
             label,
             () => farmAction(s, action),
             !!s.siteProgress[`farm-${action}-13`],
+          ),
+        );
+      if (s.travelers.tamsin === "unknown")
+        c.append(
+          button(
+            "Rescue Sella · 1 medicine",
+            () => travelerAction(s, "rescue"),
+            s.inventory.medicine < 1,
+          ),
+        );
+      if (!s.travelers.farmRebuilt && s.travelers.tamsin !== "unknown")
+        c.append(
+          button(
+            "Rebuild farm · 6 wood / 20 crowns",
+            () => travelerAction(s, "rebuild"),
+            s.inventory.wood < 6 || s.gold < 20,
+          ),
+        );
+      if (s.travelers.farmRebuilt)
+        c.append(
+          button(
+            "Collect farm harvest",
+            () => travelerAction(s, "harvest"),
+            s.travelers.harvestDay >= 0 && s.day - s.travelers.harvestDay < 3,
           ),
         );
       c.append(button("Leave farm", () => farmAction(s, "leave")));
@@ -9871,14 +11040,67 @@ function render() {
     const actor = s.party[selected],
       unit = s.battle.units.find((u) => u.id === selected),
       skill = skillFor(actor);
-    a.append(
-      button(
-        `${skill.name} · ${skill.cost} valor${unit.cooldown ? ` · cooldown ${unit.cooldown}` : ""}`,
-        () => (abilityMode = !abilityMode),
-        unit.acted || unit.cooldown > 0 || s.battle.valor < skill.cost,
-        abilityMode,
-      ),
-    );
+    if (skill)
+      a.append(
+        button(
+          `${skill.name} · ${skill.cost} valor${unit.cooldown ? ` · cooldown ${unit.cooldown}` : ""}`,
+          () => (abilityMode = !abilityMode),
+          unit.acted || unit.cooldown > 0 || s.battle.valor < skill.cost,
+          abilityMode,
+        ),
+      );
+    if (isCaster(actor)) {
+      const magic = document.createElement("details"),
+        summary = document.createElement("summary");
+      summary.textContent = `Spells · level 1 ${spellSlots(actor)[1]} / level 2 ${spellSlots(actor)[2]}`;
+      magic.className = "combat-preview-menu";
+      magic.append(summary);
+      for (const spell of spellBook.filter((v) => v.role === actor.role)) {
+        const hint = document.createElement("p");
+        hint.textContent = `${spell.name}: ${spell.power} ${spell.kind === "damage" ? "base damage" : spell.kind === "heal" ? "healing + level" : "protection on the next hit"} · range ${spell.range + (actor.race === "elf" ? 1 : 0)}${spell.area ? " · adjacent area" : ""}${spell.piercing ? " · ignores armor" : ""}`;
+        magic.append(hint);
+        magic.append(
+          button(
+            `Prepare ${spell.name} · level ${spell.level} slot${spell.herbs ? " / 1 herb" : spell.ore ? " / 1 ore" : ""}`,
+            () => {
+              spellMode = spell.id;
+              abilityMode = false;
+            },
+            unit.acted || spellSlots(actor)[spell.level] < 1,
+          ),
+        );
+      }
+      if (spellMode) {
+        const spell = spellBook.find((v) => v.id === spellMode),
+          targets =
+            spell.kind === "damage"
+              ? s.battle.enemies.filter((e) => e.hp > 0)
+              : s.battle.units.filter((u) => s.party[u.id].hp > 0);
+        for (const target of targets)
+          magic.append(
+            button(
+              `Cast ${spell.name} on ${spell.kind === "damage" ? target.name || target.kind : s.party[target.id].name}`,
+              () => castSpell(s, selected, spell.id, target.x, target.y),
+              !!spellLock(s, selected, spell.id, target.x, target.y),
+            ),
+          );
+        magic.append(
+          button("Cancel spell", () => {
+            spellMode = null;
+          }),
+        );
+        magic.open = true;
+      }
+      a.append(magic);
+    }
+    if (actor.role === "Spearman")
+      a.append(
+        button(
+          "Brace equipped spear",
+          () => braceSpear(s, selected),
+          unit.acted,
+        ),
+      );
     if (abilityMode)
       a.append(button("Basic attack", () => (abilityMode = false)));
     s.battle.units.forEach((u) => {
@@ -9889,6 +11111,7 @@ function render() {
           () => {
             selected = u.id;
             abilityMode = false;
+            spellMode = null;
           },
           p.hp <= 0,
           selected === u.id,
@@ -9991,6 +11214,26 @@ function render() {
         !!s.ambushReady,
       ),
     );
+    if (s.location === 12 && s.campaign.phase === "grain")
+      a.append(
+        button(
+          "Decide the grain's fate",
+          () => campaignAction(s, "grain"),
+          false,
+          true,
+        ),
+      );
+    for (const p of livingParty(s))
+      if (
+        (p.personalQuest?.stage ||
+          (p.storyComplete === "supported" ? 1 : 0)) === 1 &&
+        personalQuestInfo(p).target === s.location
+      )
+        a.append(
+          button(`Investigate for ${p.name}`, () =>
+            advancePersonalQuest(s, p.id, "investigate"),
+          ),
+        );
     if (s.location === 13)
       a.append(
         button("Explore abandoned farm", () => enterFarm(s), false, true),
@@ -10246,7 +11489,10 @@ function draw() {
     const active = s.battle.units.find((u) => u.id === selected);
     if (active && (!active.acted || active.safeMove)) {
       const p = s.party[selected],
-        range = attackRange(p, abilityMode, s);
+        range = spellMode
+          ? spellBook.find((v) => v.id === spellMode).range +
+            (p.race === "elf" ? 1 : 0)
+          : attackRange(p, abilityMode, s);
       for (let y = 0; y < 7; y++)
         for (let x = 0; x < 9; x++) {
           const distance = Math.abs(active.x - x) + Math.abs(active.y - y),
@@ -10257,22 +11503,27 @@ function draw() {
               (u) => s.party[u.id].hp > 0 && u.x === x && u.y === y,
             );
           if (
-            (enemy &&
+            (spellMode && !spellLock(s, selected, spellMode, x, y)) ||
+            (!spellMode &&
+              enemy &&
               !active.acted &&
               distance <= range &&
               hasLineOfSight(s, active, { x, y })) ||
-            (!abilityMode &&
+            (!spellMode &&
+              !abilityMode &&
               !active.moved &&
               !enemy &&
               !occupied &&
               distance > 0 &&
               battlePath(s, active, x, y) !== null)
           ) {
-            ctx.strokeStyle = enemy
-              ? abilityMode
-                ? "#967442"
-                : "#aa6349"
-              : "#657a4d";
+            ctx.strokeStyle = spellMode
+              ? "#8a79aa"
+              : enemy
+                ? abilityMode
+                  ? "#967442"
+                  : "#aa6349"
+                : "#657a4d";
             ctx.lineWidth = 2;
             ctx.strokeRect(109 + x * 62, 4 + y * 60, 51, 49);
           }
@@ -10381,6 +11632,8 @@ function draw() {
     if (!s.discovered.includes(i) && s.contract?.target !== i) return;
     drawLandmark(ctx, p, i);
     drawMapLabel(ctx, p.name, p.x, p.y + (p.type === "town" ? 58 : 39));
+    if (i === 13 && s.travelers.farmRebuilt)
+      drawMapLabel(ctx, "RESTORED", p.x, p.y - 35);
     if (
       tavernRumors.some(
         (r) => r.target === i && s.rumors[r.id] && !s.rumors[r.id].resolvedDay,
@@ -10471,6 +11724,11 @@ function draw() {
       );
       drawLoadout(ctx, s, s.party[p.i], p.x, p.y);
     });
+  if (s.travelers.merrit === "escorting") {
+    drawWagon(ctx, s.position.x - 45, s.position.y + 28, false);
+    person(s.position.x - 23, s.position.y + 28, "#bc9b65", 0, "", 2);
+    drawMapLabel(ctx, "Merrit", s.position.x - 40, s.position.y + 56);
+  }
   drawLighting(ctx, s, canvas.width, canvas.height);
   drawWeather(ctx, s);
 }
@@ -10485,13 +11743,16 @@ canvas.onclick = (e) => {
       ally = s.battle.units.find(
         (u) => u.x === tx && u.y === ty && s.party[u.id].hp > 0,
       );
-    if (ally) {
+    if (ally && !spellMode) {
       selected = ally.id;
       abilityMode = false;
+      spellMode = null;
     } else {
-      const success = abilityMode
-        ? useSkill(s, selected, tx, ty)
-        : act(s, selected, tx, ty);
+      const success = spellMode
+        ? castSpell(s, selected, spellMode, tx, ty)
+        : abilityMode
+          ? useSkill(s, selected, tx, ty)
+          : act(s, selected, tx, ty);
       if (!success)
         note(
           s,
@@ -10617,10 +11878,11 @@ function animate(time) {
       .join(",");
     advancePatrols(s, seconds);
     if (
+      s.battle ||
       nearbyBefore !==
-      nearbyPatrols(s)
-        .map((p) => p.id)
-        .join(",")
+        nearbyPatrols(s)
+          .map((p) => p.id)
+          .join(",")
     )
       render();
     else draw();
@@ -11104,6 +12366,12 @@ function showCompanyCreator() {
         companionTraits.map((t) => [t.id, t.name]),
       ),
     };
+    f.race = creatorField(
+      c,
+      `Founder ${i + 1} race`,
+      "human",
+      fantasyRaces.map((r) => [r.id, r.name]),
+    );
     f.sex = creatorField(c, `Founder ${i + 1} sex`, i % 2 ? "male" : "female", [
       ["male", "Male"],
       ["female", "Female"],
@@ -11134,12 +12402,15 @@ function showCompanyCreator() {
     const update = () => {
       const stats = founderRoles[f.role.value],
         t = companionTraits.find((t) => t.id === f.trait.value);
-      desc.textContent = `${f.trait.value === "hearty" ? 32 : stats.max} health · ${stats.damage + (f.trait.value === "mercenary" ? 1 : 0)} attack · ${f.trait.value === "mercenary" ? 3 : 2} crowns per day. ${t.desc}`;
+      desc.textContent = `${fantasyRaces.find((r) => r.id === f.race.value).desc} ${["Wizard", "Cleric"].includes(f.role.value) ? "Caster: one extra daily crown. " : ""}${f.trait.value === "hearty" ? 32 : stats.max} health · ${stats.damage + (f.trait.value === "mercenary" ? 1 : 0)} attack · ${f.trait.value === "mercenary" ? 3 : 2} crowns per day. ${t.desc}`;
       portrait.replaceChildren(
         portraitArtwork({
           ...p,
           ...Object.fromEntries(
-            ["sex", "skin", "hair", "hairStyle"].map((k) => [k, f[k].value]),
+            ["race", "sex", "skin", "hair", "hairStyle"].map((k) => [
+              k,
+              f[k].value,
+            ]),
           ),
           role: f.role.value,
           coat:
@@ -11148,7 +12419,7 @@ function showCompanyCreator() {
         }),
       );
     };
-    for (const key of ["sex", "skin", "hair", "hairStyle", "coat"])
+    for (const key of ["race", "sex", "skin", "hair", "hairStyle", "coat"])
       f[key].onchange = update;
     portraitUpdates.push(update);
     f.role.onchange = update;

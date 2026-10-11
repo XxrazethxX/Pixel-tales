@@ -1,6 +1,6 @@
 # Pixel Tales — The Ashen Company
 
-An original, playable mercenary-company RPG with compact pixel visuals, tactical combat, company survival, staffed camps, regional trade, faction stories, research, professions, crafting, and character progression. No borrowed game assets. This is an early browser prototype; it is not yet a native Android app or a complete Wartales-scale game.
+An original, playable high-fantasy mercenary-company RPG with compact pixel visuals, tactical combat, company survival, staffed camps, regional trade, faction stories, research, professions, crafting, and character progression. No borrowed game assets. This is an early browser prototype; it is not yet a native Android app or a complete Wartales-scale game.
 
 ## The visual style
 
@@ -478,3 +478,31 @@ GAME_URL=http://127.0.0.1:3002/ PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_module
 ```
 
 ![Abandoned farm on mobile](docs/screenshots/farm-mobile.png)
+
+
+## High fantasy and The Broken Road (v0.26)
+
+Create human, elf, dwarf, or orc companions, including **Wizard** and **Cleric** founders. Their original pixel avatars show racial details and class equipment. Elves gain spell range but cost an extra daily crown; dwarves gain armor and cost an extra daily crown; orcs gain melee power and consume an extra daily ration. Casters also cost an extra daily crown. Race stays fixed when editing cosmetic appearance.
+
+Magic is scarce on the frontier. Emberfall, a flourishing city, offers magical recruits, a focus staff, and paid temple services. Spellcasters use finite slots: two level-one slots at level one, three at level three, and four at level five. Level-two slots unlock at level three, with a second at level six. Slots stay spent between battles and after saving; ordinary rest does not restore them.
+
+| Recovery | Cost per exhausted caster | Time |
+| --- | --- | --- |
+| Camp meditation | 2 rations and 2 herbs | 6 hours |
+| Emberfall temple | 15 crowns | 2 hours |
+
+Wizards cast Aether Dart, Stone Veil, and Cinderbloom; clerics cast Restoring Light, Sun Lance, and Shelter Oath. Stronger spells require herbs or ore as well as slots. Wards absorb one incoming hit. Healing cannot resurrect dead or unconscious companions. Clerics can also spend a level-one slot, an herb, and an hour to heal a conscious companion outside battle.
+
+**Hungry Roads**, the playable first chapter of **The Broken Road**, begins at Greyhaven's contract board. Investigate Ashbrook Farm, escort Merrit to Saltbridge, and defeat Captain Venn at Briarhide. His stronghold sends raiders onto the map until cleared. Clearing it permanently removes those raiders and nearby road bandits. Decide whether captured grain goes to the League, hungry villagers, or your company; rewards, food prices, reputation, and crime consequences follow that decision. This chapter is independent of ordinary contracts. Further campaign chapters are planned, not implemented.
+
+Rescue Sella and meet her again in Greyhaven. Rebuild Ashbrook for recurring harvests, or help Merrit establish a Saltbridge stall with discounted food. Escorts follow your company on the map; failed escorts can be accepted again. These consequences and one-time rewards survive reloads.
+
+Supported companion stories now continue through a personal investigation and a camp decision. Sharing the discovery grants a class-specific ability; selling it earns money but damages resolve and relationships. Paid reconciliation can repair the conflict. Equipment gains more tactical purpose: stationary bows hit harder, serviceable spears can brace against approaching enemies, and guarding shields block enemies from crossing their lane.
+
+[Setting and campaign direction](docs/THE_BROKEN_ROAD.md) · [Fantasy company creator](docs/screenshots/fantasy-company.png) · [Spell slots on mobile](docs/screenshots/spell-slots-mobile.png)
+
+Saves migrate through version 13, preserving existing companies as human companions. Verify the new chapter, magic, recruitment, and mobile controls with:
+
+```sh
+GAME_URL=http://127.0.0.1:3002/ PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/broken-road-magic-smoke.mjs
+```

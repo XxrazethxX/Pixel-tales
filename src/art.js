@@ -348,7 +348,7 @@ export function worldArtwork() {
   return landscape;
 }
 function characterImage(role, coat, step, variant, appearance = {}) {
-  const key = `${role}:${coat}:${step}:${variant}:${appearance.sex}:${appearance.skin}:${appearance.hair}:${appearance.hairStyle}`;
+  const key = `${role}:${coat}:${step}:${variant}:${appearance.sex}:${appearance.skin}:${appearance.hair}:${appearance.hairStyle}:${appearance.race}`;
   if (characterImages.has(key)) return characterImages.get(key);
   const image = surface(26, 34),
     c = image.getContext("2d");
@@ -422,6 +422,37 @@ function characterImage(role, coat, step, variant, appearance = {}) {
   if (appearance.hairStyle === "long" || appearance.hairStyle === "braid") {
     pixel(c, 9, 7, 2, 11, hair);
     pixel(c, 18, 7, appearance.hairStyle === "braid" ? 1 : 2, 12, hair);
+  }
+  if (appearance.race === "elf") {
+    pixel(c, 7, 8, 3, 2, skin);
+    pixel(c, 20, 8, 3, 2, skin);
+    pixel(c, 7, 7, 1, 2, skin);
+    pixel(c, 22, 7, 1, 2, skin);
+  }
+  if (appearance.race === "dwarf") {
+    pixel(c, 8, 13, 13, 6, hair);
+    pixel(c, 10, 19, 9, 3, hair);
+    pixel(c, 8, 18, 13, 2, "#b99a5e");
+  }
+  if (appearance.race === "orc") {
+    pixel(c, 9, 6, 12, 7, "#7d9266");
+    pixel(c, 11, 10, 2, 1, "#343b2d");
+    pixel(c, 17, 10, 2, 1, "#343b2d");
+    pixel(c, 10, 13, 2, 3, "#e2d4a8");
+    pixel(c, 18, 13, 2, 3, "#e2d4a8");
+  }
+  if (role === "Wizard") {
+    pixel(c, 8, 2, 12, 4, "#6f748c");
+    pixel(c, 11, 0, 6, 3, "#9398ae");
+    pixel(c, 23, 5, 2, 25, "#86734c");
+    pixel(c, 21, 3, 6, 5, "#a5c8c2");
+    pixel(c, 22, 4, 3, 2, "#d0e3cc");
+  }
+  if (role === "Cleric") {
+    pixel(c, 10, 17, 9, 3, "#dad1aa");
+    pixel(c, 13, 14, 3, 9, "#dad1aa");
+    pixel(c, 22, 14, 3, 12, "#8d7450");
+    pixel(c, 21, 12, 5, 5, "#c3c5ae");
   }
   if (appearance.sex === "male") pixel(c, 11, 12, 7, 2, "#9b755c");
   characterImages.set(key, image);
@@ -1287,7 +1318,7 @@ export function drawDungeonInterior(c, s) {
 }
 
 export function drawFarmInterior(c, s) {
-  pixel(c, 0, 0, 768, 432, "#8e986b");
+  pixel(c, 0, 0, 768, 432, s.travelers?.farmRebuilt ? "#a3ad76" : "#8e986b");
   pixel(c, 90, 48, 300, 275, "#7a674f");
   pixel(c, 103, 60, 274, 250, "#baa17a");
   for (let y = 70; y < 300; y += 18) pixel(c, 105, y, 270, 1, "#a78d69");
@@ -1302,6 +1333,12 @@ export function drawFarmInterior(c, s) {
       pixel(c, x, y, 4, 14, "#a59651");
       pixel(c, x - 4, y + 4, 12, 3, "#ceb66f");
     }
+  if (s.travelers?.farmRebuilt) {
+    for (let x = 455; x < 690; x += 27) pixel(c, x - 3, 227, 10, 4, "#d9c376");
+    drawMapLabel(c, "RESTORED FARM", 540, 365);
+  }
+  if (s.travelers?.tamsin === "unknown")
+    drawCharacter(c, 430, 335, "#ae8a62", 0, "", 3, { sex: "female" });
   drawMapLabel(c, "Ledger", 157, 132);
   drawMapLabel(c, "Cellar", 293, 269);
   drawMapLabel(c, "Old well", 537, 187);

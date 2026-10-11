@@ -90,7 +90,7 @@ test("old saves migrate and malformed saves recover", () => {
   s.gold = 99;
   const migrated = restore(s);
   assert.equal(migrated.gold, 99);
-  assert.equal(migrated.version, 12);
+  assert.equal(migrated.version, 13);
   assert.equal(migrated.inventory.medicine, 1);
   assert.equal(restore({ version: 1 }).party.length, 4);
   assert.equal(restore(null).day, 1);
@@ -887,7 +887,7 @@ test("gear migration preserves old upgrades and valid equipment while rejecting 
   old.party[0].armor = 3;
   delete old.party[0].equipment;
   const migrated = restore(old);
-  assert.equal(migrated.version, 12);
+  assert.equal(migrated.version, 13);
   assert.deepEqual(migrated.gear, []);
   assert.equal(migrated.party[0].weapon, 4);
   assert.equal(armorPower(migrated, migrated.party[0]), 3);
