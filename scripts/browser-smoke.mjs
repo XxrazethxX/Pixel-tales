@@ -16,8 +16,8 @@ const click = async (text) =>
 const state = () =>
   page.evaluate(() => JSON.parse(localStorage.getItem("pixel-tales")));
 const worldClick = async (x, y) => {
-  const r = await page.locator("canvas").boundingBox();
-  const view = await page.locator("canvas").evaluate((c) => ({
+  const r = await page.locator("#map").boundingBox();
+  const view = await page.locator("#map").evaluate((c) => ({
     x: Number(c.dataset.viewX),
     y: Number(c.dataset.viewY),
     scale: Number(c.dataset.scale),
@@ -42,7 +42,13 @@ const walk = async (x, y) => {
     );
     const s = await state();
     if (s.event) {
-      await click("Walk away");
+      if (
+        await page
+          .getByRole("button", { name: "Walk away", exact: true })
+          .isVisible()
+      )
+        await click("Walk away");
+      else await click("Take shelter · 1 day");
       continue;
     }
     assert.ok(
@@ -80,6 +86,16 @@ assert.ok(
   (await state()).position.x > stopped.x,
   "keyboard steering moves the party",
 );
+// Approach an independently moving caravan and trade through its proximity action.
+await page.evaluate(() => localStorage.removeItem("pixel-tales"));
+await page.reload();
+await worldClick(285, 355);
+await page
+  .getByRole("button", { name: "Trade · 10 rations / 12 crowns", exact: true })
+  .waitFor({ timeout: 10000 });
+await click("Trade · 10 rations / 12 crowns");
+assert.equal((await state()).gold, 108);
+assert.equal((await state()).food, 34);
 // Begin the full contract smoke run with independent state.
 await page.evaluate(() => localStorage.removeItem("pixel-tales"));
 await page.reload();
@@ -179,7 +195,7 @@ assert.ok(
   (await state()).position.x < mobileStart.x,
   "mobile map click moves party",
 );
-const screenParty = await page.locator("canvas").evaluate((c) => {
+const screenParty = await page.locator("#map").evaluate((c) => {
   const s = JSON.parse(localStorage.getItem("pixel-tales"));
   const r = c.getBoundingClientRect();
   return {
@@ -197,9 +213,53 @@ assert.ok(
   ),
   "mobile overflow",
 );
+// Travel beyond the original map using the navigator, handle encounters, and find a hidden stash.
+while ((await state()).food < 15) await click("Forage · +6 rations / 1 day");
+const atlasClick = async (x, y) => {
+  const r = await page.locator("#atlas").boundingBox();
+  await page.mouse.click(
+    r.x + (x / 1536) * r.width,
+    r.y + (y / 864) * r.height,
+  );
+};
+for (let attempt = 0; attempt < 8; attempt++) {
+  await atlasClick(350, 620);
+  await page.waitForFunction(
+    () => {
+      const s = JSON.parse(localStorage.getItem("pixel-tales"));
+      return !s.destination || s.event;
+    },
+    {},
+    { timeout: 20000 },
+  );
+  const s = await state();
+  if (!s.event) break;
+  if (
+    await page
+      .getByRole("button", { name: "Walk away", exact: true })
+      .isVisible()
+  )
+    await click("Walk away");
+  else await click("Take shelter · 1 day");
+}
+assert.equal(
+  (await state()).location,
+  10,
+  "navigator reaches the hidden stash beyond the old map",
+);
+assert.ok((await state()).discovered.includes(10));
+const goldBeforeStash = (await state()).gold;
+await click("Explore · knowledge & materials");
+assert.equal((await state()).gold, goldBeforeStash + 30);
+const charted = (await state()).charted;
+await page.reload();
+assert.deepEqual((await state()).charted, charted);
+await page.screenshot({ path: "/tmp/pixel-tales-mobile.png", fullPage: true });
+await page.setViewportSize({ width: 1440, height: 1000 });
+await page.screenshot({ path: "/tmp/pixel-tales-desktop.png", fullPage: true });
 assert.deepEqual(errors, []);
 console.log(
-  "PASS: free walking, redirection, stop/reload, browser-driven combat victory, exploration, research, crafting, roadside choice, recruitment, delivery, save/reload, mobile layout; no JS errors.",
+  "PASS: free walking, redirection, stop/reload, browser-driven combat victory, exploration, research, crafting, roadside choice, recruitment, delivery, save/reload, mobile layout, caravan trading, navigator travel, hidden stash discovery, and persistent charting; no JS errors.",
 );
 // Exercise startup with no network and no usable origin/storage (download-style runtime).
 const offlineContext = await browser.newContext({ offline: true });

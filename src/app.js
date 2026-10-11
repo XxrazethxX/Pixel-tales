@@ -1,4 +1,9 @@
 import {
+  WORLD,
+  advancePatrols,
+  nearbyPatrols,
+  tradeCaravan,
+  discoverNearby,
   fresh,
   restore,
   places,
@@ -117,7 +122,7 @@ function render() {
     panel.append(
       card(
         "The Ashen Company",
-        `<div class="row"><span class="hint">${s.completed} contracts · ${s.renown} renown</span><span class="badge">Morale ${s.morale}%</span></div><div class="bar"><i style="width:${s.morale}%"></i></div><p>Wages: ${s.party.length * 2} crowns per camp. At 85 morale, all attacks gain +1 damage. Injuries reduce attack by 1.</p>`,
+        `<div class="row"><span class="hint">${s.completed} contracts · ${s.skirmishes} skirmishes · ${s.renown} renown</span><span class="badge">Morale ${s.morale}%</span></div><div class="bar"><i style="width:${s.morale}%"></i></div><p>Map: ${s.discovered.length}/${places.length} locations discovered.</p><p>Wages: ${s.party.length * 2} crowns per camp. At 85 morale, all attacks gain +1 damage. Injuries reduce attack by 1.</p>`,
       ),
     );
     s.party.forEach((p) => {
@@ -193,7 +198,11 @@ function render() {
         button(
           done ? "Discovered" : "Research",
           () => research(s, r.id),
-          done || s.knowledge < r.cost || !!s.battle || !!s.event,
+          done ||
+            s.knowledge < r.cost ||
+            (r.requires && !s.research.includes(r.requires)) ||
+            !!s.battle ||
+            !!s.event,
         ),
       );
       panel.append(el);
@@ -240,7 +249,7 @@ function render() {
       panel.append(
         card(
           "Far from home",
-          "<p>Travel to Greyhaven or Saltbridge for the market and recruitment.</p>",
+          "<p>Travel to Greyhaven, Saltbridge, or Emberfall for the market and recruitment.</p>",
         ),
       );
     else {
@@ -260,9 +269,12 @@ function render() {
       ].forEach(([id, label, cost]) =>
         market.append(
           button(
-            `${label} · ${cost} crowns`,
+            `${label} · ${s.research.includes("barter") ? Math.ceil(cost * 0.8) : cost} crowns`,
             () => buy(s, id),
-            s.gold < cost || !!s.event || !!s.battle,
+            s.gold <
+              (s.research.includes("barter") ? Math.ceil(cost * 0.8) : cost) ||
+              !!s.event ||
+              !!s.battle,
           ),
         ),
       );
@@ -286,16 +298,40 @@ function render() {
   if (s.event) {
     const c = card(s.event.title, `<p>${s.event.text}</p>`);
     c.id = "event";
-    c.append(
-      button(
-        "Help · 1 medicine",
-        () => resolveEvent(s, "help"),
-        s.inventory.medicine < 1,
-        true,
-      ),
-      button("Take 12 crowns · −8 morale", () => resolveEvent(s, "trade")),
-      button("Walk away", () => resolveEvent(s, "leave")),
-    );
+    if (s.event.kind === "camp")
+      c.append(
+        button(
+          "Search · 2 rations",
+          () => resolveEvent(s, "search"),
+          s.food < 2,
+          true,
+        ),
+        button("Walk away", () => resolveEvent(s, "leave")),
+      );
+    else if (s.event.kind === "storm")
+      c.append(
+        button(
+          "Take shelter · 1 day",
+          () => resolveEvent(s, "shelter"),
+          false,
+          true,
+        ),
+        button("Press on · lose health & morale", () =>
+          resolveEvent(s, "push"),
+        ),
+      );
+    else {
+      c.append(
+        button(
+          "Help · 1 medicine",
+          () => resolveEvent(s, "help"),
+          s.inventory.medicine < 1,
+          true,
+        ),
+        button("Take 12 crowns · −8 morale", () => resolveEvent(s, "trade")),
+        button("Walk away", () => resolveEvent(s, "leave")),
+      );
+    }
     a.append(c);
   } else if (s.battle) {
     a.append(
@@ -309,7 +345,7 @@ function render() {
         s.gold = Math.max(0, s.gold - 15);
         s.battle = null;
         s.morale = Math.max(0, s.morale - 10);
-        note(s, "Retreated. Contract remains active.");
+        note(s, "Retreated. The company lives to fight another day.");
       }),
     );
     s.battle.units.forEach((u) => {
@@ -366,6 +402,22 @@ function render() {
           true,
         ),
       );
+    nearbyPatrols(s).forEach((p) =>
+      a.append(
+        button(
+          p.kind === "merchant"
+            ? `Trade · 10 rations / ${s.research.includes("barter") ? 10 : 12} crowns`
+            : `Confront ${p.name}`,
+          () =>
+            p.kind === "merchant"
+              ? tradeCaravan(s, p.id)
+              : startBattle(s, p.id),
+          p.kind === "merchant" &&
+            s.gold < (s.research.includes("barter") ? 10 : 12),
+          p.kind === "bandits",
+        ),
+      ),
+    );
     if (s.destination)
       a.prepend(button("Stop walking", () => stopMovement(s), false, true));
     $("map-label").textContent =
@@ -422,14 +474,17 @@ function draw() {
     ? (768 - w / view.scale) / 2
     : Math.max(
         0,
-        Math.min(768 - w / view.scale, s.position.x - w / view.scale / 2),
+        Math.min(
+          WORLD.width - w / view.scale,
+          s.position.x - w / view.scale / 2,
+        ),
       );
   view.y = s.battle
     ? (432 - h / view.scale) / 2
     : Math.max(
         0,
         Math.min(
-          432 - (h - 180) / view.scale,
+          WORLD.height - (h - 180) / view.scale,
           s.position.y - (h - 180) / view.scale / 2,
         ),
       );
@@ -444,10 +499,10 @@ function draw() {
     -view.x * view.scale,
     -view.y * view.scale,
   );
-  rect(-768, -432, 2304, 1296, "#657454");
-  for (let i = 0; i < 450; i++) {
-    const x = (i * 137 + 31) % 768,
-      y = (i * 83 + 17) % 432;
+  rect(-768, -432, WORLD.width + 1536, WORLD.height + 864, "#657454");
+  for (let i = 0; i < 1800; i++) {
+    const x = (i * 137 + 31) % WORLD.width,
+      y = (i * 83 + 17) % WORLD.height;
     rect(x, y, 2, 2, i % 2 ? "#73805a" : "#596e4c");
   }
   if (s.battle) {
@@ -516,15 +571,15 @@ function draw() {
   ctx.strokeStyle = "#456775";
   ctx.lineWidth = 24;
   ctx.beginPath();
-  for (let y = 0; y <= 432; y += 4) {
+  for (let y = 0; y <= WORLD.height; y += 4) {
     const x = 475 + Math.sin(y / 65) * 38;
     if (y === 0) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
   }
   ctx.stroke();
-  for (let i = 0; i < 65; i++) {
-    let x = (i * 71 + 50) % 740,
-      y = (i * 43 + 25) % 380;
+  for (let i = 0; i < 260; i++) {
+    let x = (i * 71 + 50) % (WORLD.width - 28),
+      y = (i * 43 + 25) % (WORLD.height - 52);
     if (places.every((p) => Math.hypot(p.x - x, p.y - y) > 48)) tree(x, y);
   }
   for (let i = 0; i < 12; i++) {
@@ -533,7 +588,14 @@ function draw() {
     rect(x, y, 24, 26, "#596452");
     rect(x + 5, y - 8, 14, 12, "#7a8269");
   }
+  const cols = Math.ceil(WORLD.width / 64),
+    charted = new Set(s.charted);
+  for (let row = 0; row < Math.ceil(WORLD.height / 64); row++)
+    for (let col = 0; col < cols; col++)
+      if (!charted.has(row * cols + col))
+        rect(col * 64, row * 64, 64, 64, "#142c28b8");
   places.forEach((p, i) => {
+    if (!s.discovered.includes(i) && s.contract?.target !== i) return;
     if (p.type === "town") {
       rect(p.x - 17, p.y - 14, 34, 28, "#baad7e");
       rect(p.x - 21, p.y - 22, 42, 12, "#704b39");
@@ -546,6 +608,10 @@ function draw() {
       rect(p.x - 20, p.y - 18, 40, 32, "#7d806a");
       rect(p.x - 9, p.y - 5, 18, 20, "#27352c");
       rect(p.x - 23, p.y + 12, 46, 4, "#a19a77");
+    } else if (p.type === "cache") {
+      rect(p.x - 12, p.y - 7, 24, 16, "#9e7850");
+      rect(p.x - 12, p.y - 9, 24, 5, "#c4ac74");
+      rect(p.x - 2, p.y - 6, 4, 8, "#d2bd7e");
     } else tree(p.x - 7, p.y - 16);
     ctx.font = "12px monospace";
     ctx.textAlign = "center";
@@ -556,6 +622,34 @@ function draw() {
       ctx.fillText("⚑ CONTRACT", p.x, p.y - 35);
     }
   });
+  s.patrols
+    .filter(
+      (p) =>
+        !p.cleared &&
+        Math.hypot(p.x - s.position.x, p.y - s.position.y) <
+          (s.research.includes("scouting") ? 210 : 140),
+    )
+    .forEach((p) => {
+      const color = p.kind === "bandits" ? "#a85f49" : "#d3b46e";
+      person(
+        p.x - 17,
+        p.y - 8,
+        color,
+        Math.sin(performance.now() / 150) > 0 ? 1 : -1,
+      );
+      person(
+        p.x,
+        p.y,
+        color,
+        Math.sin(performance.now() / 150) > 0 ? -1 : 1,
+        p.kind === "bandits" ? "Spearman" : "",
+      );
+      ctx.font = "10px monospace";
+      ctx.fillStyle = p.kind === "bandits" ? "#f6b39b" : "#f4dc91";
+      ctx.textAlign = "center";
+      ctx.fillText(p.name, p.x, p.y - 30);
+    });
+  drawAtlas();
   if (s.destination) {
     const goal = s.destination;
     ctx.strokeStyle = "#e2cd8e";
@@ -642,11 +736,13 @@ function animate(time) {
       day: s.day,
       location: s.location,
       moving: !!s.destination,
+      discovered: s.discovered.length,
     };
     advanceMovement(s, seconds);
     if (
       before.day !== s.day ||
       before.location !== s.location ||
+      before.discovered !== s.discovered.length ||
       !s.destination
     )
       render();
@@ -655,6 +751,26 @@ function animate(time) {
       $("map-label").textContent =
         `${places[s.location]?.name || terrainAt(s.position).toUpperCase()} · ${Math.round(s.position.x)}, ${Math.round(s.position.y)} · walking`;
     }
+    if (time - lastSave > 750) {
+      try {
+        localStorage.setItem("pixel-tales", JSON.stringify(s));
+      } catch {}
+      lastSave = time;
+    }
+  }
+  if (!s.battle && !s.event && !drawerOpen) {
+    const nearbyBefore = nearbyPatrols(s)
+      .map((p) => p.id)
+      .join(",");
+    advancePatrols(s, seconds);
+    if (
+      nearbyBefore !==
+      nearbyPatrols(s)
+        .map((p) => p.id)
+        .join(",")
+    )
+      render();
+    else draw();
     if (time - lastSave > 750) {
       try {
         localStorage.setItem("pixel-tales", JSON.stringify(s));
@@ -705,3 +821,56 @@ window.addEventListener("blur", () => {
     render();
   }
 });
+
+function drawAtlas() {
+  const atlas = $("atlas"),
+    a = atlas.getContext("2d");
+  a.fillStyle = "#20362e";
+  a.fillRect(0, 0, atlas.width, atlas.height);
+  const sx = atlas.width / WORLD.width,
+    sy = atlas.height / WORLD.height,
+    cols = Math.ceil(WORLD.width / 64);
+  a.fillStyle = "#657454";
+  for (const cell of s.charted)
+    a.fillRect(
+      (cell % cols) * 64 * sx,
+      Math.floor(cell / cols) * 64 * sy,
+      64 * sx + 1,
+      64 * sy + 1,
+    );
+  places.forEach((p, i) => {
+    if (s.discovered.includes(i) || s.contract?.target === i) {
+      a.fillStyle =
+        s.contract?.target === i
+          ? "#f4d484"
+          : p.type === "town"
+            ? "#e3d1a2"
+            : "#8ab282";
+      a.fillRect(p.x * sx - 2, p.y * sy - 2, 4, 4);
+    }
+  });
+  a.strokeStyle = "#c0bda0";
+  a.strokeRect(
+    view.x * sx,
+    view.y * sy,
+    (canvas.width / view.scale) * sx,
+    (Math.max(160, canvas.height - 180) / view.scale) * sy,
+  );
+  a.fillStyle = "#fff2c1";
+  a.fillRect(s.position.x * sx - 2, s.position.y * sy - 2, 4, 4);
+  if (s.destination) {
+    a.strokeStyle = "#e6bf74";
+    a.strokeRect(s.destination.x * sx - 3, s.destination.y * sy - 3, 6, 6);
+  }
+}
+$("atlas").onclick = (event) => {
+  const r = $("atlas").getBoundingClientRect();
+  heldKeys.clear();
+  drawerOpen = false;
+  moveTo(
+    s,
+    ((event.clientX - r.left) / r.width) * WORLD.width,
+    ((event.clientY - r.top) / r.height) * WORLD.height,
+  );
+  render();
+};

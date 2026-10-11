@@ -83,7 +83,7 @@ test("old saves migrate and malformed saves recover", () => {
   s.gold = 99;
   const migrated = restore(s);
   assert.equal(migrated.gold, 99);
-  assert.equal(migrated.version, 3);
+  assert.equal(migrated.version, 4);
   assert.equal(migrated.inventory.medicine, 1);
   assert.equal(restore({ version: 1 }).party.length, 4);
   assert.equal(restore(null).day, 1);
@@ -230,7 +230,7 @@ test("movement clamps boundaries, pauses for encounters, and stops when out of f
   const s = fresh();
   assert.equal(moveTo(s, NaN, 5), false);
   moveTo(s, -300, 900);
-  assert.deepEqual(s.destination, { x: 12, y: 414 });
+  assert.deepEqual(s.destination, { x: 12, y: 846 });
   s.event = { title: "Pause" };
   const pos = { ...s.position };
   advanceMovement(s, 9);
@@ -254,4 +254,121 @@ test("wilderness saves restore exact position, mileage, and a stopped party", ()
   assert.equal(saved.location, -1);
   assert.equal(saved.destination, null);
   assert.equal(nearbyPlace({ x: 170, y: 280 }), 0);
+});
+
+import {
+  WORLD,
+  discoverNearby,
+  advancePatrols,
+  nearbyPatrols,
+  tradeCaravan,
+  roadEvent,
+} from "../src/game.js";
+test("the enlarged world reveals locations once and persists charted terrain", () => {
+  const s = fresh();
+  assert.equal(WORLD.width, 1536);
+  assert.equal(s.discovered.includes(10), false);
+  const knowledge = s.knowledge;
+  s.position = { x: 350, y: 620 };
+  s.location = nearbyPlace(s.position);
+  discoverNearby(s);
+  assert.ok(s.discovered.includes(10));
+  assert.ok(s.knowledge > knowledge);
+  const earned = s.knowledge;
+  discoverNearby(s);
+  assert.equal(s.knowledge, earned);
+  const restored = restore(JSON.parse(JSON.stringify(s)));
+  assert.deepEqual(restored.discovered, s.discovered);
+  assert.deepEqual(new Set(restored.charted), new Set(s.charted));
+  assert.deepEqual(restored.position, s.position);
+});
+test("patrols move, pause during encounters, and remain on their route after reload", () => {
+  const s = fresh(),
+    before = { ...s.patrols[0] };
+  advancePatrols(s, 3);
+  assert.notEqual(s.patrols[0].x, before.x);
+  const position = s.patrols[0].x;
+  s.event = { title: "Pause" };
+  assert.equal(advancePatrols(s, 3), false);
+  assert.equal(s.patrols[0].x, position);
+  const restored = restore(JSON.parse(JSON.stringify(s)));
+  assert.equal(restored.patrols[0].x, position);
+  assert.deepEqual(restored.patrols[0].route, before.route);
+});
+test("caravans only trade nearby and barter discounts both caravan and town purchases", () => {
+  const s = fresh();
+  assert.equal(tradeCaravan(s, "caravan"), false);
+  s.position = { x: s.patrols[0].x, y: s.patrols[0].y };
+  assert.ok(nearbyPatrols(s).some((p) => p.id === "caravan"));
+  assert.ok(tradeCaravan(s, "caravan"));
+  assert.equal(s.gold, 108);
+  assert.equal(s.food, 34);
+  s.research.push("barter");
+  assert.ok(tradeCaravan(s, "caravan"));
+  assert.equal(s.gold, 98);
+  s.location = 0;
+  s.gold = 12;
+  assert.ok(buy(s, "food"));
+  assert.equal(s.gold, 0);
+});
+test("patrol victories keep the active contract and cannot be farmed again", () => {
+  const s = fresh();
+  accept(s, 2);
+  const contract = { ...s.contract };
+  const patrol = s.patrols.find((p) => p.id === "knives");
+  assert.equal(startBattle(s, patrol.id), false);
+  s.position = { x: patrol.x, y: patrol.y };
+  s.location = -1;
+  assert.ok(startBattle(s, patrol.id));
+  s.battle.enemies.forEach((e) => (e.hp = 0));
+  s.battle.enemies[0] = { id: 0, x: 2, y: 1, hp: 1, max: 16 };
+  assert.ok(act(s, 0, 2, 1));
+  assert.equal(s.skirmishes, 1);
+  assert.equal(s.completed, 0);
+  assert.deepEqual(s.contract, contract);
+  assert.equal(patrol.cleared, true);
+  assert.equal(s.gold, 160);
+  assert.equal(startBattle(s, patrol.id), false);
+  assert.equal(
+    restore(JSON.parse(JSON.stringify(s))).patrols.find(
+      (p) => p.id === "knives",
+    ).cleared,
+    true,
+  );
+});
+test("cartography has a real prerequisite and does not grant discovery rewards", () => {
+  const s = fresh();
+  s.knowledge = 20;
+  assert.equal(research(s, "cartography"), false);
+  assert.ok(research(s, "scouting"));
+  const knowledge = s.knowledge;
+  assert.ok(research(s, "cartography"));
+  assert.equal(s.knowledge, knowledge - 4);
+  assert.equal(s.discovered.length, 12);
+});
+test("hidden stashes pay once and new event choices have concrete effects", () => {
+  const s = fresh();
+  s.location = 10;
+  s.position = { x: 350, y: 620 };
+  assert.ok(explore(s));
+  assert.equal(s.gold, 150);
+  assert.equal(explore(s), false);
+  s.day = 6;
+  s.event = roadEvent(s);
+  assert.equal(s.event.kind, "camp");
+  s.food = 1;
+  assert.equal(resolveEvent(s, "search"), false);
+  s.food = 3;
+  const wood = s.inventory.wood;
+  assert.ok(resolveEvent(s, "search"));
+  assert.equal(s.food, 1);
+  assert.equal(s.inventory.wood, wood + 3);
+  s.day = 9;
+  s.event = roadEvent(s);
+  s.party[1].hp = 0;
+  assert.ok(resolveEvent(s, "push"));
+  assert.equal(s.party[0].hp, 25);
+  assert.equal(s.party[1].hp, 0);
+  assert.equal(s.morale, 65);
+  assert.equal(resolveEvent(s, "push"), false);
 });

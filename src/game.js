@@ -1,3 +1,4 @@
+export const WORLD = { width: 1536, height: 864, cell: 64 };
 export const places = [
   { name: "Greyhaven", x: 170, y: 280, type: "town" },
   { name: "Pinewatch", x: 350, y: 145, type: "forest" },
@@ -5,6 +6,12 @@ export const places = [
   { name: "Saltbridge", x: 590, y: 355, type: "town" },
   { name: "Iron Hollow", x: 220, y: 95, type: "mine" },
   { name: "Watchtower", x: 685, y: 95, type: "ruin" },
+  { name: "Emberfall", x: 1110, y: 600, type: "town" },
+  { name: "Whispering Grove", x: 965, y: 220, type: "forest" },
+  { name: "Sunken Chapel", x: 730, y: 720, type: "ruin" },
+  { name: "Redstone Quarry", x: 1250, y: 110, type: "mine" },
+  { name: "Forgotten Stash", x: 350, y: 620, type: "cache" },
+  { name: "Broken Crown", x: 1385, y: 755, type: "ruin" },
 ];
 export const studies = [
   {
@@ -26,13 +33,38 @@ export const studies = [
     desc: "All company attacks deal +2 damage.",
   },
 ];
+studies.push(
+  {
+    id: "scouting",
+    name: "Watchful eyes",
+    cost: 3,
+    desc: "Increase discovery and map visibility from 140 to 210 pixels.",
+  },
+  {
+    id: "barter",
+    name: "A fair bargain",
+    cost: 3,
+    desc: "Market and caravan purchases cost 20% less.",
+  },
+  {
+    id: "cartography",
+    name: "Borderlands charts",
+    cost: 4,
+    requires: "scouting",
+    desc: "Requires Watchful eyes. Reveal all landmark locations; terrain must still be explored.",
+  },
+);
 export function fresh() {
   return {
-    version: 3,
+    version: 4,
     inventory: { ore: 0, wood: 0, herbs: 0, medicine: 1 },
     explored: [],
     event: null,
     renown: 0,
+    skirmishes: 0,
+    discovered: [0, 3],
+    charted: initialChart(),
+    patrols: initialPatrols(),
     day: 1,
     gold: 120,
     food: 24,
@@ -99,11 +131,7 @@ export function travel(s, to) {
   s.destination = null;
   s.morale = Math.max(0, s.morale - 2);
   note(s, `Reached ${places[to].name}. Used ${cost} rations.`);
-  if (s.day % 3 === 0)
-    s.event = {
-      title: "Strangers at the roadside",
-      text: "A wounded courier asks for medicine. A merchant offers to buy your silence and leave him behind.",
-    };
+  if (s.day % 3 === 0) s.event = roadEvent(s);
   return true;
 }
 export function camp(s) {
@@ -130,26 +158,44 @@ export function research(s, id) {
     !r ||
     s.research.includes(id) ||
     s.knowledge < r.cost ||
+    (r.requires && !s.research.includes(r.requires)) ||
     s.battle ||
     s.event
   )
     return false;
   s.knowledge -= r.cost;
   s.research.push(id);
+  if (id === "cartography") s.discovered = places.map((p, i) => i);
+  if (id === "scouting") discoverNearby(s);
   note(s, `Learned ${r.name}.`);
   return true;
 }
-export function startBattle(s) {
+export function startBattle(s, patrolId = null) {
+  const patrol = patrolId
+    ? s.patrols.find(
+        (p) => p.id === patrolId && !p.cleared && p.kind === "bandits",
+      )
+    : null;
+  if (
+    patrolId &&
+    (!patrol ||
+      Math.hypot(patrol.x - s.position.x, patrol.y - s.position.y) > 48)
+  )
+    return false;
   if (
     s.battle ||
     s.event ||
-    !s.contract ||
-    s.contract.kind === "delivery" ||
-    s.location !== s.contract.target ||
+    (!patrol &&
+      (!s.contract ||
+        s.contract.kind === "delivery" ||
+        s.location !== s.contract.target)) ||
     !s.party.some((p) => p.hp > 0)
   )
     return false;
+  s.destination = null;
   s.battle = {
+    kind: patrol ? "patrol" : "contract",
+    patrolId: patrol?.id || null,
     turn: 1,
     units: s.party
       .filter((p) => p.hp > 0)
@@ -204,10 +250,15 @@ export function act(s, id, x, y) {
   return true;
 }
 function win(s) {
-  const reward = s.contract.reward;
+  const patrolFight = s.battle.kind === "patrol";
+  const reward = patrolFight ? 40 : s.contract.reward;
   s.gold += reward;
   s.knowledge += 2;
-  s.completed++;
+  if (patrolFight) {
+    s.skirmishes++;
+    const patrol = s.patrols.find((p) => p.id === s.battle.patrolId);
+    if (patrol) patrol.cleared = true;
+  } else s.completed++;
   s.renown += 5;
   s.inventory.ore += 2;
   s.inventory.wood += 2;
@@ -221,9 +272,9 @@ function win(s) {
   }
   note(
     s,
-    `Contract fulfilled. Earned ${reward} crowns, 2 knowledge, and 35 XP per survivor.`,
+    `${patrolFight ? "Patrol defeated" : "Contract fulfilled"}. Earned ${reward} crowns, 2 knowledge, and 35 XP per survivor.`,
   );
-  s.contract = null;
+  if (!patrolFight) s.contract = null;
   s.battle = null;
 }
 export function endTurn(s) {
@@ -280,7 +331,7 @@ export function endTurn(s) {
   }
   if (s.party.every((p) => p.hp === 0)) {
     s.battle = null;
-    s.contract = null;
+    if (b.kind !== "patrol") s.contract = null;
     s.gold = Math.max(0, s.gold - 20);
     s.location = 0;
     s.position = { x: places[0].x, y: places[0].y };
@@ -309,7 +360,7 @@ export function restore(raw) {
   const base = fresh();
   if (
     !raw ||
-    ![1, 2, 3].includes(raw.version) ||
+    ![1, 2, 3, 4].includes(raw.version) ||
     !Array.isArray(raw.party) ||
     raw.party.length < 1 ||
     raw.party.length > 6 ||
@@ -335,7 +386,7 @@ export function restore(raw) {
   const result = {
     ...base,
     ...raw,
-    version: 3,
+    version: 4,
     inventory: { ...base.inventory, ...raw.inventory },
     explored: raw.explored || [],
     event: raw.event || null,
@@ -345,9 +396,9 @@ export function restore(raw) {
     Number.isFinite(raw.position.x) &&
     Number.isFinite(raw.position.y) &&
     raw.position.x >= 12 &&
-    raw.position.x <= 756 &&
+    raw.position.x <= WORLD.width - 12 &&
     raw.position.y >= 18 &&
-    raw.position.y <= 414;
+    raw.position.y <= WORLD.height - 18;
   result.position = validPosition
     ? { ...raw.position }
     : {
@@ -364,6 +415,46 @@ export function restore(raw) {
     : [];
   if (!result.trail.length) result.trail = [{ ...result.position }];
   result.location = nearbyPlace(result.position);
+  result.discovered = [
+    ...new Set([
+      0,
+      3,
+      ...(Array.isArray(raw.discovered) ? raw.discovered : []),
+      ...result.explored,
+      ...(result.location >= 0 ? [result.location] : []),
+    ]),
+  ].filter((i) => Number.isInteger(i) && places[i]);
+  result.charted = Array.isArray(raw.charted)
+    ? raw.charted.filter(
+        (i) =>
+          Number.isInteger(i) &&
+          i >= 0 &&
+          i < Math.ceil(WORLD.width / 64) * Math.ceil(WORLD.height / 64),
+      )
+    : initialChart();
+  result.patrols = initialPatrols().map((p) => {
+    const saved = Array.isArray(raw.patrols)
+      ? raw.patrols.find((v) => v?.id === p.id)
+      : null;
+    return saved &&
+      Number.isFinite(saved.x) &&
+      Number.isFinite(saved.y) &&
+      saved.x >= 0 &&
+      saved.x <= WORLD.width &&
+      saved.y >= 0 &&
+      saved.y <= WORLD.height
+      ? {
+          ...p,
+          x: saved.x,
+          y: saved.y,
+          waypoint: Number.isInteger(saved.waypoint)
+            ? Math.abs(saved.waypoint) % p.route.length
+            : 0,
+          cleared: !!saved.cleared,
+        }
+      : p;
+  });
+  discoverNearby(result, false);
   result.party = result.party.map((p, id) => ({
     ...base.party[0],
     ...p,
@@ -536,6 +627,11 @@ export function explore(s) {
   s.inventory.ore += type === "mine" ? 6 : 2;
   s.inventory.wood += type === "forest" ? 5 : 1;
   s.inventory.herbs += type === "forest" ? 4 : 1;
+  if (type === "cache") {
+    s.gold += 30;
+    s.inventory.medicine++;
+    note(s, "Recovered a hidden stash: 30 crowns and medicine.");
+  }
   for (const p of s.party)
     if (p.profession === (type === "mine" ? "Miner" : "Herbalist"))
       p.professionXP++;
@@ -554,6 +650,39 @@ export function forage(s) {
   return true;
 }
 export function resolveEvent(s, choice) {
+  if (s.event?.kind === "camp") {
+    if (
+      !["search", "leave"].includes(choice) ||
+      (choice === "search" && s.food < 2)
+    )
+      return false;
+    if (choice === "search") {
+      s.food -= 2;
+      s.inventory.wood += 3;
+      s.inventory.herbs += 2;
+      s.knowledge++;
+      note(
+        s,
+        "Searched the abandoned camp: recovered herbs, wood, and knowledge.",
+      );
+    } else note(s, "Passed the abandoned camp.");
+    s.event = null;
+    return true;
+  }
+  if (s.event?.kind === "storm") {
+    if (!["shelter", "push", "leave"].includes(choice)) return false;
+    if (choice === "shelter") {
+      s.day++;
+      note(s, "Waited a day for the storm to pass.");
+    } else {
+      s.morale = Math.max(0, s.morale - 10);
+      for (const p of s.party) if (p.hp > 0) p.hp = Math.max(1, p.hp - 3);
+      note(s, "Pressed through the storm: lost morale and health.");
+    }
+    s.event = null;
+    return true;
+  }
+
   if (!s.event || !["help", "trade", "leave"].includes(choice)) return false;
   if (choice === "help") {
     if (s.inventory.medicine < 1) return false;
@@ -583,6 +712,8 @@ export function contracts(s) {
       kind: "delivery",
     },
     { name: "Silence the watchtower", target: 5, reward: 100, kind: "battle" },
+    { name: "Emberfall relief", target: 6, reward: 150, kind: "delivery" },
+    { name: "A crown in the dirt", target: 11, reward: 180, kind: "battle" },
   ];
 }
 export function accept(s, index) {
@@ -634,13 +765,15 @@ export function buy(s, item) {
     s.battle ||
     s.event ||
     places[s.location]?.type !== "town" ||
-    s.gold < o[0]
+    s.gold < (s.research.includes("barter") ? Math.ceil(o[0] * 0.8) : o[0])
   )
     return false;
-  s.gold -= o[0];
+  const price = s.research.includes("barter") ? Math.ceil(o[0] * 0.8) : o[0];
+  if (s.gold < price) return false;
+  s.gold -= price;
   if (item === "food") s.food += o[1];
   else s.inventory[item] += o[1];
-  note(s, `Bought ${o[1]} ${item} for ${o[0]} crowns.`);
+  note(s, `Bought ${o[1]} ${item} for ${price} crowns.`);
   return true;
 }
 
@@ -655,8 +788,8 @@ export function moveTo(s, x, y) {
   if (s.battle || s.event || !Number.isFinite(x) || !Number.isFinite(y))
     return false;
   const point = {
-    x: Math.max(12, Math.min(756, x)),
-    y: Math.max(18, Math.min(414, y)),
+    x: Math.max(12, Math.min(WORLD.width - 12, x)),
+    y: Math.max(18, Math.min(WORLD.height - 18, y)),
   };
   if (Math.hypot(point.x - s.position.x, point.y - s.position.y) < 1)
     return false;
@@ -669,8 +802,12 @@ export function stopMovement(s) {
 export function terrainAt(p) {
   const riverX = 475 + Math.sin(p.y / 65) * 38;
   if (Math.abs(p.x - riverX) < 14) return "shallows";
-  if (p.y < 110 && p.x < 370) return "highlands";
-  if (p.x > 275 && p.x < 395 && p.y < 230) return "forest";
+  if (p.y < 150 && p.x < 450) return "highlands";
+  if (
+    (p.x > 275 && p.x < 395 && p.y < 230) ||
+    (p.x > 870 && p.x < 1150 && p.y < 400)
+  )
+    return "forest";
   return "grassland";
 }
 export function advanceMovement(s, seconds) {
@@ -694,10 +831,11 @@ export function advanceMovement(s, seconds) {
       arrived = true;
       break;
     }
-    const amount = Math.min(budget, length, 160 - s.walked);
+    const amount = Math.min(budget, length, 160 - s.walked, 12);
     s.position.x += (dx / length) * amount;
     s.position.y += (dy / length) * amount;
     s.walked += amount;
+    discoverNearby(s);
     budget -= amount;
     changed = true;
     // Keep sufficient history for followers to trace turns rather than teleport.
@@ -726,10 +864,7 @@ export function advanceMovement(s, seconds) {
       s.morale = Math.max(0, s.morale - 2);
       note(s, `A day on the road. Used ${cost} rations.`);
       if (s.day % 3 === 0) {
-        s.event = {
-          title: "Strangers in the wilderness",
-          text: "A wounded courier asks for medicine. A merchant offers to buy your silence and leave him behind.",
-        };
+        s.event = roadEvent(s);
         s.destination = null;
         break;
       }
@@ -759,4 +894,152 @@ export function partyPositions(s) {
     }
     return { x: Math.max(12, current.x - remaining), y: current.y };
   });
+}
+
+export function initialChart() {
+  const cells = [];
+  const cols = Math.ceil(WORLD.width / WORLD.cell);
+  for (let y = 0; y < Math.ceil(WORLD.height / WORLD.cell); y++)
+    for (let x = 0; x < cols; x++)
+      if (Math.hypot(x * 64 + 32 - 170, y * 64 + 32 - 280) <= 140)
+        cells.push(y * cols + x);
+  return cells;
+}
+export function discoverNearby(s, reward = true) {
+  const radius = s.research.includes("scouting") ? 210 : 140,
+    known = new Set(s.charted),
+    cols = Math.ceil(WORLD.width / 64);
+  const cx = Math.floor(s.position.x / 64),
+    cy = Math.floor(s.position.y / 64),
+    reach = Math.ceil(radius / 64);
+  for (
+    let y = Math.max(0, cy - reach);
+    y <= Math.min(Math.ceil(WORLD.height / 64) - 1, cy + reach);
+    y++
+  )
+    for (
+      let x = Math.max(0, cx - reach);
+      x <= Math.min(cols - 1, cx + reach);
+      x++
+    )
+      if (
+        Math.hypot(x * 64 + 32 - s.position.x, y * 64 + 32 - s.position.y) <=
+        radius
+      )
+        known.add(y * cols + x);
+  s.charted = [...known];
+  places.forEach((p, i) => {
+    if (
+      !s.discovered.includes(i) &&
+      Math.hypot(p.x - s.position.x, p.y - s.position.y) <= radius
+    ) {
+      s.discovered.push(i);
+      if (reward) {
+        s.knowledge++;
+        note(s, `Discovered ${p.name}. Gained 1 knowledge.`);
+      }
+    }
+  });
+}
+export function initialPatrols() {
+  return [
+    {
+      id: "caravan",
+      name: "Copper Road caravan",
+      kind: "merchant",
+      x: 285,
+      y: 355,
+      waypoint: 0,
+      route: [
+        { x: 420, y: 380 },
+        { x: 280, y: 470 },
+        { x: 240, y: 340 },
+      ],
+      cleared: false,
+    },
+    {
+      id: "knives",
+      name: "Red Knives",
+      kind: "bandits",
+      x: 860,
+      y: 500,
+      waypoint: 0,
+      route: [
+        { x: 1020, y: 460 },
+        { x: 910, y: 680 },
+        { x: 760, y: 550 },
+      ],
+      cleared: false,
+    },
+    {
+      id: "wolves",
+      name: "Cinder Wolves",
+      kind: "bandits",
+      x: 1230,
+      y: 280,
+      waypoint: 0,
+      route: [
+        { x: 1350, y: 380 },
+        { x: 1230, y: 500 },
+        { x: 1130, y: 330 },
+      ],
+      cleared: false,
+    },
+  ];
+}
+export function advancePatrols(s, seconds) {
+  if (s.battle || s.event || !Number.isFinite(seconds) || seconds <= 0)
+    return false;
+  for (const p of s.patrols.filter((p) => !p.cleared)) {
+    let budget = Math.min(seconds, 5) * (p.kind === "merchant" ? 14 : 20);
+    while (budget > 0) {
+      const t = p.route[p.waypoint],
+        dx = t.x - p.x,
+        dy = t.y - p.y,
+        length = Math.hypot(dx, dy);
+      if (length < 0.01) {
+        p.waypoint = (p.waypoint + 1) % p.route.length;
+        continue;
+      }
+      const step = Math.min(budget, length);
+      p.x += (dx / length) * step;
+      p.y += (dy / length) * step;
+      budget -= step;
+      if (step === length) p.waypoint = (p.waypoint + 1) % p.route.length;
+    }
+  }
+  return true;
+}
+export function nearbyPatrols(s) {
+  return s.patrols.filter(
+    (p) =>
+      !p.cleared && Math.hypot(p.x - s.position.x, p.y - s.position.y) <= 48,
+  );
+}
+export function tradeCaravan(s, id) {
+  const p = nearbyPatrols(s).find((p) => p.id === id && p.kind === "merchant"),
+    price = s.research.includes("barter") ? 10 : 12;
+  if (!p || s.battle || s.event || s.gold < price) return false;
+  s.gold -= price;
+  s.food += 10;
+  note(s, `Bought 10 rations from ${p.name} for ${price} crowns.`);
+  return true;
+}
+export function roadEvent(s) {
+  if (s.day % 9 === 6)
+    return {
+      kind: "camp",
+      title: "An abandoned camp",
+      text: "Cold ashes, scattered packs, and no sign of their owners. Search for supplies, or keep moving.",
+    };
+  if (s.day % 9 === 0)
+    return {
+      kind: "storm",
+      title: "Storm over the borderlands",
+      text: "Rain lashes the company. Wait under cover, or press onward and risk exhausted companions.",
+    };
+  return {
+    title: "Strangers in the wilderness",
+    text: "A wounded courier asks for medicine. A merchant offers to buy your silence and leave him behind.",
+  };
 }

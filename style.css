@@ -484,3 +484,46 @@ canvas {
   top: 52px;
   bottom: auto;
 }
+.atlas-frame {
+  position: absolute;
+  right: 16px;
+  top: 14px;
+  width: 182px;
+  padding: 4px;
+  border: 1px solid #8a8b66;
+  background: #15271eea;
+  z-index: 1;
+}
+.atlas-frame canvas {
+  width: 100%;
+  height: 102px;
+}
+.atlas-frame small {
+  display: block;
+  font-size: 8px;
+  color: var(--gold);
+  text-align: center;
+  padding-top: 5px;
+}
+.in-battle .atlas-frame {
+  display: none;
+}
+#map-label {
+  max-width: calc(100% - 230px);
+}
+@media (max-width: 850px) {
+  .atlas-frame {
+    right: 10px;
+    top: 10px;
+    width: 108px;
+  }
+  .atlas-frame canvas {
+    height: 60px;
+  }
+  .atlas-frame small {
+    font-size: 7px;
+  }
+  #map-label {
+    max-width: calc(100% - 140px);
+  }
+}

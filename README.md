@@ -22,6 +22,16 @@ The map fills the game screen. **Click or tap any ground** to set your own desti
 
 Towns and other sites offer actions only when you are within 28 world pixels. Management menus are overlays opened from the bottom toolbar; opening one pauses walking. Close the panel to return to exploration. You can forage and camp anywhere. Each 160 world pixels walked costs a day and four rations (three with Trailcraft); partial distance carries between destinations. Shallows slow travel. Encounters pause the party for your decision. Saves retain your exact position and distance, and reload safely stopped.
 
+## The living borderlands
+
+The world is now **1536 × 864**: four times the original area, with twelve locations. Emberfall, Whispering Grove, Sunken Chapel, Redstone Quarry, Forgotten Stash, and Broken Crown extend the frontier. Greyhaven and Saltbridge are known initially; other places are discovered within 140 pixels, awarding one knowledge each. Terrain is permanently charted as you walk. Contract destinations remain marked even before discovery.
+
+The small **world navigator** in the top right shows your charted terrain, known landmarks, current viewport, and destination. Click any point there to start a long journey; supplies and encounters still apply. It selects a coordinate, not a predetermined path.
+
+A caravan and two bandit patrols roam independently while exploration is active. They pause during menus, battles, and encounters. Within 48 pixels, buy provisions from the caravan or confront a bandit group. Combat is optional: steer away if the company is unprepared. Patrol victories award 40 crowns, knowledge, salvage, and XP without completing or clearing your contract. Defeated patrols stay defeated after reload.
+
+Research **Watchful eyes** for a 210-pixel discovery radius, **A fair bargain** for cheaper purchases, and **Borderlands charts** (requires Watchful eyes) to reveal landmark locations without exploring their terrain. Hidden stashes offer one-time crowns and medicine. Road events now include wounded travellers, abandoned camps, and storms with different choices and costs.
+
 ## Your first expedition
 
 1. Open **Contracts** in Greyhaven and accept _Wolves in human clothing_.
@@ -34,7 +44,7 @@ Towns and other sites offer actions only when you are within 28 world pixels. Ma
 
 Morale at 85+ grants +1 attack. Injuries impose −1 attack. Armor absorbs damage. Professions earn practice from exploration and crafting; practice is tracked, but profession tiers are not yet implemented. Explorable sites have one-time rewards. Contracts are repeatable. Defeat rescues the company in Greyhaven at a cost; there is no permadeath yet.
 
-Progress automatically saves in browser local storage. **New company** asks before replacing it. Old version-one and version-two saves migrate; invalid saves fall back to a fresh company. Browser storage is specific to your browser and origin; moving from a local file to a hosted site does not transfer progress.
+Progress automatically saves in browser local storage. **New company** asks before replacing it. Version-one through version-three saves migrate; invalid saves fall back to a fresh company. Browser storage is specific to your browser and origin; moving from a local file to a hosted site does not transfer progress.
 
 ## Validate and develop
 
@@ -45,7 +55,7 @@ npm run build
 
 Edit `src/game.js` (rules) and `src/app.js` (UI), then rebuild. Commit the generated `game.bundle.js` so downloaded copies run immediately. The build uses only Node's standard library.
 
-A browser-driven smoke test also exercises combat victory, research, crafting, recruitment, delivery, reload persistence, and a 390px mobile layout. With a running server and Playwright Core installed in a temporary directory:
+A browser-driven smoke test also exercises combat victory, research, crafting, recruitment, delivery, reload persistence, a 390px mobile layout, caravan trading, navigator travel, and discovery beyond the original map. With a running server and Playwright Core installed in a temporary directory:
 
 ```sh
 npm install --prefix /tmp/pixel-browser --cache /tmp/pixel-npm-cache playwright-core
@@ -54,4 +64,4 @@ PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node
 
 It uses `/usr/bin/chromium` by default; override `CHROMIUM_PATH` or `GAME_URL` as needed. Desktop and mobile screenshots are written under `/tmp`.
 
-Next development areas: deeper skills and professions, a larger world, impassable terrain and pathfinding, varied enemy behaviors, equipment inventories, regional factions, procedural encounters, and Android packaging.
+Next development areas: deeper skills and professions, impassable terrain and pathfinding, varied enemy behaviors, equipment inventories, regional factions, procedural encounters, and Android packaging.
