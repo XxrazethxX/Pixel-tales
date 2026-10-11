@@ -143,6 +143,7 @@ function fresh() {
     lastConversationDay: -1,
     recruitSerial: 0,
     hiredRecruits: [],
+    lessonLedger: {},
     cargo: { grain: 0, cloth: 0, salt: 0, iron: 0 },
     markets: {},
     reputation: { guild: 0, wardens: 0, freefolk: 0 },
@@ -743,6 +744,12 @@ function restore(raw) {
     explored: raw.explored || [],
     event: raw.event || null,
   };
+  result.lessonLedger = {};
+  for (let id = 0; id < result.party.length; id++) {
+    const day = raw.lessonLedger?.[id];
+    if (Number.isInteger(day) && day >= 1 && day <= result.day)
+      result.lessonLedger[id] = day;
+  }
   const validPosition =
     raw.position &&
     Number.isFinite(raw.position.x) &&
@@ -5234,6 +5241,67 @@ function markAdversaryThreat(s, e, target) {
   );
 }
 
+// Settlement tutors turn crowns and travel time into profession experience.
+const villageTutors = {
+  0: ["Cook", "Smith"],
+  3: ["Cook", "Herbalist"],
+  6: ["Smith", "Miner"],
+};
+function lessonQuote(s, id) {
+  const p = s.party.find((p) => p.id === id);
+  if (!p) return null;
+  const rank = professionRank(p);
+  const surcharge = s.location === 3 ? 4 : s.location === 6 ? 8 : 0;
+  return {
+    price: Math.ceil(
+      (24 + rank * 12 + surcharge) * (s.research.includes("barter") ? 0.8 : 1),
+    ),
+    hours: 3,
+    xp: 3,
+    rank,
+  };
+}
+function lessonLock(s, id) {
+  const p = s.party.find((p) => p.id === id);
+  if (!p || p.dead || p.hp <= 0) return "A conscious companion is required.";
+  if (
+    s.battle ||
+    s.event ||
+    s.campOpen ||
+    s.destination ||
+    places[s.location]?.type !== "town"
+  )
+    return "Visit a village training hall outside encounters and camp.";
+  if (!villageTutors[s.location]?.includes(p.profession))
+    return `This village does not teach ${p.profession}.`;
+  if (professionRank(p) >= 3)
+    return "Already a Master; no further lessons are needed.";
+  if (s.lessonLedger?.[id] === s.day)
+    return "Already trained today. Return tomorrow.";
+  const required =
+    professionRank(p) === 2 ? 15 : professionRank(p) === 1 ? 5 : 0;
+  if (s.renown < required)
+    return `Requires ${required} renown for this rank; company has ${s.renown}.`;
+  if (s.gold < lessonQuote(s, id).price)
+    return `Not enough crowns: requires ${lessonQuote(s, id).price}.`;
+  return null;
+}
+function takeLesson(s, id) {
+  if (lessonLock(s, id)) return false;
+  const p = s.party.find((p) => p.id === id),
+    quote = lessonQuote(s, id);
+  s.gold -= quote.price;
+  practice(s, p, quote.xp);
+  spendHours(s, quote.hours);
+  s.lessonLedger ||= {};
+  s.lessonLedger[id] = s.day;
+  note(
+    s,
+    `${p.name} studied ${p.profession} at ${places[s.location].name}: +${quote.xp} practice, ${quote.price} crowns, ${quote.hours} hours. Daily upkeep still applies.`,
+  );
+  return true;
+}
+
 // Original, hand-built pixel artwork. All coordinates are logical pixels.
 const artPalette = {
   meadow: "#a3a775",
@@ -5899,6 +5967,14 @@ function venueArtwork(venue) {
     pixel(c, 163, 22, 10, 8, "#b79a61");
     pixel(c, 168, 24, 2, 4, "#665537");
   }
+  if (venue === "Training") {
+    pixel(c, 174, 38, 26, 5, "#796342");
+    pixel(c, 177, 43, 3, 10, "#796342");
+    pixel(c, 194, 43, 3, 10, "#796342");
+    pixel(c, 181, 32, 13, 6, "#e5d8af");
+    pixel(c, 187, 32, 1, 6, "#a69773");
+    drawCharacter(c, 214, 36, "#69734e", 0, "", 2);
+  }
   if (venue === "Contracts") {
     pixel(c, 178, 23, 2, 28, "#796342");
     pixel(c, 193, 23, 2, 28, "#796342");
@@ -6447,7 +6523,14 @@ function render() {
     tab = "Town";
   }
   if (
-    ["Town", "Market", "Blacksmith", "Tavern", "Contracts"].includes(tab) &&
+    [
+      "Town",
+      "Market",
+      "Blacksmith",
+      "Tavern",
+      "Contracts",
+      "Training",
+    ].includes(tab) &&
     !inVillage
   )
     tab = "Company";
@@ -6511,6 +6594,7 @@ function render() {
           Market: "Market square",
           Blacksmith: "The forge",
           Tavern: "The Crooked Lantern",
+          Training: "Training hall",
           Contracts: "Contract board",
           Research: "Discoveries",
           Workshop: "Company stores",
@@ -6518,7 +6602,14 @@ function render() {
         }[tab] || tab;
   $("panel-kicker").textContent =
     inVillage &&
-    ["Town", "Market", "Blacksmith", "Tavern", "Contracts"].includes(tab)
+    [
+      "Town",
+      "Market",
+      "Blacksmith",
+      "Tavern",
+      "Contracts",
+      "Training",
+    ].includes(tab)
       ? `${places[s.location].name} · SETTLEMENT`
       : "THE ASHEN COMPANY";
   const panel = $("panel");
@@ -7165,7 +7256,14 @@ function render() {
   }
   if (
     inVillage &&
-    ["Town", "Market", "Blacksmith", "Tavern", "Contracts"].includes(tab)
+    [
+      "Town",
+      "Market",
+      "Blacksmith",
+      "Tavern",
+      "Contracts",
+      "Training",
+    ].includes(tab)
   ) {
     if (tab !== "Town")
       panel.prepend(
@@ -7195,6 +7293,11 @@ function render() {
           "Buy provisions and sell surplus materials.",
         ],
         ["Blacksmith", "Blacksmith", "Buy and equip weapons and armor."],
+        [
+          "Training hall",
+          "Training",
+          "Pay local tutors to improve companion professions.",
+        ],
         [
           "The Crooked Lantern",
           "Tavern",
@@ -7226,6 +7329,36 @@ function render() {
           drawerOpen = false;
         }),
       );
+    }
+    if (tab === "Training") {
+      panel.append(
+        card(
+          "Local tutors",
+          `<p>${places[s.location].name} teaches ${villageTutors[s.location].join(" and ")}. A lesson grants 3 profession practice and takes 3 hours. One lesson per companion per day, across all villages and professions. Apprentices need 5 renown to continue training; Journeymen need 15. Masters need no lessons.</p><p>The whole company waits during lessons: fatigue, food, wages, and starvation still apply. A fair bargain discounts tuition by 20%.</p>`,
+        ),
+      );
+      for (const p of livingParty(s)) {
+        const quote = lessonQuote(s, p.id),
+          locked = lessonLock(s, p.id);
+        const c = card(
+          p.name,
+          `<p>${p.profession} · ${rankNames[professionRank(p)]} · ${p.professionXP} practice${quote.rank < 3 ? ` / ${[3, 8, 15][quote.rank]} for next rank` : " · mastered"}</p><p>${quote.price} crowns · 3 hours · +3 practice</p>`,
+        );
+        if (locked) {
+          const hint = document.createElement("p");
+          hint.textContent = locked;
+          c.append(hint);
+        }
+        c.append(
+          button(
+            `Train ${p.name} · ${p.profession}`,
+            () => takeLesson(s, p.id),
+            !!locked,
+            true,
+          ),
+        );
+        panel.append(c);
+      }
     }
     if (tab === "Market") {
       const market = card("Quartermaster", "");

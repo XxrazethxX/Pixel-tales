@@ -7,6 +7,10 @@ import {
   rankNames,
   professions,
   assignProfession,
+  villageTutors,
+  lessonQuote,
+  lessonLock,
+  takeLesson,
   talentsFor,
   learnTalent,
   skillFor,
@@ -320,7 +324,14 @@ function render() {
     tab = "Town";
   }
   if (
-    ["Town", "Market", "Blacksmith", "Tavern", "Contracts"].includes(tab) &&
+    [
+      "Town",
+      "Market",
+      "Blacksmith",
+      "Tavern",
+      "Contracts",
+      "Training",
+    ].includes(tab) &&
     !inVillage
   )
     tab = "Company";
@@ -384,6 +395,7 @@ function render() {
           Market: "Market square",
           Blacksmith: "The forge",
           Tavern: "The Crooked Lantern",
+          Training: "Training hall",
           Contracts: "Contract board",
           Research: "Discoveries",
           Workshop: "Company stores",
@@ -391,7 +403,14 @@ function render() {
         }[tab] || tab;
   $("panel-kicker").textContent =
     inVillage &&
-    ["Town", "Market", "Blacksmith", "Tavern", "Contracts"].includes(tab)
+    [
+      "Town",
+      "Market",
+      "Blacksmith",
+      "Tavern",
+      "Contracts",
+      "Training",
+    ].includes(tab)
       ? `${places[s.location].name} · SETTLEMENT`
       : "THE ASHEN COMPANY";
   const panel = $("panel");
@@ -1038,7 +1057,14 @@ function render() {
   }
   if (
     inVillage &&
-    ["Town", "Market", "Blacksmith", "Tavern", "Contracts"].includes(tab)
+    [
+      "Town",
+      "Market",
+      "Blacksmith",
+      "Tavern",
+      "Contracts",
+      "Training",
+    ].includes(tab)
   ) {
     if (tab !== "Town")
       panel.prepend(
@@ -1068,6 +1094,11 @@ function render() {
           "Buy provisions and sell surplus materials.",
         ],
         ["Blacksmith", "Blacksmith", "Buy and equip weapons and armor."],
+        [
+          "Training hall",
+          "Training",
+          "Pay local tutors to improve companion professions.",
+        ],
         [
           "The Crooked Lantern",
           "Tavern",
@@ -1099,6 +1130,36 @@ function render() {
           drawerOpen = false;
         }),
       );
+    }
+    if (tab === "Training") {
+      panel.append(
+        card(
+          "Local tutors",
+          `<p>${places[s.location].name} teaches ${villageTutors[s.location].join(" and ")}. A lesson grants 3 profession practice and takes 3 hours. One lesson per companion per day, across all villages and professions. Apprentices need 5 renown to continue training; Journeymen need 15. Masters need no lessons.</p><p>The whole company waits during lessons: fatigue, food, wages, and starvation still apply. A fair bargain discounts tuition by 20%.</p>`,
+        ),
+      );
+      for (const p of livingParty(s)) {
+        const quote = lessonQuote(s, p.id),
+          locked = lessonLock(s, p.id);
+        const c = card(
+          p.name,
+          `<p>${p.profession} · ${rankNames[professionRank(p)]} · ${p.professionXP} practice${quote.rank < 3 ? ` / ${[3, 8, 15][quote.rank]} for next rank` : " · mastered"}</p><p>${quote.price} crowns · 3 hours · +3 practice</p>`,
+        );
+        if (locked) {
+          const hint = document.createElement("p");
+          hint.textContent = locked;
+          c.append(hint);
+        }
+        c.append(
+          button(
+            `Train ${p.name} · ${p.profession}`,
+            () => takeLesson(s, p.id),
+            !!locked,
+            true,
+          ),
+        );
+        panel.append(c);
+      }
     }
     if (tab === "Market") {
       const market = card("Quartermaster", "");

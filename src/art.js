@@ -673,6 +673,14 @@ export function venueArtwork(venue) {
     pixel(c, 163, 22, 10, 8, "#b79a61");
     pixel(c, 168, 24, 2, 4, "#665537");
   }
+  if (venue === "Training") {
+    pixel(c, 174, 38, 26, 5, "#796342");
+    pixel(c, 177, 43, 3, 10, "#796342");
+    pixel(c, 194, 43, 3, 10, "#796342");
+    pixel(c, 181, 32, 13, 6, "#e5d8af");
+    pixel(c, 187, 32, 1, 6, "#a69773");
+    drawCharacter(c, 214, 36, "#69734e", 0, "", 2);
+  }
   if (venue === "Contracts") {
     pixel(c, 178, 23, 2, 28, "#796342");
     pixel(c, 193, 23, 2, 28, "#796342");

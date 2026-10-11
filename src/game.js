@@ -141,6 +141,7 @@ export function fresh() {
     lastConversationDay: -1,
     recruitSerial: 0,
     hiredRecruits: [],
+    lessonLedger: {},
     cargo: { grain: 0, cloth: 0, salt: 0, iron: 0 },
     markets: {},
     reputation: { guild: 0, wardens: 0, freefolk: 0 },
@@ -741,6 +742,12 @@ export function restore(raw) {
     explored: raw.explored || [],
     event: raw.event || null,
   };
+  result.lessonLedger = {};
+  for (let id = 0; id < result.party.length; id++) {
+    const day = raw.lessonLedger?.[id];
+    if (Number.isInteger(day) && day >= 1 && day <= result.day)
+      result.lessonLedger[id] = day;
+  }
   const validPosition =
     raw.position &&
     Number.isFinite(raw.position.x) &&
@@ -5230,4 +5237,65 @@ function markAdversaryThreat(s, e, target) {
     s,
     `Maela marks ${s.party[target.id].name}'s position. Move off the marked tiles before the next enemy turn, or stun her to interrupt.`,
   );
+}
+
+// Settlement tutors turn crowns and travel time into profession experience.
+export const villageTutors = {
+  0: ["Cook", "Smith"],
+  3: ["Cook", "Herbalist"],
+  6: ["Smith", "Miner"],
+};
+export function lessonQuote(s, id) {
+  const p = s.party.find((p) => p.id === id);
+  if (!p) return null;
+  const rank = professionRank(p);
+  const surcharge = s.location === 3 ? 4 : s.location === 6 ? 8 : 0;
+  return {
+    price: Math.ceil(
+      (24 + rank * 12 + surcharge) * (s.research.includes("barter") ? 0.8 : 1),
+    ),
+    hours: 3,
+    xp: 3,
+    rank,
+  };
+}
+export function lessonLock(s, id) {
+  const p = s.party.find((p) => p.id === id);
+  if (!p || p.dead || p.hp <= 0) return "A conscious companion is required.";
+  if (
+    s.battle ||
+    s.event ||
+    s.campOpen ||
+    s.destination ||
+    places[s.location]?.type !== "town"
+  )
+    return "Visit a village training hall outside encounters and camp.";
+  if (!villageTutors[s.location]?.includes(p.profession))
+    return `This village does not teach ${p.profession}.`;
+  if (professionRank(p) >= 3)
+    return "Already a Master; no further lessons are needed.";
+  if (s.lessonLedger?.[id] === s.day)
+    return "Already trained today. Return tomorrow.";
+  const required =
+    professionRank(p) === 2 ? 15 : professionRank(p) === 1 ? 5 : 0;
+  if (s.renown < required)
+    return `Requires ${required} renown for this rank; company has ${s.renown}.`;
+  if (s.gold < lessonQuote(s, id).price)
+    return `Not enough crowns: requires ${lessonQuote(s, id).price}.`;
+  return null;
+}
+export function takeLesson(s, id) {
+  if (lessonLock(s, id)) return false;
+  const p = s.party.find((p) => p.id === id),
+    quote = lessonQuote(s, id);
+  s.gold -= quote.price;
+  practice(s, p, quote.xp);
+  spendHours(s, quote.hours);
+  s.lessonLedger ||= {};
+  s.lessonLedger[id] = s.day;
+  note(
+    s,
+    `${p.name} studied ${p.profession} at ${places[s.location].name}: +${quote.xp} practice, ${quote.price} crowns, ${quote.hours} hours. Daily upkeep still applies.`,
+  );
+  return true;
 }

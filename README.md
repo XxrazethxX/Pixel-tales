@@ -277,6 +277,16 @@ Regional stories are accepted **only at village contract boards**, using the sam
 
 The **Caravan League**, **Border Wardens**, and **Grove Freefolk** remember these choices. Reputation ranges from −30 to +30. At ten League reputation purchases are cheaper; at −10 they become more expensive. Ten Warden reputation unlocks fine equipment without the renown requirement. Ten Freefolk reputation adds two rations to foraging. Ordinary deliveries, bandit victories, wolf hunts, and relieved shortages also build relevant standings. Company shows the current standing, benefits, and accepted or completed stories without offering new contracts outside villages.
 
+## Village training halls
+
+Choose **Visit Training hall** in a village arrival menu to buy profession lessons. Greyhaven teaches **Cook and Smith**, Saltbridge teaches **Cook and Herbalist**, and Emberfall teaches **Smith and Miner**. Assign a companion’s profession in Company before visiting a suitable tutor.
+
+Each lesson grants **three profession practice** and takes **three hours**. Tuition starts at 24 crowns in Greyhaven, 28 in Saltbridge, and 32 in Emberfall, with 12 additional crowns per existing rank. A fair bargain discounts tuition by 20%, rounded up. Novices can train immediately; apprentices need five renown to continue, and journeymen need fifteen. Masters cannot purchase more lessons. Practice thresholds remain 3, 8, and 15.
+
+A companion can complete only **one lesson per day**, across all villages and professions. That limit survives reloads and uses the day on which the lesson finishes. Other companions can train separately. Unconscious or fallen companions cannot take lessons.
+
+Higher ranks improve existing fieldwork, crafting, ration savings, and staffed camp jobs. The whole company waits during a lesson and gains normal awake fatigue. Crossing midnight still consumes food and settles wages, including existing debt; tuition does not buy meals or lodging. Lessons are unavailable in the wilderness, during travel or encounters, or while camp is open.
+
 ## Advanced company research
 
 The Research menu now extends the early discoveries into five permanent company upgrades. It shows why a discovery is locked, including its prerequisite, renown requirement, or missing knowledge. Research cannot be purchased during battles or roadside encounters.
@@ -347,6 +357,7 @@ PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node
 PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/battle-layouts-smoke.mjs
 PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/bounties-smoke.mjs
 PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/advanced-research-smoke.mjs
+PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/training-halls-smoke.mjs
 ```
 
 It uses `/usr/bin/chromium` by default; override `CHROMIUM_PATH` or `GAME_URL` as needed. Desktop and mobile screenshots are written under `/tmp`. The village smoke test checks regional offers, renown locks and unlocks, resale, inn recovery, save persistence, and dangerous encounters. The equipment smoke test covers purchases, class restrictions, assignment and transfer, resale, research and crafting, combat restrictions, reloads, mobile layout, and new-company reset.
@@ -372,3 +383,5 @@ Further development includes expanded regional stories and Android packaging.
 The bounty smoke test checks village acceptance, named challenges, victory and completion persistence, wolf pack composition, saved fire warnings, escaping and interrupting volleys, mobile layout, and abandonment.
 
 The advanced-research smoke test checks prerequisite and renown locks, knowledge costs, one-time purchases, saved discoveries, and mobile research controls.
+
+The training-hall smoke test checks regional tutors, lesson costs and practice, daily locks, persistence, village navigation, mobile controls, and wilderness restrictions.
