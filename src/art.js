@@ -1368,6 +1368,27 @@ export function drawDungeonInterior(c, s) {
       )
         pixel(c, 130 + x * 62, 23 + y * 60, 8, 8, "#633e31");
     }
+  const room = s.realm?.dungeons[s.event.site];
+  const doorX = 105 + 4 * 62,
+    doorY = 3 * 60;
+  pixel(c, doorX + 9, doorY + 6, 40, 43, "#4b4439");
+  pixel(c, doorX + 14, doorY + 10, 30, 37, room?.door ? "#252e2b" : "#856746");
+  if (!room?.door) {
+    for (let i = 0; i < 3; i++)
+      pixel(
+        c,
+        doorX + 21 + i * 7,
+        doorY + 20,
+        4,
+        6,
+        room?.unlocked ? "#b7b87a" : "#c7a565",
+      );
+    pixel(c, doorX + 36, doorY + 34, 4, 4, "#dbc998");
+  } else if (!room.cache) {
+    pixel(c, doorX + 21, doorY + 31, 17, 11, "#b68c51");
+    pixel(c, doorX + 27, doorY + 31, 4, 11, "#d3bc7a");
+    pixel(c, doorX + 29, doorY + 17, 5, 6, "#a0b6c1");
+  }
   const p = s.party.find((p) => !p.dead);
   drawCharacter(
     c,

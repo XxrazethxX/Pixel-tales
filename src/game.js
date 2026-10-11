@@ -115,7 +115,7 @@ export function researchLock(s, id) {
 }
 export function fresh() {
   return {
-    version: 15,
+    version: 16,
     companyName: "The Ashen Company",
     difficulty: "standard",
     banner: "ashen",
@@ -176,6 +176,7 @@ export function fresh() {
     travelJobs: {},
     caravanEscort: null,
     escortLedger: {},
+    realm: freshRealm(),
     stash: { found: false, unlocked: false, searched: [], clues: [], loot: {} },
     cargo: { grain: 0, cloth: 0, salt: 0, iron: 0 },
     markets: {},
@@ -240,6 +241,7 @@ export function fresh() {
 }
 export function note(s, t) {
   s.log.unshift(`Day ${s.day} · ${t}`);
+  recordRealmEncounter(s, t);
   s.log = s.log.slice(0, 30);
 }
 export function travel(s, to) {
@@ -348,6 +350,10 @@ export function startBattle(s, patrolId = null, options = {}) {
   )
     return false;
   s.destination = null;
+  if (patrol?.faction) {
+    changeReputation(s, patrol.faction, patrol.hostile ? -4 : -8);
+    if (!patrol.hostile) registerCrime(s, false);
+  }
   if (patrol?.kind === "merchant" && !patrol.hostile) {
     patrol.hostile = true;
     registerCrime(s, false);
@@ -561,6 +567,17 @@ export function act(s, id, x, y) {
   return true;
 }
 function win(s) {
+  if (s.battle.realmStronghold)
+    defeatFantasyStronghold(s, s.battle.realmStronghold);
+  if (Number.isInteger(s.battle.realmLineage)) {
+    const id = s.battle.realmLineage;
+    s.realm.lineage[id] = { stage: 2, outcome: null };
+    s.knowledge++;
+    note(
+      s,
+      `${s.party[id].name} defeats their former commander. Decide the fate of the recovered oath at camp.`,
+    );
+  }
   if (s.battle.caravanDefense) finishCaravanDefense(s);
   for (const enemy of s.battle.enemies)
     if (!enemy.escaped && enemy.stolenFood) s.food += enemy.stolenFood;
@@ -672,6 +689,7 @@ export function endTurn(s) {
     );
     return true;
   }
+  resolveRealmMagic(s);
   b.enemies.forEach((e) => (e.stunnedThisRound = false));
   resolveBossThreat(s);
   for (const e of b.enemies.filter((e) => e.hp > 0)) {
@@ -889,7 +907,7 @@ export function restore(raw) {
   const base = fresh();
   if (
     !raw ||
-    ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].includes(
+    ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16].includes(
       raw.version,
     ) ||
     !Array.isArray(raw.party) ||
@@ -917,7 +935,7 @@ export function restore(raw) {
   const result = {
     ...base,
     ...raw,
-    version: 15,
+    version: 16,
     inventory: { ...base.inventory, ...raw.inventory },
     explored: raw.explored || [],
     event: raw.event || null,
@@ -1454,6 +1472,7 @@ export function restore(raw) {
             (id) =>
               typeof id === "string" &&
               (/^(0|3|6)-(veteran|ranger)$/.test(id) ||
+                /^(0|3|6)-faction-(guild|wardens|freefolk)$/.test(id) ||
                 ["ember-wizard", "ember-cleric"].includes(id)),
           ),
         ),
@@ -1733,6 +1752,7 @@ export function restore(raw) {
     );
   }
   restoreExpansionState(result, raw);
+  restoreRealm(result, raw);
   updateCampaign(result);
   return result;
 }
@@ -1831,6 +1851,7 @@ export function recruit(s, offerId = null) {
     equipment: { weapon: null, armor: null, shield: null, helmet: null },
   };
   for (const other of s.party) delete s.bonds[bondKey(id, other.id)];
+  delete s.realm.lineage[id];
   if (vacancy >= 0) s.party[id] = companion;
   else s.party.push(companion);
   s.recruitSerial++;
@@ -2183,6 +2204,7 @@ export function contracts(s) {
   }));
 }
 export function accept(s, index) {
+  if (townAccessLock(s)) return false;
   const c = contracts(s)[index];
   if (
     !c ||
@@ -2220,6 +2242,7 @@ export function deliver(s) {
   return true;
 }
 export function buy(s, item) {
+  if (townAccessLock(s)) return false;
   const offer = supplyOffer(s, item);
   if (
     !offer ||
@@ -2303,6 +2326,7 @@ export function advanceMovement(s, seconds) {
       (terrainAt(s.position) === "shallows" ? 36 : 70) *
       (s.stealth.active ? 0.55 : 1),
     changed = false,
+    distanceTravelled = 0,
     arrived = false;
   while (budget > 0 && s.destination) {
     const dx = s.destination.x - s.position.x,
@@ -2320,6 +2344,7 @@ export function advanceMovement(s, seconds) {
     discoverNearby(s);
     budget -= amount;
     changed = true;
+    distanceTravelled += amount;
     // Keep sufficient history for followers to trace turns rather than teleport.
     const previous = s.trail.at(-1);
     if (
@@ -2339,6 +2364,7 @@ export function advanceMovement(s, seconds) {
   }
   updateCampaign(s);
   updateCaravanEscort(s);
+  if (changed) checkWagonTravel(s, distanceTravelled);
   return { changed, arrived };
 }
 export function partyPositions(s) {
@@ -2602,6 +2628,8 @@ export function advancePatrols(s, seconds) {
   )
     return false;
   refreshStrongholds(s);
+  refreshFantasyStrongholds(s);
+  refreshBorderPatrols(s);
   updateCampaign(s);
   updateRoadConflicts(s);
   updateCaravanEscort(s);
@@ -2624,6 +2652,7 @@ export function advancePatrols(s, seconds) {
     const merchant =
       p.kind === "bandits" &&
       p.id !== "warden-pursuit" &&
+      !p.faction &&
       !passageSafe(s, p) &&
       s.patrols.find(
         (m) =>
@@ -2647,6 +2676,7 @@ export function advancePatrols(s, seconds) {
 
     if (
       p.kind !== "merchant" &&
+      (!p.faction || p.hostile) &&
       !isHidden(s) &&
       !passageSafe(s, p) &&
       playerDistance < 90 &&
@@ -2680,6 +2710,7 @@ export function advancePatrols(s, seconds) {
     const hostile = s.patrols.find(
       (p) =>
         !p.cleared &&
+        (!p.faction || p.hostile) &&
         ["bandits", "fantasy"].includes(p.kind) &&
         !passageSafe(s, p) &&
         Math.hypot(p.x - s.position.x, p.y - s.position.y) <= 36,
@@ -2754,7 +2785,7 @@ export function professionRank(p) {
 export function professional(s, name) {
   return (
     s.party
-      .filter((p) => p.profession === name && p.hp > 0)
+      .filter((p) => p.profession === name && !p.dead && p.hp > 0)
       .sort((a, b) => b.professionXP - a.professionXP)[0] || null
   );
 }
@@ -3115,7 +3146,15 @@ export function movementRange(p) {
   );
 }
 export function hitEnemy(s, e, power) {
-  const damage = Math.max(1, power - enemyArmor(s, e)),
+  const damage = Math.max(
+      1,
+      power +
+        (e.kind === "skeleton" &&
+        s.party.some((p) => p.hp > 0 && !p.dead && p.lineagePerk === "ancestor")
+          ? 2
+          : 0) -
+        enemyArmor(s, e),
+    ),
     wasAlive = e.hp > 0;
   e.hp = Math.max(0, e.hp - damage);
   if (wasAlive && e.hp === 0)
@@ -3206,6 +3245,7 @@ export function useSkill(s, id, x, y) {
 }
 
 export function buyGear(s, item, target = 0) {
+  if (townAccessLock(s)) return false;
   const p = s.party[target];
   const offer = { weapon: [35, 2, 4], armor: [30, 1, 3] }[item];
   if (
@@ -3232,6 +3272,7 @@ export function buyGear(s, item, target = 0) {
 
 export const salePrices = { ore: 2, wood: 1, herbs: 1, medicine: 4, pelts: 3 };
 export function sell(s, item, quantity = 1) {
+  if (townAccessLock(s)) return false;
   const price = salePrices[item] ? regionalSalePrice(s, item) : null;
   if (
     !price ||
@@ -3255,6 +3296,7 @@ export function innCost(s) {
   return livingParty(s).length * 4 + dailyWages(s) + s.wageDebt;
 }
 export function restAtInn(s) {
+  if (townAccessLock(s)) return false;
   const price = innCost(s);
   if (
     s.battle ||
@@ -3532,6 +3574,7 @@ export function equipmentPrice(s, item) {
   return Math.ceil(item.price * purchaseModifier(s));
 }
 export function buyEquipment(s, templateId) {
+  if (townAccessLock(s)) return false;
   const item = equipmentCatalog.find((item) => item.id === templateId);
   if (templateId === "beacon-staff" && s.location !== 6) return false;
   if (
@@ -3550,6 +3593,7 @@ export function buyEquipment(s, templateId) {
   return true;
 }
 export function sellEquipment(s, id) {
+  if (townAccessLock(s)) return false;
   const item = gearItem(s, id);
   if (
     !item ||
@@ -4229,6 +4273,7 @@ export function shareStories(s, a, b) {
   return true;
 }
 export function recruitmentOffers(s) {
+  if (townAccessLock(s)) return [];
   if (places[s.location]?.type !== "town" || companyLost(s)) return [];
   const serial = s.recruitSerial || 0,
     slot = s.party.findIndex((p) => p.dead),
@@ -4293,6 +4338,39 @@ export function recruitmentOffers(s) {
         traits: ["compassionate"],
       },
     );
+  const ruler = territoryOwner(s);
+  if (s.realm.charters[s.location] && s.reputation[ruler] >= 6) {
+    const candidate = {
+      guild: {
+        name: "Brunna",
+        role: "Spearman",
+        race: "dwarf",
+        profession: "Smith",
+        max: 28,
+        cost: 85,
+        traits: ["mercenary"],
+      },
+      wardens: {
+        name: "Alden",
+        role: "Shieldbearer",
+        race: "human",
+        profession: "Miner",
+        max: 30,
+        cost: 90,
+        traits: ["resolute"],
+      },
+      freefolk: {
+        name: "Sylva",
+        role: "Archer",
+        race: "elf",
+        profession: "Thief",
+        max: 22,
+        cost: 75,
+        traits: ["tireless"],
+      },
+    }[ruler];
+    offers.push({ ...candidate, id: `${s.location}-faction-${ruler}` });
+  }
   return offers.filter(
     (offer) => offer.standard || !s.hiredRecruits.includes(offer.id),
   );
@@ -4525,6 +4603,17 @@ function deployBattle(s, patrol) {
   s.battle.enemies.forEach((e, i) => ([e.x, e.y] = foes[i]));
 }
 export function hasLineOfSight(s, from, to) {
+  if (
+    s.battle?.realmMagic?.surfaces.some(
+      (v) =>
+        v.kind === "darkness" &&
+        v.turns > 0 &&
+        (Math.abs(v.x - from.x) + Math.abs(v.y - from.y) <= 1 ||
+          Math.abs(v.x - to.x) + Math.abs(v.y - to.y) <= 1),
+    ) &&
+    Math.abs(from.x - to.x) + Math.abs(from.y - to.y) > 1
+  )
+    return false;
   let x = from.x,
     y = from.y,
     ix = 0,
@@ -4774,6 +4863,7 @@ function damageCompanion(s, target, power, ranged = false) {
       (ranged ? terrainCell(s, target.x, target.y).cover : 0),
   );
   target.arcaneWard = 0;
+  interruptConcentration(s, target.id);
   p.hp = Math.max(0, p.hp - damage);
   p.injury = p.hp < p.max / 2;
   return damage;
@@ -5006,8 +5096,9 @@ export function changeReputation(s, id, amount) {
 }
 export function purchaseModifier(s) {
   return (
-    (s.research.includes("barter") ? 0.8 : 1) *
-    (s.reputation.guild >= 10 ? 0.9 : s.reputation.guild <= -10 ? 1.25 : 1)
+    territoryPrice(s) *
+    ((s.research.includes("barter") ? 0.8 : 1) *
+      (s.reputation.guild >= 10 ? 0.9 : s.reputation.guild <= -10 ? 1.25 : 1))
   );
 }
 export function supplyOffer(s, item) {
@@ -5096,6 +5187,7 @@ export function tradeQuote(s, good, quantity, side = "buy") {
   ).reduce((sum, p) => sum + p, 0);
 }
 export function tradeGoodsAtVillage(s, good, quantity = 1, side = "buy") {
+  if (townAccessLock(s)) return false;
   const quote = tradeQuote(s, good, quantity, side),
     market = marketState(s);
   if (
@@ -5361,6 +5453,7 @@ export function storyOffers(s) {
     : [];
 }
 export function acceptStory(s, id) {
+  if (townAccessLock(s)) return false;
   const story = storyOffers(s).find((q) => q.id === id);
   if (!story || storyLock(s, story) || s.contract || companyLost(s))
     return false;
@@ -6028,6 +6121,7 @@ export function bountyOffers(s) {
     : [];
 }
 export function acceptBounty(s, id) {
+  if (townAccessLock(s)) return false;
   const boss = bountyOffers(s).find((boss) => boss.id === id);
   if (!boss || bountyLock(s, boss)) return false;
   s.contract = {
@@ -6197,6 +6291,7 @@ export function lessonLock(s, id) {
   return null;
 }
 export function takeLesson(s, id) {
+  if (townAccessLock(s)) return false;
   if (lessonLock(s, id)) return false;
   const p = s.party.find((p) => p.id === id),
     quote = lessonQuote(s, id);
@@ -6288,6 +6383,7 @@ export function rumorLock(s, id) {
   return null;
 }
 export function hearRumor(s, id) {
+  if (townAccessLock(s)) return false;
   if (rumorLock(s, id)) return false;
   const rumor = tavernRumors.find((r) => r.id === id);
   s.gold -= 8;
@@ -7066,6 +7162,7 @@ export function dungeonWalls(s) {
 export function dungeonAction(s, action, x, y) {
   const e = s.event;
   if (e?.kind !== "dungeon") return false;
+  if (realmDungeonAction(s, action)) return true;
   const layout = dungeonLayout(e.site);
   if (action === "leave") {
     s.event = null;
@@ -7105,6 +7202,17 @@ export function dungeonAction(s, action, x, y) {
     practice(s, maker, 1);
     spendHours(s, 1);
     e.message = "Mined the deposit. Ore recovered and Miner practice gained.";
+    return true;
+  }
+  if (
+    action === "disarm" &&
+    companyScout(s) &&
+    Math.abs(e.x - layout.trap[0]) + Math.abs(e.y - layout.trap[1]) <= 1 &&
+    !s.siteProgress[`hazard-${e.site}-3`]
+  ) {
+    s.siteProgress[`hazard-${e.site}-3`] = true;
+    practice(s, companyScout(s), 1);
+    e.message = "Your scout disables the trap without spending timber.";
     return true;
   }
   if (action === "disarm") {
@@ -7998,6 +8106,15 @@ export function spellLock(s, id, spellId, x, y) {
     spell = spellsFor(p).find((v) => v.id === spellId);
   if (!spell || !u || p.hp <= 0 || p.dead || u.acted)
     return "Caster unavailable or action spent.";
+  if (
+    s.battle.realmMagic?.surfaces.some(
+      (v) =>
+        v.kind === "silence" &&
+        v.turns > 0 &&
+        Math.abs(v.x - u.x) + Math.abs(v.y - u.y) <= 1,
+    )
+  )
+    return "Silence prevents casting here.";
   if (spellSlots(p)[spell.level] < 1)
     return `No level ${spell.level} slots. Recover magic at camp or Emberfall.`;
   if (
@@ -8019,15 +8136,19 @@ export function spellLock(s, id, spellId, x, y) {
     !hasLineOfSight(s, u, { x, y })
   )
     return "Target out of range or sight.";
-  const target = ["damage", "illusion"].includes(spell.kind)
+  if (["surface", "concentration"].includes(spell.kind))
+    return terrainCell(s, x, y).blocked ? "Choose open ground." : "";
+  const target = ["damage", "illusion", "counter"].includes(spell.kind)
     ? s.battle.enemies.find((e) => e.hp > 0 && e.x === x && e.y === y)
     : s.battle.units.find(
         (v) => s.party[v.id].hp > 0 && v.x === x && v.y === y,
       );
   if (!target)
-    return ["damage", "illusion"].includes(spell.kind)
+    return ["damage", "illusion", "counter"].includes(spell.kind)
       ? "Select a living enemy."
       : "Select a conscious ally.";
+  if (spell.kind === "counter" && target.kind !== "mage")
+    return "Choose an enemy spellcaster.";
   if (spell.kind === "heal" && s.party[target.id].hp >= s.party[target.id].max)
     return "That ally is already healthy.";
   return "";
@@ -8042,6 +8163,7 @@ export function castSpell(s, id, spellId, x, y) {
   s.inventory.herbs -= spell.herbs || 0;
   s.inventory.ore -= spell.ore || 0;
   u.acted = true;
+  if (castRealmMagic(s, p, u, spell, x, y)) return true;
   const targets = ["damage", "illusion"].includes(spell.kind)
     ? s.battle.enemies.filter(
         (e) =>
@@ -8376,6 +8498,7 @@ export function companyCargoCapacity(s) {
   );
 }
 export function buyCompanyWagon(s, claim = false) {
+  if (townAccessLock(s)) return false;
   if (
     s.wagon.owned ||
     s.battle ||
@@ -8548,6 +8671,7 @@ export function infiltrateStronghold(s, action) {
     const id = vacancy >= 0 ? vacancy : s.party.length;
     for (const role of travelRoles)
       if (s.travelJobs[role.id] === id) delete s.travelJobs[role.id];
+    delete s.realm.lineage[id];
     s.party[id] = {
       ...fresh().party[3],
       id,
@@ -8779,6 +8903,7 @@ export function caravanEscortOffers(s) {
   );
 }
 export function acceptCaravanEscort(s, id) {
+  if (townAccessLock(s)) return false;
   const route = caravanEscortOffers(s).find((r) => r.patrolId === id);
   if (!route || companyLost(s)) return false;
   const p = s.patrols.find((p) => p.id === id);
@@ -8876,6 +9001,7 @@ export function beginCaravanRaid(s, merchantId, attackerId) {
   if (
     !p ||
     !attacker ||
+    attacker.faction ||
     p.raid ||
     (p.raidCooldown || 0) > now ||
     Math.hypot(p.x - attacker.x, p.y - attacker.y) > 36 ||
@@ -9264,6 +9390,11 @@ function enemySpecialTurn(s, e) {
     )
   )
     return true;
+  if (e.kind === "mage" && e.silenced > 0) {
+    e.silenced--;
+    e.casting = null;
+    return true;
+  }
   if (e.kind === "mage") {
     if (e.casting) {
       const tile = e.casting;
@@ -9376,5 +9507,1176 @@ export function disarmBattleSnare(s, id, x, y) {
   u.acted = true;
   if (p.profession === "Thief") practice(s, p, 1);
   note(s, `${p.name} disarms the goblin snare.`);
+  return true;
+}
+
+// Frontier consequences are independent of the Hungry Roads chapter.
+export function freshRealm() {
+  return {
+    territories: { 0: "wardens", 3: "guild", 6: "guild" },
+    charters: {},
+    passage: {},
+    strongholds: {},
+    lineage: {},
+    dungeons: {},
+    journal: [],
+    wagonDay: 0,
+    wagonEvent: null,
+    tracked: null,
+    shards: 0,
+    travelDistance: 0,
+  };
+}
+export const fantasyStrongholds = [
+  {
+    id: "goblin",
+    site: 14,
+    name: "Bramble den",
+    family: "goblin",
+    leader: "Mossfang",
+    routine: "Foragers leave at dawn; their stores feed the raiders.",
+    action: "stores",
+    operation: "Burn stolen stores",
+    cost: "wood",
+    amount: 3,
+  },
+  {
+    id: "undead",
+    site: 2,
+    name: "Barrow crypt",
+    family: "skeleton",
+    leader: "The Oathless Marshal",
+    routine: "Bone sentries march by night; a burial seal sustains them.",
+    action: "seal",
+    operation: "Consecrate burial seal",
+    cost: "herbs",
+    amount: 3,
+  },
+  {
+    id: "arcane",
+    site: 5,
+    name: "Outcast spire",
+    family: "mage",
+    leader: "Magister Vale",
+    routine: "A ritual binds the tower guards; its focus is exposed at dusk.",
+    action: "ritual",
+    operation: "Break ritual focus",
+    cost: "ore",
+    amount: 3,
+  },
+];
+export function realmHold(s, id) {
+  return (s.realm.strongholds[id] ||= {
+    known: false,
+    scouted: false,
+    disrupted: false,
+    cleared: false,
+    lastSpawn: s.day,
+    waves: 0,
+  });
+}
+export function fantasyHoldLock(s, id, action = "scout") {
+  const h = fantasyStrongholds.find((v) => v.id === id);
+  if (!h || s.battle || s.event || s.campOpen || companyLost(s))
+    return "Finish the current activity.";
+  if (
+    Math.hypot(
+      s.position.x - places[h.site].x,
+      s.position.y - places[h.site].y,
+    ) > 110
+  )
+    return "Approach within 110 pixels.";
+  const state = realmHold(s, id);
+  if (state.cleared) return "Stronghold cleared.";
+  if (action === "scout")
+    return !companyScout(s)
+      ? "Requires an Archer or Thief."
+      : state.scouted
+        ? "Already surveyed."
+        : "";
+  if (!state.scouted) return "Scout the stronghold first.";
+  if (action === "disrupt")
+    return state.disrupted
+      ? "Already disrupted."
+      : !isHidden(s)
+        ? "Requires 60% concealment."
+        : s.inventory[h.cost] < h.amount
+          ? `Requires ${h.amount} ${h.cost}.`
+          : "";
+  return "";
+}
+export function fantasyHoldAction(s, id, action) {
+  if (
+    !["scout", "disrupt", "attack"].includes(action) ||
+    fantasyHoldLock(s, id, action)
+  )
+    return false;
+  const h = fantasyStrongholds.find((v) => v.id === id),
+    state = realmHold(s, id);
+  state.known = true;
+  s.destination = null;
+  if (action === "scout") {
+    state.scouted = true;
+    spendHours(s, 1);
+    note(
+      s,
+      `${h.name}: ${h.routine} Scout reports ${h.leader} commands three defenders.`,
+    );
+    practice(s, companyScout(s), 1);
+    return true;
+  }
+  if (action === "disrupt") {
+    s.inventory[h.cost] -= h.amount;
+    state.disrupted = true;
+    s.stealth.concealment = Math.max(0, s.stealth.concealment - 30);
+    spendHours(s, 1);
+    note(
+      s,
+      `${h.name}: ${h.operation.toLowerCase()} completed. Reinforcements stop and defenders lose health; the ritual's spell slots are reduced.`,
+    );
+    return true;
+  }
+  const original = s.contract,
+    location = s.location;
+  s.location = h.site;
+  s.contract = { target: h.site, tier: 2, reward: 60 };
+  const ok = startBattle(s);
+  s.contract = original;
+  s.location = location;
+  if (!ok) return false;
+  const b = s.battle;
+  b.kind = "patrol";
+  b.realmStronghold = id;
+  b.enemies.forEach((e, i) =>
+    Object.assign(e, {
+      kind: h.family,
+      name: i === 0 ? h.leader : `${h.name} sentry`,
+      hp: state.disrupted ? 20 : 32,
+      max: state.disrupted ? 20 : 32,
+      damage: state.disrupted ? 4 : 6,
+      armor: h.family === "skeleton" ? 2 : 0,
+      mana: state.disrupted ? 1 : 2,
+      casting: null,
+      trapper: h.family === "goblin" && i === 1,
+      snares: 2,
+    }),
+  );
+  note(
+    s,
+    `Assault on ${h.name}. Defeat ${h.leader} to end its patrols permanently.`,
+  );
+  return true;
+}
+export function refreshFantasyStrongholds(s) {
+  for (const h of fantasyStrongholds) {
+    const state = realmHold(s, h.id);
+    if (s.discovered.includes(h.site)) state.known = true;
+    if (
+      !state.known ||
+      state.cleared ||
+      state.disrupted ||
+      s.day - state.lastSpawn < 3
+    )
+      continue;
+    if (
+      (h.family === "skeleton" && s.timeOfDay >= 6 && s.timeOfDay < 18) ||
+      (h.family === "goblin" && (s.timeOfDay < 5 || s.timeOfDay >= 12)) ||
+      (h.family === "mage" && (s.timeOfDay < 16 || s.timeOfDay >= 22))
+    )
+      continue;
+    state.lastSpawn = s.day;
+    state.waves++;
+    const active = s.patrols.filter((p) => p.realmHold === h.id && !p.cleared);
+    if (active.length >= 2) continue;
+    const at = places[h.site],
+      id = `realm-${h.id}-${state.waves}`;
+    s.patrols.push({
+      id,
+      name: `${h.name} raiders`,
+      kind: "fantasy",
+      enemyFamily: h.family,
+      realmHold: h.id,
+      hostile: true,
+      cleared: false,
+      x: at.x + 35,
+      y: at.y + 25,
+      route: [
+        { x: at.x + 35, y: at.y + 25 },
+        { x: at.x + 105, y: at.y + 65 },
+        { x: at.x - 40, y: at.y + 90 },
+      ],
+      waypoint: 0,
+    });
+    note(s, `${h.name} sends another patrol onto nearby roads.`);
+  }
+}
+function defeatFantasyStronghold(s, id) {
+  const h = fantasyStrongholds.find((v) => v.id === id);
+  if (!h || realmHold(s, id).cleared) return;
+  realmHold(s, id).cleared = true;
+  if (id === "arcane") {
+    s.realm.shards += 2;
+    note(s, "The spire yields two aether shards for frontier spell recovery.");
+  }
+  for (const p of s.patrols)
+    if (
+      p.realmHold === id ||
+      p.id ===
+        {
+          goblin: "goblin-patrol",
+          undead: "bone-patrol",
+          arcane: "mage-patrol",
+        }[id]
+    )
+      p.cleared = true;
+  s.gold += 80;
+  s.knowledge += 3;
+  changeReputation(s, "wardens", 5);
+  note(
+    s,
+    `${h.name} cleared. Its roads remain safe from new stronghold patrols. Eighty crowns and three knowledge recovered.`,
+  );
+}
+export function territoryOwner(s, site = s.location) {
+  return s.realm?.territories[site] || null;
+}
+export function townAccessLock(s, site = s.location) {
+  const owner = territoryOwner(s, site);
+  if (!owner) return "";
+  return s.reputation[owner] <= -15 && s.realm.passage[site] !== s.day
+    ? "Hostile rulers demand a 25-crown day pass before village services."
+    : "";
+}
+export function territoryPrice(s) {
+  const owner = territoryOwner(s);
+  return owner
+    ? s.reputation[owner] >= 10
+      ? 0.9
+      : s.reputation[owner] <= -10
+        ? 1.2
+        : 1
+    : 1;
+}
+export function buyTerritoryPass(s) {
+  if (s.battle || s.event || s.campOpen || !townAccessLock(s) || s.gold < 25)
+    return false;
+  s.gold -= 25;
+  s.realm.passage[s.location] = s.day;
+  note(s, `Purchased a day pass into ${places[s.location].name}.`);
+  return true;
+}
+export function supportTerritory(s, faction) {
+  if (
+    !factions.some((v) => v.id === faction) ||
+    s.battle ||
+    s.event ||
+    s.campOpen ||
+    companyLost(s) ||
+    places[s.location]?.type !== "town" ||
+    townAccessLock(s) ||
+    s.gold < 40 ||
+    s.food < 6 ||
+    s.day - (s.realm.charters[s.location] || -99) < 3
+  )
+    return false;
+  const old = territoryOwner(s);
+  s.gold -= 40;
+  s.food -= 6;
+  s.realm.charters[s.location] = s.day;
+  s.realm.territories[s.location] = faction;
+  changeReputation(s, faction, 6);
+  if (old !== faction) changeReputation(s, old, -6);
+  for (const other of factions)
+    if (other.id !== faction && other.id !== old)
+      changeReputation(s, other.id, -2);
+  note(
+    s,
+    `${places[s.location].name} charter now supports ${factions.find((v) => v.id === faction).name}. Rival factions remember your intervention; prices and recruitment follow local standing.`,
+  );
+  const guard = s.patrols.find((p) => p.id === `border-${s.location}`);
+  if (guard) guard.cleared = false;
+  refreshBorderPatrols(s);
+  return true;
+}
+export function refreshBorderPatrols(s) {
+  for (const site of Object.keys(s.realm.charters).map(Number)) {
+    const owner = territoryOwner(s, site),
+      id = `border-${site}`,
+      at = places[site];
+    let p = s.patrols.find((v) => v.id === id);
+    if (!p) {
+      p = {
+        id,
+        kind: "bandits",
+        x: at.x + 75,
+        y: at.y,
+        route: [
+          { x: at.x + 75, y: at.y },
+          { x: at.x + 110, y: at.y + 50 },
+          { x: at.x + 50, y: at.y + 85 },
+        ],
+        waypoint: 0,
+        cleared: false,
+      };
+      s.patrols.push(p);
+    }
+    p.name = `${factions.find((v) => v.id === owner).name} border guard`;
+    p.faction = owner;
+    p.hostile = s.reputation[owner] <= -10;
+  }
+}
+export const lineageStories = {
+  elf: {
+    name: "The fading sanctuary",
+    site: 7,
+    clue: "A living root still remembers the vanished wardens.",
+    perk: "grove",
+    effect:
+      "One herb restores a caster's spent level-one slot at camp, once per day.",
+  },
+  dwarf: {
+    name: "The ancestral workshop",
+    site: 4,
+    clue: "A maker's seal bears your companion's family name.",
+    perk: "ancestor",
+    effect: "The company deals two extra damage to undead enemies.",
+  },
+  orc: {
+    name: "The broken command",
+    site: 12,
+    clue: "A commander's oath exposes the old order's betrayal.",
+    perk: "oath",
+    effect: "The companion gains two maximum health and improved resolve.",
+  },
+  human: {
+    name: "Names on the road",
+    site: 13,
+    clue: "A household ledger preserves the names of displaced families.",
+    perk: "kin",
+    effect: "The companion gains two maximum health and improved resolve.",
+  },
+};
+export function lineageStoryLock(s, id, action) {
+  const p = s.party[id];
+  if (!p || p.dead || p.hp <= 0 || s.battle || s.event || companyLost(s))
+    return "Companion unavailable.";
+  const story = lineageStories[p.race || "human"],
+    state = s.realm.lineage[id];
+  if (action === "begin")
+    return state ? "Already begun." : s.campOpen ? "" : "Discuss at camp.";
+  if (action === "investigate")
+    return state?.stage !== 1
+      ? "Discuss the story first."
+      : s.location !== story.site || s.campOpen
+        ? `Explore ${places[story.site].name}.`
+        : "";
+  if (["honor", "sell", "leave"].includes(action))
+    return state?.stage !== 2
+      ? "Find the evidence first."
+      : !s.campOpen
+        ? "Decide together at camp."
+        : "";
+  if (action === "reconcile")
+    return state?.outcome !== "sold" || !s.campOpen || s.gold < 25
+      ? "Requires a sold discovery, camp, and 25 crowns."
+      : "";
+  return "Unknown choice.";
+}
+export function lineageStoryAction(s, id, action) {
+  if (lineageStoryLock(s, id, action)) return false;
+  const p = s.party[id],
+    story = lineageStories[p.race || "human"];
+  if (action === "begin") {
+    s.realm.lineage[id] = { stage: 1, outcome: null };
+    if (!s.discovered.includes(story.site)) s.discovered.push(story.site);
+    note(
+      s,
+      `${p.name}: ${story.name}. Follow the lead to ${places[story.site].name}.`,
+    );
+  }
+  if (action === "investigate") {
+    if (p.race === "orc") {
+      const original = s.contract;
+      s.contract = { target: s.location, tier: 1, reward: 40 };
+      const ok = startBattle(s);
+      s.contract = original;
+      if (!ok) return false;
+      s.battle.kind = "patrol";
+      s.battle.realmLineage = id;
+      const leader = s.battle.enemies[0];
+      leader.name = "Commander Rhusk";
+      leader.hp = leader.max = 28;
+      leader.damage = 5;
+      note(
+        s,
+        `${p.name} challenges Commander Rhusk. Defeat the old commander to recover his oath.`,
+      );
+      return true;
+    }
+    s.realm.lineage[id].stage = 2;
+    s.knowledge++;
+    note(s, `${p.name}: ${story.clue} Return to camp to decide its future.`);
+  }
+  if (action === "honor" || action === "reconcile") {
+    if (action === "reconcile") s.gold -= 25;
+    s.realm.lineage[id] = {
+      stage: 3,
+      outcome: action === "honor" ? "honored" : "reconciled",
+    };
+    p.lineagePerk = story.perk;
+    p.resolve = Math.min(100, p.resolve + 15);
+    if (["oath", "kin"].includes(story.perk)) {
+      p.max += 2;
+      p.hp = Math.min(p.max, p.hp + 2);
+    }
+    for (const q of livingParty(s))
+      if (q.id !== id) {
+        const key = [id, q.id].sort((a, b) => a - b).join(":");
+        s.bonds[key] = Math.min(100, (s.bonds[key] || 0) + 5);
+      }
+    note(s, `${p.name}'s story resolved: ${story.effect}`);
+  }
+  if (action === "sell") {
+    s.gold += 50;
+    p.resolve = Math.max(0, p.resolve - 25);
+    s.realm.lineage[id] = { stage: 3, outcome: "sold" };
+    note(
+      s,
+      `Sold ${p.name}'s discovery for fifty crowns. Their trust falls; reconciliation remains possible.`,
+    );
+  }
+  if (action === "leave") {
+    s.realm.lineage[id] = { stage: 3, outcome: "departed" };
+    departCompanion(s, p);
+  }
+  return true;
+}
+export function recoverFrontierSlot(s, id) {
+  const p = s.party[id],
+    elf = livingParty(s).some((v) => v.lineagePerk === "grove" && v.hp > 0);
+  if (
+    s.battle ||
+    s.event ||
+    !s.campOpen ||
+    !elf ||
+    !p ||
+    !isCaster(p) ||
+    p.hp <= 0 ||
+    !p.spellSpent?.[1] ||
+    s.inventory.herbs < 1 ||
+    s.realm.groveDay === s.day
+  )
+    return false;
+  s.inventory.herbs--;
+  p.spellSpent[1]--;
+  s.realm.groveDay = s.day;
+  note(
+    s,
+    `Sanctuary lore restores one of ${p.name}'s level-one slots with a rare herb.`,
+  );
+  return true;
+}
+export function recordRealmEncounter(s, text) {
+  if (!s.realm || typeof text !== "string") return;
+  const record = {
+    day: s.day,
+    text: text.slice(0, 260),
+    site: places[s.location] ? s.location : null,
+  };
+  if (
+    s.realm.journal[0]?.text === record.text &&
+    s.realm.journal[0]?.day === record.day
+  )
+    return;
+  s.realm.journal.unshift(record);
+  s.realm.journal = s.realm.journal.slice(0, 80);
+}
+export function realmJournal(s) {
+  const leads = [];
+  for (const h of fantasyStrongholds) {
+    const st = s.realm.strongholds[h.id];
+    if (st?.known)
+      leads.push({
+        id: `hold-${h.id}`,
+        site: h.site,
+        title: h.name,
+        text: st.cleared
+          ? "Cleared; patrols permanently stopped."
+          : st.disrupted
+            ? "Defenses disrupted; leader still alive."
+            : st.scouted
+              ? h.routine
+              : "Scout its routines with an Archer or Thief.",
+      });
+  }
+  for (const p of livingParty(s)) {
+    const q = s.realm.lineage[p.id];
+    if (q) {
+      const st = lineageStories[p.race || "human"];
+      leads.push({
+        id: `lineage-${p.id}`,
+        site: st.site,
+        title: `${p.name}: ${st.name}`,
+        text:
+          q.stage === 1
+            ? "Find personal evidence here."
+            : q.stage === 2
+              ? "Bring the discovery to camp."
+              : q.outcome,
+      });
+    }
+  }
+  if (s.caravanEscort)
+    leads.push({
+      id: "caravan-escort",
+      site: s.caravanEscort.destination,
+      title: "Entrusted caravan",
+      text: "Protect the cargo and collect payment at its destination.",
+    });
+  for (const p of livingParty(s))
+    if (p.personalQuest?.stage === 1 || p.personalQuest?.stage === 2)
+      leads.push({
+        id: `personal-${p.id}`,
+        site: personalQuestInfo(p).target,
+        title: `${p.name}: personal request`,
+        text:
+          p.personalQuest.stage === 1
+            ? personalQuestInfo(p).goal
+            : "Discuss the evidence at camp.",
+      });
+  for (const r of tavernRumors)
+    if (s.rumors[r.id])
+      leads.push({
+        id: `rumor-${r.id}`,
+        site: r.target,
+        title: r.name,
+        text: r.desc,
+      });
+  if (s.travelers.tamsin !== "unknown")
+    leads.push({
+      id: "sella",
+      site: 0,
+      title: "Sella, rescued traveler",
+      text: "Meet her again in Greyhaven.",
+    });
+  if (s.travelers.farmRebuilt)
+    leads.push({
+      id: "farm",
+      site: 13,
+      title: "Ashbrook harvest",
+      text: "The rebuilt farm provides recurring harvests.",
+    });
+  for (const site of Object.keys(s.realm.charters).map(Number))
+    leads.push({
+      id: `charter-${site}`,
+      site,
+      title: `${places[site].name} charter`,
+      text: `Controlled by ${factions.find((v) => v.id === territoryOwner(s, site)).name}.`,
+    });
+  return leads;
+}
+export function trackRealmLead(s, id) {
+  const lead = realmJournal(s).find((v) => v.id === id);
+  if (!lead || s.battle || s.event || s.campOpen || companyLost(s))
+    return false;
+  s.realm.tracked = id;
+  return (
+    s.location === lead.site ||
+    moveTo(s, places[lead.site].x, places[lead.site].y)
+  );
+}
+export function dungeonPuzzle(s) {
+  if (s.event?.kind !== "dungeon") return null;
+  const id = s.event.site;
+  return (s.realm.dungeons[id] ||= {
+    spotted: false,
+    unlocked: false,
+    pins: 0,
+    dial: 0,
+    strain: 0,
+    rune: 0,
+    door: false,
+    cache: false,
+  });
+}
+export function realmDungeonAction(s, action, value) {
+  const q = dungeonPuzzle(s),
+    e = s.event;
+  if (!q || companyLost(s)) return false;
+  const nearDoor = Math.abs(e.x - 4) + Math.abs(e.y - 3) <= 1;
+  if (action === "scout-room") {
+    if (!companyScout(s) || q.spotted) return false;
+    q.spotted = true;
+    practice(s, companyScout(s), 1);
+    e.message =
+      "Your scout marks the dart mechanism and finds a side-room lock at tile 5,4. Its runes read root, flame, star.";
+    return true;
+  }
+  if (action === "dial") {
+    if (!nearDoor || q.unlocked || !professional(s, "Thief")) return false;
+    q.dial = (q.dial + 1) % 5;
+    return true;
+  }
+  if (action === "pick") {
+    const thief = professional(s, "Thief");
+    if (!nearDoor || q.unlocked || !thief) return false;
+    const target = [1, 3, 2][q.pins];
+    if (q.dial === target) {
+      q.pins++;
+      q.strain = 0;
+      e.message = "A tumbler clicks into place.";
+      if (q.pins === 3) {
+        q.unlocked = true;
+        practice(s, thief, 2);
+        e.message =
+          "The Thief opens the hidden lock. Solve its rune seal or spend magic to enter.";
+      }
+    } else {
+      q.strain++;
+      e.message =
+        q.dial < target
+          ? "The pin needs more tension."
+          : "The pin bends under too much tension.";
+      if (q.strain >= 3) {
+        q.pins = 0;
+        q.strain = 0;
+        spendHours(s, 1);
+        e.message = "The pick slips. An hour lost, and the tumblers reset.";
+      }
+    }
+    return true;
+  }
+  if (action === "rune") {
+    if (
+      !nearDoor ||
+      !q.unlocked ||
+      q.door ||
+      !Number.isInteger(value) ||
+      value < 0 ||
+      value > 2
+    )
+      return false;
+    if (value === [0, 1, 2][q.rune]) q.rune++;
+    else {
+      q.rune = 0;
+      e.message = "The rune seal dims. Read the scout's clue.";
+    }
+    if (q.rune === 3) {
+      q.door = true;
+      e.message = "Root, flame, star: the side chamber opens.";
+    }
+    return true;
+  }
+  if (action === "magic-door") {
+    const p = livingParty(s).find(
+      (p) => isCaster(p) && p.hp > 0 && spellSlots(p)[1] > 0,
+    );
+    if (!nearDoor || q.door || !p) return false;
+    p.spellSpent ||= { 1: 0, 2: 0 };
+    p.spellSpent[1]++;
+    q.door = true;
+    e.message = `${p.name} spends a level-one slot to dissolve the lock and rune seal.`;
+    return true;
+  }
+  if (action === "side-cache") {
+    if (!nearDoor || !q.door || q.cache) return false;
+    q.cache = true;
+    s.gold += 35;
+    s.inventory.herbs += 2;
+    s.realm.shards++;
+    s.knowledge++;
+    e.message =
+      "Recovered 35 crowns, two herbs, an aether shard, and a fragment of lore. You can retreat without fighting the eastern guards.";
+    note(
+      s,
+      `${places[e.site].name}: side chamber recovered; its contents will not respawn.`,
+    );
+    return true;
+  }
+  return false;
+}
+export const wagonEventKinds = {
+  wheel: {
+    title: "A cracked wagon wheel",
+    text: "The wheel gives way on rough ground. Repair it, use the quartermaster's spare axle, or discard cargo to limp onward.",
+  },
+  crossing: {
+    title: "The swollen crossing",
+    text: "A flooded ford threatens the wagon. Let your scout find a crossing, pay a ferryman, or risk the current.",
+  },
+  overload: {
+    title: "Cargo on the verge",
+    text: "A heavily loaded wagon strains its bindings. A quartermaster can rebalance it; otherwise unload goods or lash the load with timber.",
+  },
+  raid: {
+    title: "Shapes beyond the firelight",
+    text: "Raiders creep toward the wagon after dark. A rear guard can drive them off; otherwise pay them or fight.",
+  },
+};
+export function beginWagonEvent(s, kind) {
+  if (
+    !wagonEventKinds[kind] ||
+    !s.wagon.owned ||
+    s.battle ||
+    s.event ||
+    s.campOpen ||
+    companyLost(s) ||
+    s.realm.wagonDay === s.day
+  )
+    return false;
+  s.realm.wagonDay = s.day;
+  s.realm.wagonEvent = { kind };
+  s.destination = null;
+  s.event = { kind: "wagon-travel", ...wagonEventKinds[kind] };
+  return true;
+}
+export function checkWagonTravel(s, distance = 0) {
+  if (!s.wagon.owned || s.battle || s.event || s.campOpen || s.location >= 0)
+    return false;
+  s.realm.travelDistance =
+    (s.realm.travelDistance || 0) + Math.max(0, distance);
+  if (s.realm.travelDistance < 600 || s.realm.wagonDay === s.day) return false;
+  s.realm.travelDistance = 0;
+  const kind =
+    terrainAt(s.position) === "shallows"
+      ? "crossing"
+      : s.timeOfDay >= 20 || s.timeOfDay < 5
+        ? "raid"
+        : cargoLoad(s) > companyCargoCapacity(s) * 0.75
+          ? "overload"
+          : "wheel";
+  return beginWagonEvent(s, kind);
+}
+export function wagonChoiceLock(s, choice) {
+  if (s.event?.kind !== "wagon-travel" || !s.realm.wagonEvent)
+    return "No wagon incident.";
+  const kind = s.realm.wagonEvent.kind;
+  const duty = {
+    wheel: "quartermaster",
+    crossing: "scout",
+    overload: "quartermaster",
+    raid: "rearguard",
+  }[kind];
+  if (choice === "duty")
+    return travelWorker(s, duty) ? "" : `Assign a conscious ${duty} first.`;
+  if (choice === "materials")
+    return s.inventory.wood >= 2 && kind !== "raid"
+      ? ""
+      : "Requires two wood; unavailable for raids.";
+  if (choice === "pay") return s.gold >= 20 ? "" : "Requires twenty crowns.";
+  if (choice === "fight")
+    return kind === "raid" ? "" : "No attackers to fight.";
+  if (choice === "risk") return "";
+  return "Unknown response.";
+}
+export function wagonChoice(s, choice) {
+  if (wagonChoiceLock(s, choice)) return false;
+  const kind = s.realm.wagonEvent.kind;
+  s.event = null;
+  s.realm.wagonEvent = null;
+  if (choice === "duty") {
+    note(
+      s,
+      `Your ${{ wheel: "quartermaster", crossing: "scout", overload: "quartermaster", raid: "rearguard" }[kind]} resolves ${wagonEventKinds[kind].title.toLowerCase()} without losses.`,
+    );
+    return true;
+  }
+  if (choice === "materials") {
+    s.inventory.wood -= 2;
+    spendHours(s, 1);
+    note(s, "Used two timber to secure the company wagon.");
+    return true;
+  }
+  if (choice === "pay") {
+    s.gold -= 20;
+    note(s, "Paid twenty crowns to bring the wagon through safely.");
+    return true;
+  }
+  if (choice === "fight") {
+    let p = s.patrols.find((p) => p.id === "wagon-night-raiders");
+    if (!p) {
+      p = {
+        id: "wagon-night-raiders",
+        name: "Night wagon raiders",
+        kind: "bandits",
+        hostile: true,
+        cleared: false,
+        route: [
+          { x: s.position.x + 40, y: s.position.y },
+          { x: s.position.x, y: s.position.y + 40 },
+        ],
+        waypoint: 0,
+      };
+      s.patrols.push(p);
+    }
+    p.x = s.position.x + 20;
+    p.y = s.position.y;
+    p.cleared = false;
+    return startBattle(s, p.id);
+  }
+  s.wagon.condition = Math.max(0, s.wagon.condition - 15);
+  s.food = Math.max(0, s.food - 3);
+  let remaining = 3;
+  for (const good of tradeGoods) {
+    const n = Math.min(s.cargo[good.id], remaining);
+    s.cargo[good.id] -= n;
+    remaining -= n;
+  }
+  spendHours(s, 2);
+  note(
+    s,
+    "Pushed onward: wagon condition −15, up to three rations and three cargo lost; two hours delayed.",
+  );
+  return true;
+}
+spellBook.push(
+  {
+    id: "silence-field",
+    role: "Cleric",
+    name: "Hushed Ground",
+    level: 1,
+    range: 4,
+    kind: "surface",
+    surface: "silence",
+    power: 0,
+    herbs: 1,
+  },
+  {
+    id: "darkness-field",
+    role: "Wizard",
+    name: "Veil of Night",
+    level: 1,
+    range: 4,
+    kind: "surface",
+    surface: "darkness",
+    power: 0,
+    herbs: 1,
+  },
+  {
+    id: "ember-field",
+    role: "Wizard",
+    name: "Ember Ground",
+    level: 2,
+    range: 4,
+    kind: "surface",
+    surface: "fire",
+    power: 3,
+    ore: 1,
+  },
+  {
+    id: "counterspell",
+    role: "Wizard",
+    name: "Sever Spell",
+    level: 1,
+    range: 4,
+    kind: "counter",
+    power: 0,
+  },
+  {
+    id: "concentration-aegis",
+    role: "Cleric",
+    name: "Beacon Circle",
+    level: 2,
+    range: 3,
+    kind: "concentration",
+    power: 4,
+    herbs: 1,
+  },
+);
+function castRealmMagic(s, p, u, spell, x, y) {
+  if (!["surface", "counter", "concentration"].includes(spell.kind))
+    return false;
+  s.battle.realmMagic ||= { surfaces: [], concentration: [] };
+  const m = s.battle.realmMagic;
+  if (spell.kind === "counter") {
+    const e = s.battle.enemies.find((e) => e.hp > 0 && e.x === x && e.y === y);
+    e.casting = null;
+    e.silenced = 1;
+  } else if (spell.kind === "concentration") {
+    interruptConcentration(s, p.id);
+    m.concentration.push({ id: p.id, x, y, power: spell.power, turns: 3 });
+    for (const ally of s.battle.units)
+      if (
+        s.party[ally.id].hp > 0 &&
+        Math.abs(ally.x - x) + Math.abs(ally.y - y) <= 1
+      )
+        ally.arcaneWard = spell.power;
+  } else m.surfaces.push({ kind: spell.surface, x, y, turns: 3 });
+  note(
+    s,
+    `${p.name} casts ${spell.name}. One level ${spell.level} slot spent. ${spell.kind === "counter" ? "The enemy cast is interrupted and its next turn silenced." : spell.kind === "concentration" ? "Wards renew for three rounds; damage to the caster breaks concentration." : "The ground effect lasts three enemy rounds."}`,
+  );
+  return true;
+}
+export function interruptConcentration(s, id) {
+  if (!s.battle?.realmMagic) return false;
+  const m = s.battle.realmMagic,
+    removed = m.concentration.some((v) => v.id === id);
+  m.concentration = m.concentration.filter((v) => v.id !== id);
+  if (removed) note(s, `${s.party[id].name}'s concentration breaks.`);
+  return removed;
+}
+function resolveRealmMagic(s) {
+  const b = s.battle,
+    m = b.realmMagic;
+  if (!m) return;
+  for (const surface of m.surfaces) {
+    for (const e of b.enemies.filter(
+      (v) =>
+        v.hp > 0 && Math.abs(v.x - surface.x) + Math.abs(v.y - surface.y) <= 1,
+    )) {
+      if (surface.kind === "fire") hitEnemy(s, e, 3 + enemyArmor(s, e));
+      if (surface.kind === "silence") {
+        e.casting = null;
+        e.silenced = 1;
+      }
+    }
+    for (const u of b.units.filter(
+      (v) =>
+        s.party[v.id].hp > 0 &&
+        Math.abs(v.x - surface.x) + Math.abs(v.y - surface.y) <= 1,
+    ))
+      if (surface.kind === "fire")
+        damageCompanion(s, u, 3 + armorPower(s, s.party[u.id]));
+    surface.turns--;
+  }
+  for (const focus of m.concentration) {
+    if (s.party[focus.id]?.hp <= 0 || s.party[focus.id]?.dead) {
+      focus.turns = 0;
+      continue;
+    }
+    for (const u of b.units)
+      if (
+        s.party[u.id].hp > 0 &&
+        Math.abs(u.x - focus.x) + Math.abs(u.y - focus.y) <= 1
+      )
+        u.arcaneWard = focus.power;
+    focus.turns--;
+  }
+  m.surfaces = m.surfaces.filter((v) => v.turns > 0);
+  m.concentration = m.concentration.filter((v) => v.turns > 0);
+}
+function restoreRealm(s, raw) {
+  const r = raw.realm || {},
+    b = freshRealm(),
+    count = (v, max = 10000) =>
+      Number.isInteger(v) ? Math.max(0, Math.min(max, v)) : 0;
+  for (const site of [0, 3, 6]) {
+    if (factions.some((f) => f.id === r.territories?.[site]))
+      b.territories[site] = r.territories[site];
+    if (
+      Number.isInteger(r.charters?.[site]) &&
+      r.charters[site] > 0 &&
+      r.charters[site] <= s.day
+    )
+      b.charters[site] = r.charters[site];
+    if (r.passage?.[site] === s.day) b.passage[site] = s.day;
+  }
+  for (const h of fantasyStrongholds) {
+    const old = r.strongholds?.[h.id];
+    if (old)
+      b.strongholds[h.id] = {
+        known: old.known === true,
+        scouted: old.scouted === true,
+        disrupted: old.disrupted === true,
+        cleared: old.cleared === true,
+        lastSpawn: Math.min(s.day, Math.max(1, count(old.lastSpawn))),
+        waves: count(old.waves),
+      };
+  }
+  for (const p of s.party) {
+    const q = r.lineage?.[p.id];
+    p.lineagePerk = null;
+    if (q && [1, 2, 3].includes(q.stage)) {
+      const outcome = ["honored", "sold", "departed", "reconciled"].includes(
+        q.outcome,
+      )
+        ? q.outcome
+        : null;
+      b.lineage[p.id] = { stage: q.stage, outcome };
+      if (q.stage === 3 && ["honored", "reconciled"].includes(outcome))
+        p.lineagePerk = lineageStories[p.race || "human"].perk;
+    }
+  }
+  for (const site of [2, 4, 5, 8, 9, 11, 12, 14]) {
+    const q = r.dungeons?.[site];
+    if (q)
+      b.dungeons[site] = {
+        spotted: q.spotted === true,
+        unlocked: q.unlocked === true,
+        pins: count(q.pins, 3),
+        dial: count(q.dial, 4),
+        strain: count(q.strain, 2),
+        rune: count(q.rune, 3),
+        door: q.door === true,
+        cache: q.cache === true,
+      };
+  }
+  b.journal = (Array.isArray(r.journal) ? r.journal : [])
+    .filter(
+      (v) =>
+        v &&
+        typeof v.text === "string" &&
+        Number.isInteger(v.day) &&
+        v.day > 0 &&
+        v.day <= s.day,
+    )
+    .slice(0, 80)
+    .map((v) => ({
+      day: v.day,
+      text: v.text.slice(0, 260),
+      site: places[v.site] ? v.site : null,
+    }));
+  b.shards = count(r.shards, 100);
+  b.wagonDay = Math.min(s.day, count(r.wagonDay));
+  b.travelDistance = count(r.travelDistance, 600);
+  b.groveDay = Math.min(s.day, count(r.groveDay));
+  if (
+    s.wagon.owned &&
+    wagonEventKinds[r.wagonEvent?.kind] &&
+    raw.event?.kind === "wagon-travel" &&
+    !s.battle
+  ) {
+    b.wagonEvent = { kind: r.wagonEvent.kind };
+    s.event = { kind: "wagon-travel", ...wagonEventKinds[r.wagonEvent.kind] };
+  } else if (s.event?.kind === "wagon-travel") s.event = null;
+  s.realm = b;
+  b.tracked = realmJournal(s).some((v) => v.id === r.tracked)
+    ? r.tracked
+    : null;
+  const knownPatrols = new Set(initialPatrols().map((v) => v.id));
+  for (const p of raw.patrols || []) {
+    const h = fantasyStrongholds.find((v) => v.id === p.realmHold);
+    if (
+      h &&
+      !p.cleared &&
+      !b.strongholds[h.id]?.cleared &&
+      typeof p.id === "string" &&
+      new RegExp(`^realm-${h.id}-[0-9]+$`).test(p.id) &&
+      Number.isFinite(p.x) &&
+      Number.isFinite(p.y) &&
+      !knownPatrols.has(p.id) &&
+      s.patrols.filter((v) => v.realmHold === h.id).length < 2
+    ) {
+      const at = places[h.site];
+      knownPatrols.add(p.id);
+      s.patrols.push({
+        id: p.id,
+        name: `${h.name} raiders`,
+        kind: "fantasy",
+        enemyFamily: h.family,
+        realmHold: h.id,
+        hostile: true,
+        cleared: p.cleared === true || b.strongholds[h.id]?.cleared === true,
+        x: Math.max(0, Math.min(WORLD.width, p.x)),
+        y: Math.max(0, Math.min(WORLD.height, p.y)),
+        route: [
+          { x: at.x + 35, y: at.y + 25 },
+          { x: at.x + 105, y: at.y + 65 },
+        ],
+        waypoint: 0,
+      });
+    }
+  }
+  refreshBorderPatrols(s);
+  for (const p of s.patrols.filter((v) => v.faction)) {
+    const saved = raw.patrols?.find((v) => v.id === p.id);
+    if (saved) {
+      p.cleared = saved.cleared === true;
+      if (Number.isFinite(saved.x) && Number.isFinite(saved.y)) {
+        p.x = Math.max(0, Math.min(WORLD.width, saved.x));
+        p.y = Math.max(0, Math.min(WORLD.height, saved.y));
+      }
+    }
+  }
+  const night = raw.patrols?.find(
+    (p) => p.id === "wagon-night-raiders" && !p.cleared,
+  );
+  if (night && Number.isFinite(night.x) && Number.isFinite(night.y))
+    s.patrols.push({
+      id: "wagon-night-raiders",
+      name: "Night wagon raiders",
+      kind: "bandits",
+      hostile: true,
+      cleared: false,
+      x: Math.max(0, Math.min(WORLD.width, night.x)),
+      y: Math.max(0, Math.min(WORLD.height, night.y)),
+      route: [
+        { x: s.position.x + 40, y: s.position.y },
+        { x: s.position.x, y: s.position.y + 40 },
+      ],
+      waypoint: 0,
+    });
+  if (s.battle) {
+    s.battle.realmLineage =
+      Number.isInteger(raw.battle.realmLineage) &&
+      s.realm.lineage[raw.battle.realmLineage]?.stage === 1
+        ? raw.battle.realmLineage
+        : null;
+    s.battle.realmStronghold = fantasyStrongholds.some(
+      (v) => v.id === raw.battle.realmStronghold,
+    )
+      ? raw.battle.realmStronghold
+      : null;
+    const m = raw.battle.realmMagic || {},
+      valid = (v) =>
+        v &&
+        Number.isInteger(v.x) &&
+        v.x >= 0 &&
+        v.x < 9 &&
+        Number.isInteger(v.y) &&
+        v.y >= 0 &&
+        v.y < 7 &&
+        Number.isInteger(v.turns) &&
+        v.turns > 0;
+    s.battle.realmMagic = {
+      surfaces: (Array.isArray(m.surfaces) ? m.surfaces : [])
+        .filter(
+          (v) => valid(v) && ["fire", "silence", "darkness"].includes(v.kind),
+        )
+        .slice(0, 12)
+        .map((v) => ({
+          kind: v.kind,
+          x: v.x,
+          y: v.y,
+          turns: count(v.turns, 3),
+        })),
+      concentration: (Array.isArray(m.concentration) ? m.concentration : [])
+        .filter((v) => valid(v) && s.party[v.id] && isCaster(s.party[v.id]))
+        .slice(0, 6)
+        .map((v) => ({
+          id: v.id,
+          x: v.x,
+          y: v.y,
+          power: 4,
+          turns: count(v.turns, 3),
+        })),
+    };
+    for (const e of s.battle.enemies) e.silenced = count(e.silenced, 1);
+  }
+}
+
+export function recoverShardMagic(s, id) {
+  const p = s.party[id];
+  if (
+    s.battle ||
+    s.event ||
+    !s.campOpen ||
+    !p ||
+    p.dead ||
+    p.hp <= 0 ||
+    !isCaster(p) ||
+    s.realm.shards < 1 ||
+    !(p.spellSpent?.[1] || p.spellSpent?.[2])
+  )
+    return false;
+  s.realm.shards--;
+  if (p.spellSpent[2] > 0) p.spellSpent[2]--;
+  else p.spellSpent[1] = Math.max(0, p.spellSpent[1] - 2);
+  spendHours(s, 1);
+  note(
+    s,
+    `An aether shard restores ${p.name}'s frontier magic: one level-two slot or up to two level-one slots.`,
+  );
   return true;
 }

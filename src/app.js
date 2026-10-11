@@ -1,4 +1,23 @@
 import {
+  fantasyStrongholds,
+  realmHold,
+  fantasyHoldLock,
+  fantasyHoldAction,
+  territoryOwner,
+  townAccessLock,
+  buyTerritoryPass,
+  supportTerritory,
+  lineageStories,
+  lineageStoryLock,
+  lineageStoryAction,
+  recoverFrontierSlot,
+  recoverShardMagic,
+  realmJournal,
+  trackRealmLead,
+  dungeonPuzzle,
+  realmDungeonAction,
+  wagonChoiceLock,
+  wagonChoice,
   campJobReady,
   companyScout,
   travelRoles,
@@ -642,6 +661,7 @@ function render() {
   const panel = $("panel");
   panel.replaceChildren();
   if (tab === "Company") {
+    appendRealmCompany(panel);
     appendTravelJobs(panel);
     appendWagonPanel(panel);
     if (s.caravanEscort) appendEscortPanel(panel);
@@ -1571,6 +1591,7 @@ function render() {
         }),
       );
     if (tab === "Town") {
+      appendTerritoryPanel(panel);
       if (
         s.location === 0 &&
         s.campaign.phase !== "unstarted" &&
@@ -1684,7 +1705,7 @@ function render() {
             () => {
               tab = destination;
             },
-            false,
+            !!townAccessLock(s),
             true,
           ),
         );
@@ -2051,7 +2072,23 @@ function render() {
     const raided =
       s.event.kind === "caravan-raid" &&
       s.patrols.find((p) => p.id === s.event.patrolId);
-    if (raided) {
+    if (s.event.kind === "wagon-travel") {
+      for (const [choice, label] of [
+        ["duty", "Use assigned travel specialist"],
+        ["materials", "Secure wagon · 2 wood / 1 hour"],
+        ["pay", "Pay for safe passage · 20 crowns"],
+        ["risk", "Push onward · risk supplies"],
+        ["fight", "Fight the night raiders"],
+      ])
+        c.append(
+          button(
+            label,
+            () => wagonChoice(s, choice),
+            !!wagonChoiceLock(s, choice),
+          ),
+        );
+      a.append(c);
+    } else if (raided) {
       c.querySelector("h3").textContent = `${raided.name} under attack`;
       c.querySelector("p").textContent =
         "Bandits surround the wagon. Intervene to protect its cargo, demand fifteen crowns before helping, or leave. Without help the wagon will fall after three game hours, leaving a wreck.";
@@ -2103,19 +2140,23 @@ function render() {
                 ? "Party"
                 : blocked
                   ? "Wall"
-                  : x === 8 && y === 5
-                    ? "Vault"
-                    : x === 7 && y === 5
-                      ? "Guard"
-                      : [1, 5].includes(x) &&
-                          y === 1 &&
-                          places[e.site].type === "mine"
-                        ? "Ore"
-                        : (x === layout.trap[0] && y === layout.trap[1]) ||
-                            (x === layout.collapse[0] &&
-                              y === layout.collapse[1])
-                          ? "Trap"
-                          : "·",
+                  : x === 4 && y === 3
+                    ? s.realm.dungeons[e.site]?.cache
+                      ? "Empty"
+                      : "Seal"
+                    : x === 8 && y === 5
+                      ? "Vault"
+                      : x === 7 && y === 5
+                        ? "Guard"
+                        : [1, 5].includes(x) &&
+                            y === 1 &&
+                            places[e.site].type === "mine"
+                          ? "Ore"
+                          : (x === layout.trap[0] && y === layout.trap[1]) ||
+                              (x === layout.collapse[0] &&
+                                y === layout.collapse[1])
+                            ? "Trap"
+                            : "·",
               () => dungeonAction(s, "move", x, y),
               blocked || Math.abs(x - e.x) + Math.abs(y - e.y) !== 1,
             ),
@@ -2125,6 +2166,7 @@ function render() {
             `Dungeon tile ${x + 1},${y + 1}`,
           );
         }
+      appendDungeonPuzzle(c);
       c.append(
         grid,
         button(
@@ -2137,9 +2179,11 @@ function render() {
             !!s.siteProgress[`deposit-${e.site}-${e.x}`],
         ),
         button(
-          "Disarm darts · 1 wood / 1 hour",
+          companyScout(s)
+            ? "Scout disarms darts"
+            : "Disarm darts · 1 wood / 1 hour",
           () => dungeonAction(s, "disarm"),
-          s.inventory.wood < 1 ||
+          (!companyScout(s) && s.inventory.wood < 1) ||
             !!s.siteProgress[`hazard-${e.site}-3`] ||
             Math.abs(e.x - layout.trap[0]) + Math.abs(e.y - layout.trap[1]) > 1,
         ),
@@ -2450,7 +2494,7 @@ function render() {
       magic.append(summary);
       for (const spell of spellsFor(actor)) {
         const hint = document.createElement("p");
-        hint.textContent = `${spell.name}: ${spell.power} ${spell.kind === "damage" ? "base damage" : spell.kind === "heal" ? "healing + level" : spell.kind === "illusion" ? "distraction: weaker attacks and no disengagement strikes" : "protection on the next hit"} · range ${spellRange(actor, spell)}${spell.area ? " · adjacent area" : ""}${spell.piercing ? " · ignores armor" : ""}`;
+        hint.textContent = `${spell.name}: ${spell.power} ${spell.kind === "damage" ? "base damage" : spell.kind === "heal" ? "healing + level" : spell.kind === "illusion" ? "distraction: weaker attacks and no disengagement strikes" : spell.kind === "surface" ? `${spell.surface} ground for three rounds; affects both sides` : spell.kind === "counter" ? "interrupt and silence an enemy caster" : spell.kind === "concentration" ? "maintained wards; taking damage breaks concentration" : "protection on the next hit"} · range ${spellRange(actor, spell)}${spell.area ? " · adjacent area" : ""}${spell.piercing ? " · ignores armor" : ""}`;
         magic.append(hint);
         magic.append(
           button(
@@ -2465,17 +2509,29 @@ function render() {
       }
       if (spellMode) {
         const spell = spellBook.find((v) => v.id === spellMode),
-          targets = ["damage", "illusion"].includes(spell.kind)
-            ? s.battle.enemies.filter((e) => e.hp > 0)
-            : s.battle.units.filter((u) => s.party[u.id].hp > 0);
-        for (const target of targets)
-          magic.append(
-            button(
-              `Cast ${spell.name} on ${["damage", "illusion"].includes(spell.kind) ? target.name || target.kind : s.party[target.id].name}`,
-              () => castSpell(s, selected, spell.id, target.x, target.y),
-              !!spellLock(s, selected, spell.id, target.x, target.y),
-            ),
+          targets = ["surface", "concentration"].includes(spell.kind)
+            ? Array.from({ length: 63 }, (_, i) => ({
+                x: i % 9,
+                y: Math.floor(i / 9),
+                name: `tile ${(i % 9) + 1},${Math.floor(i / 9) + 1}`,
+              }))
+            : ["damage", "illusion", "counter"].includes(spell.kind)
+              ? s.battle.enemies.filter((e) => e.hp > 0)
+              : s.battle.units.filter((u) => s.party[u.id].hp > 0);
+        const groundTarget = ["surface", "concentration"].includes(spell.kind),
+          targetMenu = groundTarget ? document.createElement("div") : magic;
+        if (groundTarget) targetMenu.className = "dungeon-grid";
+        for (const target of targets) {
+          const label = `Cast ${spell.name} on ${["surface", "concentration", "damage", "illusion", "counter"].includes(spell.kind) ? target.name || target.kind : s.party[target.id].name}`;
+          const b = button(
+            groundTarget ? `${target.x + 1},${target.y + 1}` : label,
+            () => castSpell(s, selected, spell.id, target.x, target.y),
+            !!spellLock(s, selected, spell.id, target.x, target.y),
           );
+          b.setAttribute("aria-label", label);
+          targetMenu.append(b);
+        }
+        if (groundTarget) magic.append(targetMenu);
         magic.append(
           button("Cancel spell", () => {
             spellMode = null;
@@ -2817,6 +2873,7 @@ function render() {
     $("map-label").textContent =
       `${places[s.location]?.name || terrainAt(s.position).toUpperCase()} · ${Math.round(s.position.x)}, ${Math.round(s.position.y)}`;
   }
+  appendRealmWorldActions(a);
   const rumorJournal = $("rumor-journal");
   rumorJournal.replaceChildren();
   for (const rumor of tavernRumors.filter((r) => s.rumors[r.id])) {
@@ -2838,6 +2895,7 @@ function render() {
       );
     rumorJournal.append(c);
   }
+  appendRealmJournal(rumorJournal);
   if (!rumorJournal.children.length)
     rumorJournal.textContent =
       "No rumors heard yet. Visit a village tavern for exploration leads.";
@@ -2950,6 +3008,7 @@ function draw() {
   }
   if (s.battle) {
     drawBattlefield(ctx, s);
+    drawRealmMagic();
     const threat = bossThreat(s);
     if (threat)
       for (const tile of threat.tiles) {
@@ -3164,6 +3223,16 @@ function draw() {
       ctx.restore();
     }
     drawLandmark(ctx, p, i);
+    if (territoryOwner(s, i))
+      drawMapLabel(
+        ctx,
+        factions.find((f) => f.id === territoryOwner(s, i)).name,
+        p.x,
+        p.y - 65,
+      );
+    const tracked = realmJournal(s).find((v) => v.id === s.realm.tracked);
+    if (tracked?.site === i)
+      drawMapLabel(ctx, "TRACKED LEAD", p.x, p.y - 48, true);
     drawMapLabel(ctx, p.name, p.x, p.y + (p.type === "town" ? 58 : 39));
     if (i === 13 && s.travelers.farmRebuilt)
       drawMapLabel(ctx, "RESTORED", p.x, p.y - 35);
@@ -4194,4 +4263,266 @@ function appendEscortPanel(panel) {
     ),
   );
   panel.append(row);
+}
+
+function appendTerritoryPanel(panel) {
+  const owner = territoryOwner(s),
+    name = factions.find((v) => v.id === owner)?.name;
+  const c = card("Village allegiance", "");
+  const text = document.createElement("p");
+  text.textContent = `${places[s.location].name} is controlled by ${name}. Local standing affects prices and recruitment; hostile rulers charge a day pass.`;
+  c.append(text);
+  if (townAccessLock(s))
+    c.append(
+      button(
+        "Buy village day pass · 25 crowns",
+        () => buyTerritoryPass(s),
+        s.gold < 25,
+      ),
+    );
+  const details = document.createElement("details"),
+    summary = document.createElement("summary");
+  summary.textContent = "Back a faction charter";
+  details.append(summary);
+  const hint = document.createElement("p");
+  hint.textContent =
+    "Commit 40 crowns and six rations. Your faction gains six reputation, the previous rulers lose six, and other rivals lose two. One charter per village every three days; a border guard protects the new rulers.";
+  details.append(hint);
+  for (const f of factions)
+    details.append(
+      button(
+        `Back ${f.name} · 40 crowns / 6 rations`,
+        () => supportTerritory(s, f.id),
+        !!townAccessLock(s) ||
+          s.gold < 40 ||
+          s.food < 6 ||
+          s.day - (s.realm.charters[s.location] || -99) < 3,
+      ),
+    );
+  c.append(details);
+  panel.append(c);
+}
+function appendRealmCompany(panel) {
+  const journal = card(
+    "Encounter journal",
+    "<p>Known leads, recurring travelers, faction promises, and the company's decisions.</p>",
+  );
+  appendRealmJournal(journal);
+  panel.append(journal);
+  const reagents = document.createElement("p");
+  reagents.textContent = `Aether shards: ${s.realm.shards}. Find them in hidden dungeon chambers and the Outcast spire; at camp, one restores a level-two slot or two level-one slots.`;
+  panel.append(reagents);
+  const stories = document.createElement("details"),
+    title = document.createElement("summary");
+  title.textContent = "Companion heritage stories";
+  stories.append(title);
+  for (const p of livingParty(s)) {
+    const story = lineageStories[p.race || "human"],
+      q = s.realm.lineage[p.id],
+      c = card(`${p.name} · ${story.name}`, "");
+    const text = document.createElement("p");
+    text.textContent = `${places[story.site].name} · ${q?.outcome || (q?.stage === 2 && "Evidence found; decide at camp") || (q?.stage === 1 && "Follow the lead") || "Discuss at camp"}. ${story.effect}`;
+    c.append(text);
+    for (const [action, label] of [
+      ["begin", "Discuss heritage"],
+      ["investigate", "Investigate personal lead"],
+      ["honor", "Honor the discovery"],
+      ["sell", "Sell discovery · 50 crowns"],
+      ["leave", "Let companion leave"],
+      ["reconcile", "Reconcile · 25 crowns"],
+    ])
+      c.append(
+        button(
+          `${label}: ${p.name}`,
+          () => lineageStoryAction(s, p.id, action),
+          !!lineageStoryLock(s, p.id, action),
+        ),
+      );
+    if (isCaster(p) && s.campOpen)
+      c.append(
+        button(
+          `Use aether shard: ${p.name}`,
+          () => recoverShardMagic(s, p.id),
+          s.realm.shards < 1 || !(p.spellSpent?.[1] || p.spellSpent?.[2]),
+        ),
+      );
+    if (isCaster(p) && s.campOpen)
+      c.append(
+        button(`Sanctuary recovery: ${p.name} · 1 herb`, () =>
+          recoverFrontierSlot(s, p.id),
+        ),
+      );
+    stories.append(c);
+  }
+  panel.append(stories);
+}
+function appendRealmJournal(panel) {
+  const leads = realmJournal(s);
+  if (leads.length) {
+    const details = document.createElement("details"),
+      summary = document.createElement("summary");
+    summary.textContent = `Known leads and consequences (${leads.length})`;
+    details.append(summary);
+    for (const lead of leads) {
+      const c = card(lead.title, "");
+      const text = document.createElement("p");
+      text.textContent = `${places[lead.site].name}: ${lead.text}`;
+      c.append(
+        text,
+        button(
+          `Track: ${lead.title}`,
+          () => {
+            if (trackRealmLead(s, lead.id)) drawerOpen = false;
+          },
+          !!s.battle || !!s.event || s.campOpen,
+        ),
+      );
+      details.append(c);
+    }
+    panel.append(details);
+  }
+  const history = document.createElement("details"),
+    summary = document.createElement("summary");
+  summary.textContent = `Company chronicle (${s.realm.journal.length})`;
+  history.append(summary);
+  for (const record of s.realm.journal.slice(0, 30)) {
+    const p = document.createElement("p");
+    p.textContent = `Day ${record.day} · ${record.text}`;
+    history.append(p);
+  }
+  panel.append(history);
+}
+function appendRealmWorldActions(a) {
+  if (s.battle || s.event || s.campOpen || companyLost(s)) return;
+  for (const h of fantasyStrongholds) {
+    if (
+      Math.hypot(
+        s.position.x - places[h.site].x,
+        s.position.y - places[h.site].y,
+      ) > 110
+    )
+      continue;
+    const state = realmHold(s, h.id);
+    state.known = true;
+    if (state.cleared) continue;
+    const details = document.createElement("details"),
+      summary = document.createElement("summary");
+    summary.textContent = `${h.name} · scout, disrupt, assault`;
+    details.append(summary);
+    const p = document.createElement("p");
+    p.textContent = state.scouted
+      ? h.routine
+      : "An enemy stronghold sends raiders onto nearby roads. Survey it with an Archer or Thief.";
+    details.append(p);
+    details.append(
+      button(
+        `Survey ${h.name}`,
+        () => fantasyHoldAction(s, h.id, "scout"),
+        !!fantasyHoldLock(s, h.id, "scout"),
+      ),
+      button(
+        `${h.operation} · ${h.amount} ${h.cost}`,
+        () => fantasyHoldAction(s, h.id, "disrupt"),
+        !!fantasyHoldLock(s, h.id, "disrupt"),
+      ),
+      button(
+        `Assault ${h.name}`,
+        () => {
+          fantasyHoldAction(s, h.id, "attack");
+          drawerOpen = false;
+        },
+        !!fantasyHoldLock(s, h.id, "attack"),
+      ),
+    );
+    a.append(details);
+  }
+  for (const p of livingParty(s)) {
+    if (
+      s.realm.lineage[p.id]?.stage === 1 &&
+      lineageStories[p.race || "human"].site === s.location
+    )
+      a.append(
+        button(`Investigate personal lead: ${p.name}`, () =>
+          lineageStoryAction(s, p.id, "investigate"),
+        ),
+      );
+  }
+}
+function appendDungeonPuzzle(c) {
+  const q = dungeonPuzzle(s),
+    e = s.event,
+    near = Math.abs(e.x - 4) + Math.abs(e.y - 3) <= 1;
+  const details = document.createElement("details"),
+    summary = document.createElement("summary");
+  summary.textContent = "Side chamber · scouting, lock, rune seal";
+  details.append(summary);
+  const p = document.createElement("p");
+  p.textContent = q.cache
+    ? "Side chamber emptied."
+    : `Door at tile 5,4. Lock ${q.unlocked ? "open" : `${q.pins}/3 pins · tension ${q.dial}/4 · strain ${q.strain}/3`}; rune sequence ${q.rune}/3. ${q.spotted ? "Root, flame, star." : "An Archer or Thief can read the hidden clues."}`;
+  details.append(p);
+  details.append(
+    button(
+      "Scout dungeon hazards",
+      () => realmDungeonAction(s, "scout-room"),
+      !companyScout(s) || q.spotted,
+    ),
+    button(
+      "Adjust side-room lock tension",
+      () => realmDungeonAction(s, "dial"),
+      !near || !professional(s, "Thief") || q.unlocked,
+    ),
+    button(
+      "Pick side-room tumbler",
+      () => realmDungeonAction(s, "pick"),
+      !near || !professional(s, "Thief") || q.unlocked,
+    ),
+  );
+  for (const [i, name] of ["Root", "Flame", "Star"].entries())
+    details.append(
+      button(
+        `Touch ${name} rune`,
+        () => realmDungeonAction(s, "rune", i),
+        !near || !q.unlocked || q.door,
+      ),
+    );
+  details.append(
+    button(
+      "Dissolve seal · level 1 spell slot",
+      () => realmDungeonAction(s, "magic-door"),
+      !near ||
+        q.door ||
+        !livingParty(s).some(
+          (p) => isCaster(p) && p.hp > 0 && spellSlots(p)[1] > 0,
+        ),
+    ),
+    button(
+      "Search side chamber",
+      () => realmDungeonAction(s, "side-cache"),
+      !near || !q.door || q.cache,
+    ),
+  );
+  c.append(details);
+}
+function drawRealmMagic() {
+  for (const v of s.battle.realmMagic?.surfaces || []) {
+    ctx.fillStyle = {
+      fire: "#bf703a55",
+      silence: "#7b91ad55",
+      darkness: "#3c315faa",
+    }[v.kind];
+    for (let y = 0; y < 7; y++)
+      for (let x = 0; x < 9; x++)
+        if (Math.abs(x - v.x) + Math.abs(y - v.y) <= 1)
+          ctx.fillRect(108 + x * 62, 3 + y * 60, 54, 52);
+    drawMapLabel(
+      ctx,
+      v.kind.toUpperCase(),
+      136 + v.x * 62,
+      42 + v.y * 60,
+      true,
+    );
+  }
+  for (const focus of s.battle.realmMagic?.concentration || [])
+    drawMapLabel(ctx, "BEACON", 136 + focus.x * 62, 12 + focus.y * 60, true);
 }

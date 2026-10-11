@@ -567,3 +567,42 @@ Specialized spells share the existing persistent spell slots and reagent costs. 
 ```sh
 GAME_URL=http://127.0.0.1:3002/ PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/frontier-expansion-smoke.mjs
 ```
+
+
+## A changing frontier (v0.29)
+
+This release expands the existing region and Hungry Roads systems; it does not introduce a second campaign chapter.
+
+**Village allegiance and border guards.** Greyhaven begins under the Border Wardens; Saltbridge and Emberfall begin under the Caravan League. At a village, backing a faction charter costs 40 crowns and six rations, with a three-day local cooldown. The chosen faction gains six reputation, displaced rulers lose six, and other rivals lose two. Charters change the village's ruler and establish a border patrol. Friendly patrols leave travelers and merchants alone; hostile patrols intercept visible companies. Attacking a peaceful guard incurs crime and faction penalties. Defeated guards remain defeated after saving; a new charter reinforces the border.
+
+Local reputation grants a ten-percent purchase discount at +10 and a twenty-percent surcharge at −10, alongside existing League modifiers. At −15, village services and recruitment require a **25-crown day pass**. Supporting a charter and maintaining at least six local reputation unlocks a one-time faction recruit: an elf Archer/Thief for the Grove Freefolk, a dwarf Spearman/Smith for the League, or a human Shieldbearer/Miner for the Wardens. Existing contracts and their faction requirements remain available through village boards.
+
+**Companion heritage stories.** Discuss a living companion's heritage at camp, travel to their lead, and return to decide its fate. Elves investigate Whispering Grove, dwarves Iron Hollow, humans Ashbrook, and orcs challenge Commander Rhusk at Briarhide in an actual battle. Honor the discovery for improved trust and a permanent perk, sell it for fifty crowns at the cost of resolve, reconcile later for twenty-five crowns, or explicitly allow the companion to leave. Sanctuary lore permits one herb-funded level-one slot recovery per company day; ancestral lore improves company damage against undead; other honored stories improve the companion's health and resolve. These stories run alongside existing class/profession personal quests.
+
+**Fantasy strongholds and safer roads.** Three persistent sites now have leaders, scouting reports, raiding routines, and different infiltration operations:
+
+| Stronghold | Landmark | Leader | Disruption | Patrol window |
+| --- | --- | --- | --- | --- |
+| Bramble den | Echo Cavern | Mossfang | Burn stores: 3 wood | Dawn and morning |
+| Barrow crypt | Old Barrow | Oathless Marshal | Consecrate seal: 3 herbs | Night |
+| Outcast spire | Watchtower | Magister Vale | Break focus: 3 ore | Dusk |
+
+Discovered strongholds can produce a patrol every three days, with at most two active waves each. Survey within 110 pixels using an Archer or Thief. Infiltration requires at least sixty-percent concealment. Disruption stops reinforcement waves and weakens the final defenders; destroying the arcane focus also reduces enemy spell slots. Defeat the leader to permanently stop patrols and remove the stronghold's existing roaming threats. Ordinary dungeon exploration remains available at these landmarks.
+
+**Dungeon side chambers.** Each dungeon has an optional side chamber at tile 5,4. An Archer or Thief spots hazards and reads a rune clue. A Thief works through three lock tumblers with tension feedback and a penalty for repeated mistakes. Complete the rune sequence, or let a caster spend a persistent level-one slot to dissolve the seal. The chamber holds thirty-five crowns, two herbs, one aether shard, and knowledge, awarded once. It provides treasure that can be recovered without committing to the eastern sentries; retreat stays available. Scouts can also disable nearby dart mechanisms without consuming timber.
+
+**Wagon travel incidents.** Owned wagons accumulate actual travel distance. After six hundred pixels outside settlements, at most one incident occurs per day: a cracked wheel, flooded crossing, overloaded bindings, or night raiders. Quartermasters handle wheels and overloaded cargo, scouts find safe crossings, and rear guards drive off raiders. Alternatives include spending timber, paying twenty crowns, risking actual food/cargo and wagon damage, or fighting the night raiders. Incidents pause movement and persist while pending; companies without a purchased/unlocked wagon never receive them.
+
+**Tactical magic and rare recovery.** Wizards gain Veil of Night, Ember Ground, and Sever Spell; Clerics gain Hushed Ground and Beacon Circle. Ground spells use a labelled battlefield grid and show their affected area on the map. Darkness blocks distant line of sight while permitting adjacent combat. Silence prevents company casting and interrupts enemy channels without refunding slots. Fire ground damages both sides during enemy rounds. Beacon Circle renews nearby wards for three rounds, but damage to its caster breaks concentration. All new spells use the existing persistent slots and reagent rules.
+
+Aether shards are finite loot from side chambers and the cleared Outcast spire. At camp, one shard and one hour restore one spent level-two slot, or up to two spent level-one slots. Regular meditation and Emberfall recovery remain available.
+
+**Encounter journal and map leads.** The company journal now combines known strongholds, companion requests, rumors, recurring travelers, caravan destinations, village charters, and a saved chronicle of recent decisions. Track a known lead to mark its landmark and begin walking there. The party still chooses a free route. Journal history is bounded to eighty entries; save version sixteen sanitizes new state and migrates older companies.
+
+[Village allegiance](docs/screenshots/territory-mobile.png) · [Companion heritage](docs/screenshots/heritage-mobile.png) · [Dungeon lock and runes](docs/screenshots/dungeon-runes-mobile.png) · [Wagon incident](docs/screenshots/wagon-incident-mobile.png) · [Tactical darkness](docs/screenshots/darkness-magic-mobile.png)
+
+```sh
+npm test
+npm run build
+GAME_URL=http://127.0.0.1:3002/ PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/realm-expansion-smoke.mjs
+```
