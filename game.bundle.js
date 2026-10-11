@@ -64,6 +64,10 @@ function fresh() {
     nextGearId: 1,
     explored: [],
     event: null,
+    encounterSerial: 0,
+    trailLedger: {},
+    encounterJournal: [],
+    lastTrailEncounter: null,
     renown: 0,
     skirmishes: 0,
     discovered: [0, 3],
@@ -972,6 +976,75 @@ function restore(raw) {
       result.contract.phase !== "investigate")
   )
     result.event = null;
+  result.encounterSerial =
+    Number.isSafeInteger(raw.encounterSerial) && raw.encounterSerial >= 0
+      ? Math.min(1e9, raw.encounterSerial)
+      : 0;
+  result.lastTrailEncounter = trailEncounters.some(
+    (e) => e.id === raw.lastTrailEncounter,
+  )
+    ? raw.lastTrailEncounter
+    : null;
+  result.trailLedger = {};
+  for (const region of ["Greyhaven marches", "Salt coast", "Ember frontier"]) {
+    const day = raw.trailLedger?.[region];
+    if (Number.isInteger(day) && day > 0 && day <= result.day)
+      result.trailLedger[region] = day;
+  }
+  result.encounterJournal = (
+    Array.isArray(raw.encounterJournal) ? raw.encounterJournal : []
+  )
+    .filter(
+      (entry) =>
+        entry &&
+        typeof entry.id === "string" &&
+        entry.id.length <= 100 &&
+        Number.isInteger(entry.day) &&
+        entry.day > 0 &&
+        entry.day <= result.day &&
+        ["Greyhaven marches", "Salt coast", "Ember frontier"].includes(
+          entry.region,
+        ) &&
+        trailEncounters.some(
+          (e) =>
+            e.id === entry.templateId &&
+            (entry.choiceId === "leave" ||
+              e.choices.some((c) => c.id === entry.choiceId)),
+        ),
+    )
+    .slice(0, 12)
+    .map((entry) => ({
+      id: entry.id,
+      templateId: entry.templateId,
+      choiceId: entry.choiceId,
+      day: entry.day,
+      region: entry.region,
+    }));
+  if (result.event?.kind === "trail") {
+    const template = trailEncounters.find(
+        (e) => e.id === result.event.templateId,
+      ),
+      event = result.event;
+    if (
+      !template ||
+      typeof event.id !== "string" ||
+      event.id.length > 100 ||
+      !["Greyhaven marches", "Salt coast", "Ember frontier"].includes(
+        event.region,
+      ) ||
+      result.encounterJournal.some((entry) => entry.id === event.id)
+    )
+      result.event = null;
+    else
+      result.event = {
+        kind: "trail",
+        id: event.id,
+        templateId: template.id,
+        region: event.region,
+        title: template.title,
+        text: template.text,
+      };
+  }
   result.campJobs = {};
   for (const role of campRoles) {
     const id = raw.campJobs?.[role.id];
@@ -1229,6 +1302,7 @@ function forage(s) {
   return true;
 }
 function resolveEvent(s, choice) {
+  if (s.event?.kind === "trail") return resolveTrailEncounter(s, choice);
   if (s.event?.kind === "story") return chooseStory(s, choice);
   if (s.event?.kind === "camp") {
     if (
@@ -2756,8 +2830,11 @@ function advanceClock(s, seconds) {
   const before = s.day;
   spendHours(s, (seconds / DAY_SECONDS) * 24);
   if (s.day !== before && !companyLost(s) && s.day % 3 === 0) {
-    s.event = roadEvent(s);
-    s.destination = null;
+    if (s.day % 6 === 0) beginTrailEncounter(s);
+    else {
+      s.event = roadEvent(s);
+      s.destination = null;
+    }
   }
   return true;
 }
@@ -4094,6 +4171,410 @@ function caravanFoodPrice(s) {
   );
 }
 
+// Repeatable trail encounters are selected from terrain, region, day, and a saved serial.
+const trailEncounters = [
+  {
+    id: "tracker",
+    biome: "forest",
+    title: "A wounded forest tracker",
+    text: "A tracker lies beneath a fallen bough. Her route notes could help your company, but she needs treatment.",
+    choices: [
+      {
+        id: "medicine",
+        label: "Treat the tracker · 1 medicine",
+        desc: "Gain 1 knowledge and Freefolk +2.",
+        cost: { inventory: { medicine: 1 } },
+        reward: { knowledge: 1, reputation: { freefolk: 2 } },
+      },
+      {
+        id: "herbalist",
+        label: "Prepare forest remedies · 2 herbs",
+        desc: "Requires a conscious Herbalist. Gain 2 knowledge, Freefolk +2, and profession practice; takes 2 hours.",
+        profession: "Herbalist",
+        cost: { inventory: { herbs: 2 } },
+        reward: { knowledge: 2, reputation: { freefolk: 2 } },
+        hours: 2,
+        practice: 1,
+      },
+      {
+        id: "rob",
+        label: "Take the tracker's purse",
+        desc: "Gain 15 crowns. Freefolk −2; compassionate companions lose 6 resolve.",
+        reward: { gold: 15, reputation: { freefolk: -2 } },
+        compassionate: -6,
+      },
+    ],
+  },
+  {
+    id: "snares",
+    biome: "forest",
+    title: "Poachers' snares",
+    text: "Hidden traps ring a woodland clearing. The Freefolk use this trail to carry food and medicine.",
+    choices: [
+      {
+        id: "freefolk",
+        label: "Return the trapped game",
+        desc: "Requires 5 Freefolk reputation. Gain 6 rations and Freefolk +1; takes 1 hour.",
+        faction: "freefolk",
+        standing: 5,
+        reward: { food: 6, reputation: { freefolk: 1 } },
+        hours: 1,
+      },
+      {
+        id: "herbalist",
+        label: "Gather the clearing's herbs",
+        desc: "Requires a conscious Herbalist and 2 rations. Gain 4 herbs, 1 knowledge, and profession practice; takes 2 hours.",
+        profession: "Herbalist",
+        cost: { food: 2 },
+        reward: { inventory: { herbs: 4 }, knowledge: 1 },
+        hours: 2,
+        practice: 1,
+      },
+      {
+        id: "pelts",
+        label: "Harvest the pelts",
+        desc: "Gain 2 pelts. Freefolk −2.",
+        reward: { inventory: { pelts: 2 }, reputation: { freefolk: -2 } },
+      },
+    ],
+  },
+  {
+    id: "orecart",
+    biome: "highlands",
+    title: "An overturned ore cart",
+    text: "A merchant's cart has spilled across a rocky slope. The driver offers salvage to anyone who can recover the load.",
+    choices: [
+      {
+        id: "miner",
+        label: "Recover the load with a Miner",
+        desc: "Requires a conscious Miner. Gain 3 ore, League +1, and profession practice; takes 2 hours.",
+        profession: "Miner",
+        reward: { inventory: { ore: 3 }, reputation: { guild: 1 } },
+        hours: 2,
+        practice: 1,
+      },
+      {
+        id: "buy",
+        label: "Buy the damaged load · 8 crowns",
+        desc: "Receive 3 ore and 1 wood.",
+        cost: { gold: 8 },
+        reward: { inventory: { ore: 3, wood: 1 } },
+      },
+      {
+        id: "loot",
+        label: "Seize the ore",
+        desc: "Gain 4 ore. League −2 and Wardens −1; compassionate companions lose 6 resolve.",
+        reward: {
+          inventory: { ore: 4 },
+          reputation: { guild: -2, wardens: -1 },
+        },
+        compassionate: -6,
+      },
+    ],
+  },
+  {
+    id: "marker",
+    biome: "highlands",
+    title: "An old prospecting marker",
+    text: "Weathered runes indicate a forgotten seam. Interpreting the stone could reveal useful routes and mineral deposits.",
+    choices: [
+      {
+        id: "miner",
+        label: "Read the stone with an Apprentice Miner",
+        desc: "Requires Miner rank 1. Gain 2 knowledge, 2 ore, and profession practice; takes 3 hours.",
+        profession: "Miner",
+        rank: 1,
+        reward: { knowledge: 2, inventory: { ore: 2 } },
+        hours: 3,
+        practice: 1,
+      },
+      {
+        id: "chart",
+        label: "Buy a surveyor's notes · 10 crowns",
+        desc: "Gain 1 knowledge; takes 1 hour.",
+        cost: { gold: 10 },
+        reward: { knowledge: 1 },
+        hours: 1,
+      },
+    ],
+  },
+  {
+    id: "crossing",
+    biome: "shallows",
+    title: "A washed-out crossing",
+    text: "River travellers are stranded beside a broken footbridge. Repairing it could win local trust.",
+    choices: [
+      {
+        id: "smith",
+        label: "Repair the crossing · 2 wood",
+        desc: "Requires a conscious Smith. Gain League +2, 1 renown, and profession practice; takes 2 hours.",
+        profession: "Smith",
+        cost: { inventory: { wood: 2 } },
+        reward: { renown: 1, reputation: { guild: 2 } },
+        hours: 2,
+        practice: 1,
+      },
+      {
+        id: "warden",
+        label: "Ask the Wardens for a ferry",
+        desc: "Requires 5 Warden reputation. Gain 1 knowledge; takes 1 hour.",
+        faction: "wardens",
+        standing: 5,
+        reward: { knowledge: 1 },
+        hours: 1,
+      },
+      {
+        id: "detour",
+        label: "Survey the upstream ford",
+        desc: "Gain 1 knowledge, but spend 3 hours searching.",
+        reward: { knowledge: 1 },
+        hours: 3,
+      },
+    ],
+  },
+  {
+    id: "nets",
+    biome: "shallows",
+    title: "The river fishers",
+    text: "Fishers haul their catch ashore. They welcome skilled cooks and paying customers, but guard their winter supplies.",
+    choices: [
+      {
+        id: "cook",
+        label: "Preserve the catch with a Cook",
+        desc: "Requires a conscious Cook. Gain 6 rations and profession practice; takes 2 hours.",
+        profession: "Cook",
+        reward: { food: 6 },
+        hours: 2,
+        practice: 1,
+      },
+      {
+        id: "buy",
+        label: "Buy the catch · 10 crowns",
+        desc: "Receive 8 rations.",
+        cost: { gold: 10 },
+        reward: { food: 8 },
+      },
+      {
+        id: "steal",
+        label: "Steal the winter catch",
+        desc: "Gain 8 rations. League −2; compassionate companions lose 6 resolve.",
+        reward: { food: 8, reputation: { guild: -2 } },
+        compassionate: -6,
+      },
+    ],
+  },
+  {
+    id: "wagon",
+    biome: "grassland",
+    title: "A stranded cloth wagon",
+    text: "A snapped axle has halted a League shipment. The merchant has spare cloth, but urgently needs repairs or replacement goods.",
+    choices: [
+      {
+        id: "smith",
+        label: "Repair the axle · 1 ore and 1 wood",
+        desc: "Requires a conscious Smith. Gain 20 crowns, League +2, and profession practice; takes 2 hours.",
+        profession: "Smith",
+        cost: { inventory: { ore: 1, wood: 1 } },
+        reward: { gold: 20, reputation: { guild: 2 } },
+        hours: 2,
+        practice: 1,
+      },
+      {
+        id: "trade",
+        label: "Supply the shipment · 2 cloth cargo",
+        desc: "Receive 30 crowns and League +2. Uses trade cargo, not crafting materials.",
+        cost: { cargo: { cloth: 2 } },
+        reward: { gold: 30, reputation: { guild: 2 } },
+      },
+      {
+        id: "rob",
+        label: "Seize the cloth cargo",
+        desc: "Gain 2 cloth cargo and 12 crowns. League −4, Wardens −2; compassionate companions lose 6 resolve.",
+        reward: {
+          cargo: { cloth: 2 },
+          gold: 12,
+          reputation: { guild: -4, wardens: -2 },
+        },
+        compassionate: -6,
+      },
+    ],
+  },
+  {
+    id: "levy",
+    biome: "grassland",
+    title: "An unofficial road levy",
+    text: "Armed toll collectors demand payment. A recognized company can challenge them; a hard-hearted recruit might force them to back down.",
+    choices: [
+      {
+        id: "warden",
+        label: "Challenge the levy as Warden allies",
+        desc: "Requires 5 Warden reputation. Gain 1 renown and Wardens +1.",
+        faction: "wardens",
+        standing: 5,
+        reward: { renown: 1, reputation: { wardens: 1 } },
+      },
+      {
+        id: "pay",
+        label: "Settle the dispute · 12 crowns",
+        desc: "Pay for safe passage and gain Wardens +1.",
+        cost: { gold: 12 },
+        reward: { reputation: { wardens: 1 } },
+      },
+      {
+        id: "mercenary",
+        label: "Intimidate them with a Mercenary",
+        desc: "Requires a conscious companion with the Mercenary trait. Gain 12 crowns; Wardens −3.",
+        trait: "mercenary",
+        reward: { gold: 12, reputation: { wardens: -3 } },
+      },
+    ],
+  },
+];
+function trailRegion(s) {
+  return s.position.x >= 900
+    ? "Ember frontier"
+    : s.position.x >= 450
+      ? "Salt coast"
+      : "Greyhaven marches";
+}
+function scoutLock(s) {
+  if (s.battle || s.event || s.campOpen || companyLost(s))
+    return "Return to free exploration first.";
+  if (places[s.location]?.type === "town")
+    return "Leave the village to scout the surrounding land.";
+  if (s.trailLedger[trailRegion(s)] === s.day)
+    return "This region has already been scouted today. Explore another region or return tomorrow.";
+  return null;
+}
+function beginTrailEncounter(s) {
+  if (scoutLock(s)) return false;
+  const biome = terrainAt(s.position),
+    pool = trailEncounters.filter((event) => event.biome === biome);
+  const hash =
+    Math.floor(s.position.x / 64) * 17 +
+    Math.floor(s.position.y / 64) * 31 +
+    s.day * 13 +
+    s.encounterSerial * 7;
+  let template = pool[hash % pool.length];
+  if (template.id === s.lastTrailEncounter)
+    template = pool[(hash + 1) % pool.length];
+  const region = trailRegion(s);
+  s.encounterSerial++;
+  s.trailLedger[region] = s.day;
+  s.lastTrailEncounter = template.id;
+  s.destination = null;
+  s.event = {
+    kind: "trail",
+    templateId: template.id,
+    id: `${s.day}-${s.encounterSerial}-${region}`,
+    region,
+    title: template.title,
+    text: template.text,
+  };
+  note(s, `Found ${template.title.toLowerCase()} in the ${region}.`);
+  return true;
+}
+function scoutSurroundings(s) {
+  if (scoutLock(s)) return false;
+  spendHours(s, 1);
+  return beginTrailEncounter(s);
+}
+function trailChoiceLock(s, choice) {
+  if (!choice) return "Unknown choice.";
+  if (choice.profession) {
+    const worker = professional(s, choice.profession);
+    if (!worker || worker.dead || professionRank(worker) < (choice.rank || 0))
+      return `Requires a conscious ${choice.rank ? `rank ${choice.rank} ` : ""}${choice.profession}.`;
+  }
+  if (
+    choice.trait &&
+    !livingParty(s).some((p) => p.hp > 0 && hasTrait(p, choice.trait))
+  )
+    return `Requires a conscious companion with the ${companionTraits.find((t) => t.id === choice.trait).name} trait.`;
+  if (choice.faction && s.reputation[choice.faction] < choice.standing)
+    return `Requires ${choice.standing} ${factions.find((f) => f.id === choice.faction).name} reputation.`;
+  const cost = choice.cost || {};
+  if (s.gold < (cost.gold || 0)) return "Not enough crowns.";
+  if (s.food < (cost.food || 0)) return "Not enough rations.";
+  for (const [id, amount] of Object.entries(cost.inventory || {}))
+    if ((s.inventory[id] || 0) < amount) return `Requires ${amount} ${id}.`;
+  for (const [id, amount] of Object.entries(cost.cargo || {}))
+    if ((s.cargo[id] || 0) < amount) return `Requires ${amount} ${id} cargo.`;
+  const outgoing = Object.values(cost.cargo || {}).reduce(
+      (sum, n) => sum + n,
+      0,
+    ),
+    incoming = Object.values(choice.reward?.cargo || {}).reduce(
+      (sum, n) => sum + n,
+      0,
+    );
+  if (cargoLoad(s) - outgoing + incoming > cargoCapacity)
+    return "Not enough trade cargo space.";
+  return null;
+}
+function trailEncounterOptions(s) {
+  const template = trailEncounters.find(
+    (event) => event.id === s.event?.templateId,
+  );
+  return s.event?.kind === "trail" && template
+    ? [
+        ...template.choices,
+        {
+          id: "leave",
+          label: "Walk away",
+          desc: "Continue your journey without rewards or costs.",
+        },
+      ]
+    : [];
+}
+function resolveTrailEncounter(s, choiceId) {
+  const event = s.event,
+    choice = trailEncounterOptions(s).find((choice) => choice.id === choiceId);
+  if (
+    !event ||
+    s.battle ||
+    s.campOpen ||
+    companyLost(s) ||
+    !choice ||
+    trailChoiceLock(s, choice) ||
+    s.encounterJournal.some((entry) => entry.id === event.id)
+  )
+    return false;
+  const cost = choice.cost || {},
+    reward = choice.reward || {},
+    worker = choice.profession && professional(s, choice.profession);
+  s.gold -= cost.gold || 0;
+  s.food -= cost.food || 0;
+  for (const [key, n] of Object.entries(cost.inventory || {}))
+    s.inventory[key] -= n;
+  for (const [key, n] of Object.entries(cost.cargo || {})) s.cargo[key] -= n;
+  s.gold += reward.gold || 0;
+  s.food += reward.food || 0;
+  s.knowledge += reward.knowledge || 0;
+  s.renown += reward.renown || 0;
+  for (const [key, n] of Object.entries(reward.inventory || {}))
+    s.inventory[key] += n;
+  for (const [key, n] of Object.entries(reward.cargo || {})) s.cargo[key] += n;
+  for (const [key, n] of Object.entries(reward.reputation || {}))
+    changeReputation(s, key, n);
+  if (choice.compassionate)
+    for (const p of livingParty(s))
+      if (hasTrait(p, "compassionate")) changeResolve(p, choice.compassionate);
+  if (worker && choice.practice) practice(s, worker, choice.practice);
+  s.encounterJournal.unshift({
+    id: event.id,
+    templateId: event.templateId,
+    choiceId,
+    day: s.day,
+    region: event.region,
+  });
+  s.encounterJournal = s.encounterJournal.slice(0, 12);
+  if (choice.hours) spendHours(s, choice.hours);
+  s.event = null;
+  note(s, `${event.title}: ${choice.label}. ${choice.desc}`);
+  return true;
+}
+
 // Original, hand-built pixel artwork. All coordinates are logical pixels.
 const artPalette = {
   meadow: "#a3a775",
@@ -5391,6 +5872,23 @@ function render() {
           "<p>All companions died of starvation. Start a new company to continue.</p>",
         ),
       );
+    const trail = card(
+      "Trail journal",
+      `<p>${trailRegion(s)} · ${s.trailLedger[trailRegion(s)] === s.day ? "Scouted today" : "Scouting available outside villages"}. Scout once per region each day. Terrain, professions, traits, and faction standing shape your options.</p>`,
+    );
+    const history = document.createElement("details"),
+      heading = document.createElement("summary");
+    heading.textContent = `Recent encounters (${s.encounterJournal.length})`;
+    history.append(heading);
+    for (const entry of s.encounterJournal) {
+      const template = trailEncounters.find((e) => e.id === entry.templateId),
+        choice = template.choices.find((c) => c.id === entry.choiceId);
+      const line = document.createElement("p");
+      line.textContent = `Day ${entry.day} · ${entry.region} · ${template.title}: ${choice?.label || "Walked away"}. ${choice?.desc || ""}`;
+      history.append(line);
+    }
+    trail.append(history);
+    panel.append(trail);
     s.party.forEach((p) => {
       if (p.dead) {
         const memorial = card(
@@ -6262,6 +6760,25 @@ function render() {
         );
         c.append(row);
       }
+    } else if (s.event.kind === "trail") {
+      for (const choice of trailEncounterOptions(s)) {
+        const row = card(choice.label, `<p>${choice.desc}</p>`),
+          locked = trailChoiceLock(s, choice);
+        if (locked) {
+          const hint = document.createElement("p");
+          hint.textContent = locked;
+          row.append(hint);
+        }
+        row.append(
+          button(
+            choice.label,
+            () => resolveEvent(s, choice.id),
+            !!locked,
+            true,
+          ),
+        );
+        c.append(row);
+      }
     } else if (s.event.kind === "camp")
       c.append(
         button(
@@ -6361,7 +6878,19 @@ function render() {
         }
       }),
       button(`Forage · +${forageAmount(s)} rations / 6 hours`, () => forage(s)),
+      button(
+        "Scout surroundings · 1 hour",
+        () => {
+          drawerOpen = false;
+          heldKeys.clear();
+          scoutSurroundings(s);
+        },
+        !!scoutLock(s),
+      ),
     );
+    a.lastChild.title =
+      scoutLock(s) ||
+      `Scout the ${trailRegion(s)} for a terrain-based encounter. Once per region each day; scouting takes one hour.`;
     if (places[s.location]?.type === "town")
       a.append(
         button(`Enter ${places[s.location].name}`, () => {

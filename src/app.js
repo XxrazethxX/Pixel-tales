@@ -54,6 +54,12 @@ import {
   explore,
   forage,
   resolveEvent,
+  scoutSurroundings,
+  scoutLock,
+  trailRegion,
+  trailEncounters,
+  trailEncounterOptions,
+  trailChoiceLock,
   contracts,
   accept,
   deliver,
@@ -433,6 +439,23 @@ function render() {
           "<p>All companions died of starvation. Start a new company to continue.</p>",
         ),
       );
+    const trail = card(
+      "Trail journal",
+      `<p>${trailRegion(s)} · ${s.trailLedger[trailRegion(s)] === s.day ? "Scouted today" : "Scouting available outside villages"}. Scout once per region each day. Terrain, professions, traits, and faction standing shape your options.</p>`,
+    );
+    const history = document.createElement("details"),
+      heading = document.createElement("summary");
+    heading.textContent = `Recent encounters (${s.encounterJournal.length})`;
+    history.append(heading);
+    for (const entry of s.encounterJournal) {
+      const template = trailEncounters.find((e) => e.id === entry.templateId),
+        choice = template.choices.find((c) => c.id === entry.choiceId);
+      const line = document.createElement("p");
+      line.textContent = `Day ${entry.day} · ${entry.region} · ${template.title}: ${choice?.label || "Walked away"}. ${choice?.desc || ""}`;
+      history.append(line);
+    }
+    trail.append(history);
+    panel.append(trail);
     s.party.forEach((p) => {
       if (p.dead) {
         const memorial = card(
@@ -1304,6 +1327,25 @@ function render() {
         );
         c.append(row);
       }
+    } else if (s.event.kind === "trail") {
+      for (const choice of trailEncounterOptions(s)) {
+        const row = card(choice.label, `<p>${choice.desc}</p>`),
+          locked = trailChoiceLock(s, choice);
+        if (locked) {
+          const hint = document.createElement("p");
+          hint.textContent = locked;
+          row.append(hint);
+        }
+        row.append(
+          button(
+            choice.label,
+            () => resolveEvent(s, choice.id),
+            !!locked,
+            true,
+          ),
+        );
+        c.append(row);
+      }
     } else if (s.event.kind === "camp")
       c.append(
         button(
@@ -1403,7 +1445,19 @@ function render() {
         }
       }),
       button(`Forage · +${forageAmount(s)} rations / 6 hours`, () => forage(s)),
+      button(
+        "Scout surroundings · 1 hour",
+        () => {
+          drawerOpen = false;
+          heldKeys.clear();
+          scoutSurroundings(s);
+        },
+        !!scoutLock(s),
+      ),
     );
+    a.lastChild.title =
+      scoutLock(s) ||
+      `Scout the ${trailRegion(s)} for a terrain-based encounter. Once per region each day; scouting takes one hour.`;
     if (places[s.location]?.type === "town")
       a.append(
         button(`Enter ${places[s.location].name}`, () => {

@@ -42,6 +42,23 @@ A caravan, three bandit groups, and two forest wolf packs roam independently whi
 
 Research **Watchful eyes** for a 210-pixel discovery radius, **A fair bargain** for cheaper purchases, and **Borderlands charts** (requires Watchful eyes) to reveal landmark locations without exploring their terrain. Hidden stashes offer one-time crowns and medicine. Road events now include wounded travellers, abandoned camps, and storms with different choices and costs.
 
+## Scouting and trail encounters
+
+[Trail choices on mobile](docs/screenshots/trail-choices-mobile.png) · [Saved trail journal](docs/screenshots/trail-journal-mobile.png)
+
+Outside villages, choose **Scout surroundings · 1 hour** on the world map. You can scout **once in each region per day**: the Greyhaven marches, Salt coast, and Ember frontier. The terrain at your actual position chooses the encounter pool. The day, map area, and saved encounter sequence vary the selection and avoid immediate repeats; reloading an unresolved encounter keeps its options. Crossing into another region gives another opportunity, while returning to the same region on the same day does not reset its limit.
+
+| Terrain        | Encounter pool                              | Useful companions or standing                              |
+| -------------- | ------------------------------------------- | ---------------------------------------------------------- |
+| Forest         | Wounded tracker; poachers' snares           | Herbalist, medicine, Freefolk recognition                  |
+| Highlands      | Overturned ore cart; old prospecting marker | Miner, including an Apprentice-rank option                 |
+| River shallows | Washed-out crossing; river fishers          | Smith, Cook, Warden recognition                            |
+| Grassland      | Stranded cloth wagon; unofficial road levy  | Smith, cloth trade cargo, Warden standing, Mercenary trait |
+
+Choices show their exact resource costs, profession or reputation requirements, time, and consequences. They can improve faction standing, yield supplies, provide knowledge, or add profession practice. Seizing goods and exploiting travellers damages reputation; compassionate companions also react to certain selfish choices. Cargo rewards respect the shared 20-slot capacity. Required workers must be conscious, and unavailable choices stay disabled. **Walk away** is always available and grants no reward; the region remains scouted for the day.
+
+The normal three-day roadside-event rhythm mixes these encounters with the existing wounded courier, storm, and abandoned camp. Scouting and time-consuming choices apply fatigue and normal midnight upkeep. The decision itself pauses time and walking. Accepted contracts remain active throughout. **Company → Trail journal → Recent encounters** remembers the last twelve outcomes, including faction and resource effects, across saves.
+
 ## Camp, upkeep, and daylight
 
 **Make camp** opens a separate campsite with visible bedrolls, a campfire, supply crates, and companions. Build portable improvements in the Camp menu, use the workshop, forage, or rest until the next 08:00. **View camp** shows the scene; **Break camp** resumes the overworld. Planning costs no time. Improvements travel with the company and persist after saving.
@@ -141,7 +158,7 @@ Swords fit swordswomen, maces fit shieldbearers, bows fit archers, and spears fi
 
 Buy gear at a village **Blacksmith**, then assign it in Equipment. While in a village, unequipped gear can be sold from the inventory for 40% of its normal price. Equipped gear must be removed before selling. Barter research discounts purchases. Rare equipment is not sold by shops.
 
-Research **Armorer’s craft** (5 knowledge, requires Tempered steel) to unlock five Fine recipes in **Workshop**. Weapons use 5 ore and 2 wood; armor uses 6 ore and 1 wood. Each Smith rank reduces ore cost by one, and crafting grants two Smith practice. Gear cannot be changed, bought, sold, or crafted during combat or roadside encounters.
+Research **Armorer’s craft** (5 knowledge, requires Tempered steel) to unlock Fine recipes in **Workshop**. Weapons use 5 ore and 2 wood; armor uses 6 ore and 1 wood. Each Smith rank reduces ore cost by one, and crafting grants two Smith practice. Gear cannot be changed, bought, sold, or crafted during combat or roadside encounters.
 
 [Equipment inventory preview](docs/screenshots/equipment.png)
 
@@ -284,6 +301,7 @@ PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node
 PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/complete-systems-smoke.mjs
 PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/advanced-skills-smoke.mjs
 PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/durability-smoke.mjs
+PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/trail-encounters-smoke.mjs
 ```
 
 It uses `/usr/bin/chromium` by default; override `CHROMIUM_PATH` or `GAME_URL` as needed. Desktop and mobile screenshots are written under `/tmp`. The village smoke test checks regional offers, renown locks and unlocks, resale, inn recovery, save persistence, and dangerous encounters. The equipment smoke test covers purchases, class restrictions, assignment and transfer, resale, research and crafting, combat restrictions, reloads, mobile layout, and new-company reset.
@@ -300,4 +318,6 @@ The advanced-skills smoke test covers prerequisites, training costs, permanent c
 
 The durability smoke test verifies broken-gear stats, village and staffed camp repairs, material costs, Smith practice, mobile menus, persistence, and retreat wear.
 
-Further development includes procedural encounters, and Android packaging.
+The trail-encounters smoke test verifies terrain selection, profession and faction gates, trait choices, cargo capacity, regional daily limits, mobile decision menus and journals, pending saves, clock pausing, and natural roadside encounters.
+
+Further development includes varied battle layouts, named adversaries, and Android packaging.
