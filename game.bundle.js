@@ -58,7 +58,7 @@ studies.push(
 );
 function fresh() {
   return {
-    version: 9,
+    version: 10,
     inventory: { ore: 0, wood: 0, herbs: 0, medicine: 1, pelts: 0 },
     gear: [],
     nextGearId: 1,
@@ -78,6 +78,11 @@ function fresh() {
     campJobs: {},
     lastCampWorkDay: -1,
     preparedValor: 0,
+    bonds: {},
+    lastBondRestDay: -1,
+    lastConversationDay: -1,
+    recruitSerial: 0,
+    hiredRecruits: [],
     gold: 120,
     food: 24,
     morale: 75,
@@ -112,6 +117,10 @@ function fresh() {
       injury: false,
       dead: false,
       fatigue: 0,
+      resolve: 65,
+      traits: [["resolute"], ["steadfast"], ["compassionate"], ["convivial"]][
+        id
+      ],
       armor: 0,
       weapon: 0,
       profession:
@@ -177,6 +186,7 @@ function camp(s) {
     if (cook && !cook.dead && campWorker(s, "cook")?.id !== cook.id)
       practice(s, cook, 1);
     finishCampJobs(s, restHours);
+    if (restHours >= 6) restRelationships(s);
     note(
       s,
       "Rested until dawn. Fed companions recover; camp improvements help tend their wounds.",
@@ -233,6 +243,8 @@ function startBattle(s, patrolId = null) {
     patrol.hostile = true;
     s.morale = Math.max(0, s.morale - 10);
     s.renown = Math.max(0, s.renown - 5);
+    for (const p of livingParty(s))
+      if (hasTrait(p, "compassionate")) changeResolve(p, -8);
     note(
       s,
       "You attack peaceful traders. −10 morale, −5 renown; this caravan will no longer trade.",
@@ -387,7 +399,9 @@ function win(s) {
   if (!raid) s.renown += difficulty.renown;
   s.inventory.ore += difficulty.salvage;
   s.inventory.wood += difficulty.salvage;
+  growPartyBonds(s, 3, true);
   for (const p of s.party.filter((p) => p.hp > 0)) {
+    changeResolve(p, 5);
     p.xp += difficulty.xp;
     while (p.xp >= p.level * 30) {
       p.xp -= p.level * 30;
@@ -516,6 +530,7 @@ function endTurn(s) {
           (p.role === "Shieldbearer" ? 2 : 0) -
           armorPower(s, p) -
           (t.guard ? 2 : 0) -
+          bondProtection(s, t) -
           aura,
       );
       p.hp = Math.max(0, p.hp - damage);
@@ -540,6 +555,7 @@ function endTurn(s) {
     for (const p of livingParty(s)) {
       p.hp = 1;
       p.injury = true;
+      changeResolve(p, -10);
     }
     s.morale = Math.max(0, s.morale - 20);
     note(
@@ -563,7 +579,7 @@ function restore(raw) {
   const base = fresh();
   if (
     !raw ||
-    ![1, 2, 3, 4, 5, 6, 7, 8, 9].includes(raw.version) ||
+    ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10].includes(raw.version) ||
     !Array.isArray(raw.party) ||
     raw.party.length < 1 ||
     raw.party.length > 6 ||
@@ -589,7 +605,7 @@ function restore(raw) {
   const result = {
     ...base,
     ...raw,
-    version: 9,
+    version: 10,
     inventory: { ...base.inventory, ...raw.inventory },
     explored: raw.explored || [],
     event: raw.event || null,
@@ -675,6 +691,18 @@ function restore(raw) {
         ([k, v]) => professions.includes(k) && Number.isFinite(v) && v >= 0,
       ),
     ),
+    resolve: Number.isFinite(p.resolve)
+      ? Math.max(0, Math.min(100, p.resolve))
+      : 65,
+    traits: Array.isArray(p.traits)
+      ? [
+          ...new Set(
+            p.traits.filter((id) => companionTraits.some((t) => t.id === id)),
+          ),
+        ].slice(0, 2)
+      : p.traits === undefined && base.party[id]?.name === p.name
+        ? [...base.party[id].traits]
+        : [],
     talent: talentsFor(p).some((t) => t.id === p.talent) ? p.talent : null,
   }));
   const ids = new Set();
@@ -746,6 +774,37 @@ function restore(raw) {
       p.equipment = { weapon: null, armor: null };
     }
   }
+  result.bonds = {};
+  for (let a = 0; a < result.party.length; a++)
+    for (let b = a + 1; b < result.party.length; b++) {
+      const key = bondKey(a, b),
+        value = raw.bonds?.[key];
+      if (
+        !result.party[a].dead &&
+        !result.party[b].dead &&
+        Number.isFinite(value)
+      )
+        result.bonds[key] = Math.max(0, Math.min(100, Math.floor(value)));
+    }
+  result.lastBondRestDay = Number.isInteger(raw.lastBondRestDay)
+    ? Math.max(-1, Math.min(result.day, raw.lastBondRestDay))
+    : -1;
+  result.lastConversationDay = Number.isInteger(raw.lastConversationDay)
+    ? Math.max(-1, Math.min(result.day, raw.lastConversationDay))
+    : -1;
+  result.recruitSerial = Number.isInteger(raw.recruitSerial)
+    ? Math.max(0, Math.min(10000, raw.recruitSerial))
+    : Math.max(0, result.party.length - 4);
+  result.hiredRecruits = Array.isArray(raw.hiredRecruits)
+    ? [
+        ...new Set(
+          raw.hiredRecruits.filter(
+            (id) =>
+              typeof id === "string" && /^(0|3|6)-(veteran|ranger)$/.test(id),
+          ),
+        ),
+      ]
+    : [];
   result.campJobs = {};
   for (const role of campRoles) {
     const id = raw.campJobs?.[role.id];
@@ -779,7 +838,10 @@ function attackPower(s, p) {
     (s.research.includes("steel") ? 2 : 0) +
     (s.morale >= 85 ? 1 : 0) -
     (p.injury ? 1 : 0) -
-    fatiguePenalty(p)
+    fatiguePenalty(p) -
+    ((p.resolve ?? 65) < 25 ? 1 : 0) +
+    (hasTrait(p, "mercenary") ? 1 : 0) +
+    bondSupport(s, p)
   );
 }
 function guard(s, id) {
@@ -811,25 +873,29 @@ function train(s, id, kind) {
   note(s, `${p.name} trained ${kind}.`);
   return true;
 }
-function recruit(s) {
+function recruit(s, offerId = null) {
+  const offer = recruitmentOffers(s).find((offer) =>
+    offerId === null ? offer.standard : offer.id === offerId,
+  );
   if (
     s.battle ||
     s.event ||
-    places[s.location]?.type !== "town" ||
-    s.gold < 60 ||
+    s.campOpen ||
+    companyLost(s) ||
+    !offer ||
+    s.gold < offer.cost ||
     livingParty(s).length >= 6
   )
     return false;
-  if (companyLost(s)) return false;
-  const vacancy = s.party.findIndex((p) => p.dead);
-  const id = vacancy >= 0 ? vacancy : s.party.length;
-  s.gold -= 60;
-  const recruit = {
+  const vacancy = s.party.findIndex((p) => p.dead),
+    id = vacancy >= 0 ? vacancy : s.party.length;
+  s.gold -= offer.cost;
+  const companion = {
     id,
-    name: id % 2 === 0 ? "Tamsin" : "Bram",
-    role: id % 2 === 0 ? "Archer" : "Shieldbearer",
-    max: 26,
-    hp: 26,
+    name: offer.name,
+    role: offer.role,
+    max: offer.max,
+    hp: offer.max,
     damage: 6,
     level: 1,
     xp: 0,
@@ -837,19 +903,24 @@ function recruit(s) {
     injury: false,
     dead: false,
     fatigue: 0,
+    resolve: 65,
+    traits: [...offer.traits],
     armor: 0,
     weapon: 0,
-    profession: id % 2 === 0 ? "Herbalist" : "Miner",
+    profession: offer.profession,
     professionXP: 0,
     professionXPBy: {},
     talent: null,
     equipment: { weapon: null, armor: null },
   };
-  if (vacancy >= 0) s.party[id] = recruit;
-  else s.party.push(recruit);
+  for (const other of s.party) delete s.bonds[bondKey(id, other.id)];
+  if (vacancy >= 0) s.party[id] = companion;
+  else s.party.push(companion);
+  s.recruitSerial++;
+  if (!offer.standard) s.hiredRecruits.push(offer.id);
   note(
     s,
-    `${s.party[id].name} joins the company. Daily wages increase by 2 crowns.`,
+    `${companion.name} joins the company. ${companionWages(companion)} daily crowns; ${traitSummary(companion)}.`,
   );
   return true;
 }
@@ -928,7 +999,17 @@ function heal(s, id) {
   s.inventory.medicine--;
   p.hp = Math.min(p.max, p.hp + healAmount(s));
   const herbalist = professional(s, "Herbalist");
-  if (herbalist) practice(s, herbalist, 1);
+  if (herbalist) {
+    practice(s, herbalist, 1);
+    if (herbalist.id !== p.id)
+      changeBond(
+        s,
+        herbalist.id,
+        p.id,
+        hasTrait(herbalist, "compassionate") ? 3 : 2,
+      );
+  }
+  changeResolve(p, 3);
   p.injury = false;
   note(s, `Treated ${p.name} with a poultice.`);
   return true;
@@ -1615,7 +1696,8 @@ function campCost(s) {
   return count
     ? Math.max(
         1,
-        count -
+        count +
+          livingParty(s).filter((p) => hasTrait(p, "hearty")).length -
           Math.min(2, professionBonus(s, "Cook")) -
           (s.research.includes("rations") ? 1 : 0) -
           (s.campUpgrades.cookpot || 0) -
@@ -1878,7 +1960,7 @@ function sell(s, item, quantity = 1) {
   return true;
 }
 function innCost(s) {
-  return livingParty(s).length * 6 + s.wageDebt;
+  return livingParty(s).length * 4 + dailyWages(s) + s.wageDebt;
 }
 function restAtInn(s) {
   const price = innCost(s);
@@ -1899,6 +1981,7 @@ function restAtInn(s) {
     p.injury = false;
     p.fatigue = 0;
   }
+  restRelationships(s);
   note(
     s,
     `Rested at the inn. ${price} crowns paid for beds, meals, and wages; all companions recovered.`,
@@ -2094,7 +2177,7 @@ function companyLost(s) {
   return livingParty(s).length === 0;
 }
 function dailyWages(s) {
-  return livingParty(s).length * 2;
+  return livingParty(s).reduce((total, p) => total + companionWages(p), 0);
 }
 function starvationDamage(s) {
   return Math.min(8, 2 + s.hungerDays);
@@ -2106,6 +2189,7 @@ function settleDay(s, mealsProvided = false) {
   if (!mealsProvided) s.food -= supplied;
   if (supplied < cost) {
     s.hungerDays++;
+    for (const p of livingParty(s)) changeResolve(p, -8);
     const damage = Math.max(
       1,
       Math.ceil((starvationDamage(s) * (cost - supplied)) / cost),
@@ -2115,6 +2199,8 @@ function settleDay(s, mealsProvided = false) {
       p.injury = true;
       if (p.hp === 0) {
         p.dead = true;
+        for (const other of livingParty(s))
+          changeResolve(other, bondValue(s, p.id, other.id) >= 25 ? -12 : -6);
         p.equipment = { weapon: null, armor: null };
         for (const role of campRoles)
           if (s.campJobs[role.id] === p.id) delete s.campJobs[role.id];
@@ -2131,6 +2217,8 @@ function settleDay(s, mealsProvided = false) {
     );
   } else {
     s.hungerDays = 0;
+    growPartyBonds(s, 1);
+    for (const p of livingParty(s)) changeResolve(p, 1);
     s.morale = Math.max(0, s.morale - 2);
   }
   const owed = wages + s.wageDebt;
@@ -2139,8 +2227,12 @@ function settleDay(s, mealsProvided = false) {
   s.wageDebt = owed - paid;
   if (s.wageDebt) {
     s.morale = Math.max(0, s.morale - 8);
+    for (const p of livingParty(s))
+      changeResolve(p, hasTrait(p, "mercenary") ? -10 : -6);
     note(s, `Unpaid wages: ${s.wageDebt} crowns owed. Company morale falls.`);
   }
+  for (const p of livingParty(s))
+    if ((p.fatigue || 0) >= 80) changeResolve(p, -2);
   note(
     s,
     `Daily upkeep: ${mealsProvided ? "inn meals" : `${supplied} rations`} and ${paid} crowns paid. ${s.wageDebt ? `${s.wageDebt} crowns still owed.` : "Wages settled."}`,
@@ -2161,7 +2253,10 @@ function spendHours(s, hours, options = {}) {
     const amount = Math.min(remaining, untilMidnight);
     if (!options.resting)
       for (const p of livingParty(s))
-        p.fatigue = Math.min(100, (p.fatigue || 0) + amount * 2);
+        p.fatigue = Math.min(
+          100,
+          (p.fatigue || 0) + amount * (hasTrait(p, "tireless") ? 1.5 : 2),
+        );
     s.timeOfDay += amount;
     remaining -= amount;
     if (s.timeOfDay >= 24 - 0.000001) {
@@ -2464,6 +2559,235 @@ function flankingBonus(s, attacker, target, side = "party") {
   )
     ? 2
     : 0;
+}
+
+const companionTraits = [
+  {
+    id: "resolute",
+    name: "Resolute",
+    desc: "Loses half as much personal resolve from hardship.",
+  },
+  {
+    id: "steadfast",
+    name: "Steadfast",
+    desc: "When bracing beside a trusted companion, protects them from 2 damage instead of 1.",
+  },
+  {
+    id: "compassionate",
+    name: "Compassionate",
+    desc: "Medicine builds stronger bonds; attacking peaceful caravans costs 8 personal resolve.",
+  },
+  {
+    id: "convivial",
+    name: "Convivial",
+    desc: "Camp conversations strengthen their bond by one extra point.",
+  },
+  {
+    id: "tireless",
+    name: "Tireless",
+    desc: "Gains 1.5 fatigue per awake hour instead of 2.",
+  },
+  {
+    id: "mercenary",
+    name: "Mercenary",
+    desc: "+1 attack, but demands 3 daily crowns and reacts more strongly to unpaid wages.",
+  },
+  {
+    id: "hearty",
+    name: "Hearty appetite",
+    desc: "This recruit starts with 32 health, but needs one extra daily ration.",
+  },
+];
+function hasTrait(p, id) {
+  return p.traits?.includes(id) || false;
+}
+function traitSummary(p) {
+  return (
+    (p.traits || [])
+      .map((id) => companionTraits.find((t) => t.id === id)?.name)
+      .filter(Boolean)
+      .join(" · ") || "No special traits"
+  );
+}
+function companionWages(p) {
+  return hasTrait(p, "mercenary") ? 3 : 2;
+}
+function changeResolve(p, amount) {
+  if (p.dead) return;
+  const change =
+    amount < 0 && hasTrait(p, "resolute") ? Math.ceil(amount / 2) : amount;
+  p.resolve = Math.max(0, Math.min(100, (p.resolve ?? 65) + change));
+}
+function resolveLabel(p) {
+  return (p.resolve ?? 65) < 25
+    ? "Disheartened"
+    : (p.resolve ?? 65) >= 75
+      ? "Confident"
+      : "Steady";
+}
+function bondKey(a, b) {
+  return `${Math.min(a, b)}:${Math.max(a, b)}`;
+}
+function bondValue(s, a, b) {
+  return a === b ? 0 : s.bonds[bondKey(a, b)] || 0;
+}
+function bondLabel(value) {
+  return value >= 50
+    ? "Sworn companions"
+    : value >= 25
+      ? "Trusted"
+      : value >= 10
+        ? "Familiar"
+        : "Acquaintances";
+}
+function changeBond(s, a, b, amount) {
+  const first = s.party[a],
+    second = s.party[b];
+  if (
+    !Number.isInteger(a) ||
+    !Number.isInteger(b) ||
+    !first ||
+    !second ||
+    first.dead ||
+    second.dead ||
+    a === b ||
+    !Number.isFinite(amount)
+  )
+    return;
+  const old = bondValue(s, a, b),
+    value = Math.max(0, Math.min(100, old + amount));
+  s.bonds[bondKey(a, b)] = value;
+  if (bondLabel(value) !== bondLabel(old))
+    note(
+      s,
+      `${first.name} and ${second.name}: ${bondLabel(value).toLowerCase()}.`,
+    );
+}
+function growPartyBonds(s, amount, consciousOnly = false) {
+  const companions = livingParty(s).filter((p) => !consciousOnly || p.hp > 0);
+  for (let a = 0; a < companions.length; a++)
+    for (let b = a + 1; b < companions.length; b++)
+      changeBond(s, companions[a].id, companions[b].id, amount);
+}
+function restRelationships(s) {
+  if (s.lastBondRestDay === s.day || s.hungerDays) return;
+  s.lastBondRestDay = s.day;
+  growPartyBonds(s, 2);
+  for (const p of livingParty(s)) changeResolve(p, 6);
+}
+function bondSupport(s, p) {
+  const unit = s.battle?.units.find((u) => u.id === p.id);
+  if (!unit || (p.resolve ?? 65) < 25) return 0;
+  return s.battle.units.some(
+    (ally) =>
+      ally.id !== p.id &&
+      s.party[ally.id].hp > 0 &&
+      Math.abs(ally.x - unit.x) + Math.abs(ally.y - unit.y) === 1 &&
+      bondValue(s, p.id, ally.id) >= 25,
+  )
+    ? 1
+    : 0;
+}
+function bondProtection(s, target) {
+  const helpers = s.battle?.units.filter(
+    (u) =>
+      u.id !== target.id &&
+      u.guard &&
+      s.party[u.id].hp > 0 &&
+      Math.abs(u.x - target.x) + Math.abs(u.y - target.y) === 1 &&
+      bondValue(s, u.id, target.id) >= 25,
+  );
+  return helpers?.some((helper) => hasTrait(s.party[helper.id], "steadfast"))
+    ? 2
+    : helpers?.length
+      ? 1
+      : 0;
+}
+function shareStories(s, a, b) {
+  const first = s.party[a],
+    second = s.party[b];
+  if (
+    !Number.isInteger(a) ||
+    !Number.isInteger(b) ||
+    !s.campOpen ||
+    s.battle ||
+    s.event ||
+    !first ||
+    !second ||
+    first.dead ||
+    second.dead ||
+    first.hp <= 0 ||
+    second.hp <= 0 ||
+    a === b ||
+    s.food < 2 ||
+    s.lastConversationDay === s.day
+  )
+    return false;
+  s.food -= 2;
+  spendHours(s, 2);
+  s.lastConversationDay = s.day;
+  if (!first.dead && !second.dead) {
+    changeBond(
+      s,
+      a,
+      b,
+      4 +
+        (hasTrait(first, "convivial") || hasTrait(second, "convivial") ? 1 : 0),
+    );
+    changeResolve(first, 8);
+    changeResolve(second, 8);
+    note(
+      s,
+      `${first.name} and ${second.name} shared supper and stories. Their bond and resolve improved.`,
+    );
+  }
+  return true;
+}
+function recruitmentOffers(s) {
+  if (places[s.location]?.type !== "town" || companyLost(s)) return [];
+  const serial = s.recruitSerial || 0,
+    slot = s.party.findIndex((p) => p.dead),
+    id = slot >= 0 ? slot : s.party.length;
+  const names = ["Tamsin", "Bram", "Rhea", "Dain", "Iris", "Edric"];
+  const local =
+    s.location === 0
+      ? ["Veyra", "Corin"]
+      : s.location === 3
+        ? ["Sabine", "Hale"]
+        : ["Ysra", "Torren"];
+  const offers = [
+    {
+      id: "standard",
+      standard: true,
+      name: names[serial % names.length],
+      role: id % 2 === 0 ? "Archer" : "Shieldbearer",
+      profession: id % 2 === 0 ? "Herbalist" : "Miner",
+      max: 26,
+      cost: 60,
+      traits: [id % 2 === 0 ? "tireless" : "resolute"],
+    },
+    {
+      id: `${s.location}-veteran`,
+      name: local[0],
+      role: "Swordswoman",
+      profession: "Smith",
+      max: 26,
+      cost: 80,
+      traits: ["mercenary"],
+    },
+    {
+      id: `${s.location}-ranger`,
+      name: local[1],
+      role: "Spearman",
+      profession: "Cook",
+      max: 32,
+      cost: 50,
+      traits: ["hearty"],
+    },
+  ];
+  return offers.filter(
+    (offer) => offer.standard || !s.hiredRecruits.includes(offer.id),
+  );
 }
 
 // Original, hand-built pixel artwork. All coordinates are logical pixels.
@@ -3508,7 +3832,7 @@ function objective() {
       u = s.battle.units.find((u) => u.id === selected);
     if (abilityMode)
       return `${classSkills[p.role].name} armed: click an outlined enemy within ${attackRange(p, true)} tiles. ${classSkills[p.role].desc} Costs ${classSkills[p.role].cost} valor.`;
-    return `Valor ${s.battle.valor}/5 · Round ${s.battle.turn} · ${p.name}: ${u?.moved ? "movement used" : `move up to ${movementRange(p)} tiles`} · ${u?.acted ? "action used" : "attack or brace"}. ${fatigueLabel(p)} · Fatigue ${Math.round(p.fatigue || 0)}/100. Melee flanking +2: place allies on opposite sides of a foe. Wolves rush wounded targets and gain +1 damage when hunting together.`;
+    return `Valor ${s.battle.valor}/5 · Round ${s.battle.turn} · ${p.name}: ${u?.moved ? "movement used" : `move up to ${movementRange(p)} tiles`} · ${u?.acted ? "action used" : "attack or brace"}. ${resolveLabel(p)} · ${bondSupport(s, p) ? "Trusted support +1 attack · " : ""}${fatigueLabel(p)} · Fatigue ${Math.round(p.fatigue || 0)}/100. Melee flanking +2: place allies on opposite sides of a foe. Wolves rush wounded targets and gain +1 damage when hunting together.`;
   }
   if (s.contract)
     return `Active: ${s.contract.name}. ${s.location === s.contract.target ? "Use the gold button below to complete your objective." : `Travel to ${places[s.contract.target].name} by clicking any point on the map.`}`;
@@ -3676,7 +4000,32 @@ function render() {
           tab = "Equipment";
         }),
       );
-      c.append(worn);
+      const character = card(
+        "Character & bonds",
+        `<p>${resolveLabel(p)} · Resolve ${Math.round(p.resolve ?? 65)}/100${(p.resolve ?? 65) < 25 ? " · −1 attack" : ""}</p><p>Daily wages: ${companionWages(p)} crowns${p.traits?.includes("hearty") ? " · +1 daily ration" : ""}</p>`,
+      );
+      for (const id of p.traits || []) {
+        const trait = companionTraits.find((t) => t.id === id);
+        if (trait) {
+          const text = document.createElement("p");
+          text.textContent = `${trait.name}: ${trait.desc}`;
+          character.append(text);
+        }
+      }
+      const connections = document.createElement("details"),
+        heading = document.createElement("summary");
+      heading.textContent = "Relationships";
+      connections.append(heading);
+      for (const friend of livingParty(s).filter(
+        (friend) => friend.id !== p.id,
+      )) {
+        const value = bondValue(s, p.id, friend.id),
+          line = document.createElement("p");
+        line.textContent = `${friend.name} · ${bondLabel(value)} · ${value}/100`;
+        connections.append(line);
+      }
+      character.append(connections);
+      c.append(character, worn);
       c.classList.add("companion-card");
       c.querySelector(".pixel-icon").replaceWith(portraitArtwork(p));
       if (p.points)
@@ -3774,6 +4123,37 @@ function render() {
     if (s.wageDebt)
       rest.append(button("Pay overdue wages", () => payWages(s), !s.gold));
     panel.append(rest);
+    const social = card(
+      "Supper & stories",
+      "<p>Choose two companions to share a meal and a conversation. Costs 2 rations and 2 hours, once per day for the company. Improves their bond by 4 and personal resolve by 8; a convivial companion adds one extra bond point. Trusted companions (25+) support adjacent allies in combat.</p>",
+    );
+    const companions = livingParty(s).filter((p) => p.hp > 0),
+      firstSelect = document.createElement("select"),
+      secondSelect = document.createElement("select");
+    firstSelect.setAttribute("aria-label", "First conversation companion");
+    secondSelect.setAttribute("aria-label", "Second conversation companion");
+    for (const p of companions) {
+      firstSelect.add(new Option(p.name, String(p.id)));
+      secondSelect.add(new Option(p.name, String(p.id)));
+    }
+    if (companions[1]) secondSelect.value = String(companions[1].id);
+    const conversation = button(
+      "Share supper & stories",
+      () =>
+        shareStories(s, Number(firstSelect.value), Number(secondSelect.value)),
+      s.food < 2 || companions.length < 2 || s.lastConversationDay === s.day,
+    );
+    const updateConversation = () => {
+      conversation.disabled =
+        s.food < 2 ||
+        companions.length < 2 ||
+        s.lastConversationDay === s.day ||
+        firstSelect.value === secondSelect.value;
+    };
+    firstSelect.onchange = updateConversation;
+    secondSelect.onchange = updateConversation;
+    social.append(firstSelect, secondSelect, conversation);
+    panel.append(social);
     const duties = card(
       "Camp duties",
       "<p>Choose one job per conscious companion. Build its station first. Jobs use current professions and operate on fed rests of at least six hours, once per day. Workers recover 3 fatigue per hour; resting companions recover 5.</p>",
@@ -4164,16 +4544,31 @@ function render() {
     }
     if (tab === "Tavern") {
       const inn = card(
-        "The Crooked Lantern",
-        `<p>${livingParty(s).length < 6 ? (s.party.length === 4 ? "Tamsin, an archer and herbalist" : "Bram, a shieldbearer and miner") + " is looking for work." : "Your company is full."}</p><p>Recruitment: 60 crowns · +2 wages per camp · Capacity 6</p>`,
+        "Companions seeking work",
+        `<p>Capacity: ${livingParty(s).length}/6. Review traits and daily costs before hiring. New companions begin with no bonds; Specialist recruits leave the hiring board once hired.</p>`,
       );
-      inn.append(
-        button(
-          "Recruit companion",
-          () => recruit(s),
-          s.gold < 60 || livingParty(s).length >= 6 || !!s.battle || !!s.event,
-        ),
-      );
+      for (const offer of recruitmentOffers(s)) {
+        const candidate = card(
+          `${offer.name} · ${offer.role}`,
+          `<p>${offer.profession} · HP ${offer.max} · ATK ${6 + (offer.traits.includes("mercenary") ? 1 : 0)}</p><p>Hire: ${offer.cost} crowns · Daily wages: ${companionWages(offer)} crowns · Daily rations: ${offer.traits.includes("hearty") ? 2 : 1}</p>`,
+        );
+        for (const id of offer.traits) {
+          const trait = companionTraits.find((t) => t.id === id),
+            text = document.createElement("p");
+          text.textContent = `${trait.name}: ${trait.desc}`;
+          candidate.append(text);
+        }
+        candidate.append(
+          button(
+            offer.standard
+              ? "Recruit companion"
+              : `Hire ${offer.name} · ${offer.cost} crowns`,
+            () => recruit(s, offer.id),
+            s.gold < offer.cost || livingParty(s).length >= 6,
+          ),
+        );
+        inn.append(candidate);
+      }
       const rest = card(
         "A night under a roof",
         `<p>Full health, injuries cured, +15 morale. Includes meals and company wages; uses no rations. Takes one day.</p><p>${innCost(s)} crowns for ${livingParty(s).length} companions.</p>`,
@@ -4765,11 +5160,12 @@ function updateClockUI() {
   $("day-marker").style.left = `${info.percent}%`;
   $("day-scale").setAttribute("aria-valuenow", String(s.timeOfDay));
   $("day-scale").setAttribute("aria-valuetext", label);
+  const disheartened = livingParty(s).filter((p) => (p.resolve ?? 65) < 25);
   const exhausted = livingParty(s).filter((p) => fatiguePenalty(p) === 2);
   $("survival-warning").hidden =
-    !s.hungerDays && !s.wageDebt && !exhausted.length;
+    !s.hungerDays && !s.wageDebt && !exhausted.length && !disheartened.length;
   $("survival-warning").textContent =
-    `${s.hungerDays ? `STARVING · day ${s.hungerDays}. Find food before the next meal. ` : ""}${s.wageDebt ? `${s.wageDebt} crowns in unpaid wages. ` : ""}${exhausted.length ? `${exhausted.length} exhausted · camp to recover.` : ""}`;
+    `${s.hungerDays ? `STARVING · day ${s.hungerDays}. Find food before the next meal. ` : ""}${s.wageDebt ? `${s.wageDebt} crowns in unpaid wages. ` : ""}${exhausted.length ? `${exhausted.length} exhausted · camp to recover. ` : ""}${disheartened.length ? `${disheartened.length} disheartened · share a meal and rest.` : ""}`;
 }
 function animate(time) {
   if (

@@ -38,6 +38,14 @@ import {
   attackPower,
   train,
   recruit,
+  recruitmentOffers,
+  companionTraits,
+  companionWages,
+  resolveLabel,
+  bondValue,
+  bondLabel,
+  bondSupport,
+  shareStories,
   recipes,
   craft,
   heal,
@@ -175,7 +183,7 @@ function objective() {
       u = s.battle.units.find((u) => u.id === selected);
     if (abilityMode)
       return `${classSkills[p.role].name} armed: click an outlined enemy within ${attackRange(p, true)} tiles. ${classSkills[p.role].desc} Costs ${classSkills[p.role].cost} valor.`;
-    return `Valor ${s.battle.valor}/5 · Round ${s.battle.turn} · ${p.name}: ${u?.moved ? "movement used" : `move up to ${movementRange(p)} tiles`} · ${u?.acted ? "action used" : "attack or brace"}. ${fatigueLabel(p)} · Fatigue ${Math.round(p.fatigue || 0)}/100. Melee flanking +2: place allies on opposite sides of a foe. Wolves rush wounded targets and gain +1 damage when hunting together.`;
+    return `Valor ${s.battle.valor}/5 · Round ${s.battle.turn} · ${p.name}: ${u?.moved ? "movement used" : `move up to ${movementRange(p)} tiles`} · ${u?.acted ? "action used" : "attack or brace"}. ${resolveLabel(p)} · ${bondSupport(s, p) ? "Trusted support +1 attack · " : ""}${fatigueLabel(p)} · Fatigue ${Math.round(p.fatigue || 0)}/100. Melee flanking +2: place allies on opposite sides of a foe. Wolves rush wounded targets and gain +1 damage when hunting together.`;
   }
   if (s.contract)
     return `Active: ${s.contract.name}. ${s.location === s.contract.target ? "Use the gold button below to complete your objective." : `Travel to ${places[s.contract.target].name} by clicking any point on the map.`}`;
@@ -343,7 +351,32 @@ function render() {
           tab = "Equipment";
         }),
       );
-      c.append(worn);
+      const character = card(
+        "Character & bonds",
+        `<p>${resolveLabel(p)} · Resolve ${Math.round(p.resolve ?? 65)}/100${(p.resolve ?? 65) < 25 ? " · −1 attack" : ""}</p><p>Daily wages: ${companionWages(p)} crowns${p.traits?.includes("hearty") ? " · +1 daily ration" : ""}</p>`,
+      );
+      for (const id of p.traits || []) {
+        const trait = companionTraits.find((t) => t.id === id);
+        if (trait) {
+          const text = document.createElement("p");
+          text.textContent = `${trait.name}: ${trait.desc}`;
+          character.append(text);
+        }
+      }
+      const connections = document.createElement("details"),
+        heading = document.createElement("summary");
+      heading.textContent = "Relationships";
+      connections.append(heading);
+      for (const friend of livingParty(s).filter(
+        (friend) => friend.id !== p.id,
+      )) {
+        const value = bondValue(s, p.id, friend.id),
+          line = document.createElement("p");
+        line.textContent = `${friend.name} · ${bondLabel(value)} · ${value}/100`;
+        connections.append(line);
+      }
+      character.append(connections);
+      c.append(character, worn);
       c.classList.add("companion-card");
       c.querySelector(".pixel-icon").replaceWith(portraitArtwork(p));
       if (p.points)
@@ -441,6 +474,37 @@ function render() {
     if (s.wageDebt)
       rest.append(button("Pay overdue wages", () => payWages(s), !s.gold));
     panel.append(rest);
+    const social = card(
+      "Supper & stories",
+      "<p>Choose two companions to share a meal and a conversation. Costs 2 rations and 2 hours, once per day for the company. Improves their bond by 4 and personal resolve by 8; a convivial companion adds one extra bond point. Trusted companions (25+) support adjacent allies in combat.</p>",
+    );
+    const companions = livingParty(s).filter((p) => p.hp > 0),
+      firstSelect = document.createElement("select"),
+      secondSelect = document.createElement("select");
+    firstSelect.setAttribute("aria-label", "First conversation companion");
+    secondSelect.setAttribute("aria-label", "Second conversation companion");
+    for (const p of companions) {
+      firstSelect.add(new Option(p.name, String(p.id)));
+      secondSelect.add(new Option(p.name, String(p.id)));
+    }
+    if (companions[1]) secondSelect.value = String(companions[1].id);
+    const conversation = button(
+      "Share supper & stories",
+      () =>
+        shareStories(s, Number(firstSelect.value), Number(secondSelect.value)),
+      s.food < 2 || companions.length < 2 || s.lastConversationDay === s.day,
+    );
+    const updateConversation = () => {
+      conversation.disabled =
+        s.food < 2 ||
+        companions.length < 2 ||
+        s.lastConversationDay === s.day ||
+        firstSelect.value === secondSelect.value;
+    };
+    firstSelect.onchange = updateConversation;
+    secondSelect.onchange = updateConversation;
+    social.append(firstSelect, secondSelect, conversation);
+    panel.append(social);
     const duties = card(
       "Camp duties",
       "<p>Choose one job per conscious companion. Build its station first. Jobs use current professions and operate on fed rests of at least six hours, once per day. Workers recover 3 fatigue per hour; resting companions recover 5.</p>",
@@ -831,16 +895,31 @@ function render() {
     }
     if (tab === "Tavern") {
       const inn = card(
-        "The Crooked Lantern",
-        `<p>${livingParty(s).length < 6 ? (s.party.length === 4 ? "Tamsin, an archer and herbalist" : "Bram, a shieldbearer and miner") + " is looking for work." : "Your company is full."}</p><p>Recruitment: 60 crowns · +2 wages per camp · Capacity 6</p>`,
+        "Companions seeking work",
+        `<p>Capacity: ${livingParty(s).length}/6. Review traits and daily costs before hiring. New companions begin with no bonds; Specialist recruits leave the hiring board once hired.</p>`,
       );
-      inn.append(
-        button(
-          "Recruit companion",
-          () => recruit(s),
-          s.gold < 60 || livingParty(s).length >= 6 || !!s.battle || !!s.event,
-        ),
-      );
+      for (const offer of recruitmentOffers(s)) {
+        const candidate = card(
+          `${offer.name} · ${offer.role}`,
+          `<p>${offer.profession} · HP ${offer.max} · ATK ${6 + (offer.traits.includes("mercenary") ? 1 : 0)}</p><p>Hire: ${offer.cost} crowns · Daily wages: ${companionWages(offer)} crowns · Daily rations: ${offer.traits.includes("hearty") ? 2 : 1}</p>`,
+        );
+        for (const id of offer.traits) {
+          const trait = companionTraits.find((t) => t.id === id),
+            text = document.createElement("p");
+          text.textContent = `${trait.name}: ${trait.desc}`;
+          candidate.append(text);
+        }
+        candidate.append(
+          button(
+            offer.standard
+              ? "Recruit companion"
+              : `Hire ${offer.name} · ${offer.cost} crowns`,
+            () => recruit(s, offer.id),
+            s.gold < offer.cost || livingParty(s).length >= 6,
+          ),
+        );
+        inn.append(candidate);
+      }
       const rest = card(
         "A night under a roof",
         `<p>Full health, injuries cured, +15 morale. Includes meals and company wages; uses no rations. Takes one day.</p><p>${innCost(s)} crowns for ${livingParty(s).length} companions.</p>`,
@@ -1432,11 +1511,12 @@ function updateClockUI() {
   $("day-marker").style.left = `${info.percent}%`;
   $("day-scale").setAttribute("aria-valuenow", String(s.timeOfDay));
   $("day-scale").setAttribute("aria-valuetext", label);
+  const disheartened = livingParty(s).filter((p) => (p.resolve ?? 65) < 25);
   const exhausted = livingParty(s).filter((p) => fatiguePenalty(p) === 2);
   $("survival-warning").hidden =
-    !s.hungerDays && !s.wageDebt && !exhausted.length;
+    !s.hungerDays && !s.wageDebt && !exhausted.length && !disheartened.length;
   $("survival-warning").textContent =
-    `${s.hungerDays ? `STARVING · day ${s.hungerDays}. Find food before the next meal. ` : ""}${s.wageDebt ? `${s.wageDebt} crowns in unpaid wages. ` : ""}${exhausted.length ? `${exhausted.length} exhausted · camp to recover.` : ""}`;
+    `${s.hungerDays ? `STARVING · day ${s.hungerDays}. Find food before the next meal. ` : ""}${s.wageDebt ? `${s.wageDebt} crowns in unpaid wages. ` : ""}${exhausted.length ? `${exhausted.length} exhausted · camp to recover. ` : ""}${disheartened.length ? `${disheartened.length} disheartened · share a meal and rest.` : ""}`;
 }
 function animate(time) {
   if (

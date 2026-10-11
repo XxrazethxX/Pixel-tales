@@ -54,7 +54,7 @@ Research **Watchful eyes** for a 210-pixel discovery radius, **A fair bargain** 
 | Watch post     | 20 crowns, 5 wood, 2 ore   | +40 discovery radius and +1 starting battle valor                 |
 | Medicine tent  | 25 crowns, 4 wood, 8 herbs | +6 rest healing; cure injuries when recovery reaches half health  |
 
-At midnight, the company consumes **one ration and pays two crowns per living companion**. Cook ranks reduce rations by up to two, Trailcraft reduces them by one, and a cookpot reduces them by one, with a minimum of one ration for a surviving company. Unpaid wages accumulate as debt and lower morale; settle them in Company or Camp. Inn prices include overdue wages.
+At midnight, the company consumes **normally one ration and pays two crowns per living companion**. Cook ranks reduce rations by up to two, Trailcraft reduces them by one, and a cookpot reduces them by one, with a minimum of one ration for a surviving company. Unpaid wages accumulate as debt and lower morale; settle them in Company or Camp. Mercenary recruits demand three crowns and hearty recruits eat one extra ration. Inn prices include actual wages and overdue pay.
 
 Missing food causes increasing health loss each hungry day, starting at three damage and rising to eight. Partial meals reduce damage; a fully supplied daily meal resets hunger. Hungry rest does not heal. Running out of rations allows continued travel so you can seek food, but prolonged starvation kills companions permanently. Warnings show hunger and wage debt.
 
@@ -79,6 +79,32 @@ Companions gain **two fatigue per awake hour**, including exploration, foraging,
 
 Fed camp rests recover five fatigue per hour for resting companions and three for companions on duty. Hungry rests recover only one per hour and produce no job rewards. Inn beds reset fatigue for living companions. You can leave a duty vacant when its worker needs a better rest.
 
+## Companion character and relationships
+
+Open **Company → Character & bonds** to see traits, personal resolve, daily costs, and relationships. New founders have distinct personalities; existing saves gain their founders’ traits while keeping progress.
+
+| Trait           | Effect                                                                               |
+| --------------- | ------------------------------------------------------------------------------------ |
+| Resolute        | Lose half as much personal resolve from hardship                                     |
+| Steadfast       | Bracing beside a trusted friend protects them from two damage rather than one        |
+| Compassionate   | Medicine builds stronger bonds; peaceful caravan attacks cost eight personal resolve |
+| Convivial       | Sharing supper grants one extra bond point                                           |
+| Tireless        | Gain 1.5 fatigue per awake hour instead of two                                       |
+| Mercenary       | Gain one attack, demand three daily crowns, and lose more resolve over unpaid wages  |
+| Hearty appetite | This recruit starts with 32 health, but consumes an extra daily ration               |
+
+Taverns offer a standard 60-crown recruit, an 80-crown mercenary swordswoman and Smith, and a 50-crown hardy spearman and Cook. Names vary by village. Review their health, profession, traits, wages, and rations before hiring. Specialist offers disappear permanently once hired. Capacity remains six living companions; replacing someone who died begins with fresh bonds.
+
+Personal **resolve** starts at 65 and ranges from zero to 100. Hunger, overdue pay, prolonged exhaustion, defeat, and starvation deaths reduce it. Fed daily meals, rest, medicine, victory, and camp conversations help rebuild it. Below 25, a disheartened companion loses one attack damage. Resolve is separate from company morale.
+
+Bonds grow from supplied daily meals (+1), fed rests of at least six hours (+2 once per day), shared victories (+3 for conscious survivors), and treatment by a Herbalist (+2, or +3 if compassionate). Levels are **Familiar at 10**, **Trusted at 25**, and **Sworn companions at 50**.
+
+At **Make camp → Supper & stories**, select two companions to spend two rations and two hours together, once per day for the company. They gain four bond points and eight resolve each; a convivial participant adds one bond point. Self-targeting, unconscious participants, and insufficient food are blocked.
+
+In battle, standing next to a conscious trusted friend grants **+1 attack**, provided the attacker is not disheartened. A trusted friend who braces beside you protects you from one damage, or two if steadfast. These bonuses do not stack with additional friends, and support disappears when a friend falls or moves away. Relationships also make starvation bereavement more painful.
+
+[Recruitment preview](docs/screenshots/recruitment.png)
+
 ## Positioning and enemy tactics
 
 **Melee flanking** adds two damage when a living ally stands directly opposite you across the target. It works for basic attacks and class abilities in melee, and enemy melee fighters can flank your companions too. Bows do not receive the bonus. Bracing and armor still reduce incoming damage.
@@ -99,7 +125,7 @@ Company standing advances at **5 renown** (Proven company), **15** (Veterans), a
 
 Each combat victory also grants 2–4 ore and wood according to difficulty. Patrols and caravan raids retain their existing rewards. Peaceful caravan attacks reduce renown, which can close access to advanced work until you rebuild your standing.
 
-At the **Market square**, sell spare ore (2 crowns each), wood or herbs (1), and medicine (4), individually or as a whole stack. Purchase prices exceed resale prices. At **The Crooked Lantern**, resting costs **6 crowns per companion**, including beds, meals, and wages, plus any overdue wages. It takes one day, uses no rations, restores living companions to full health, cures injuries, and adds 15 morale up to 100. Recruitment remains a separate service.
+At the **Market square**, sell spare ore (2 crowns each), wood or herbs (1), and medicine (4), individually or as a whole stack. Purchase prices exceed resale prices. At **The Crooked Lantern**, resting costs **4 crowns for beds plus each companion’s daily wage**, including beds, meals, and wages, plus any overdue wages. It takes one day, uses no rations, restores living companions to full health, cures injuries, and adds 15 morale up to 100. Recruitment remains a separate service.
 
 ## Equipment and battle loot
 
@@ -164,7 +190,7 @@ Near a mine or forest, **Work mine / Gather herbs** is repeatable: it costs two 
 
 Morale at 85+ grants +1 attack. Injuries impose −1 attack. Armor absorbs damage. Profession practice now unlocks ranks and company bonuses. Explorable sites have one-time rewards. Contracts are repeatable. Defeat rescues the company in Greyhaven at a cost; starvation deaths are permanent and cannot be reversed by medicine or resting. Fallen companions leave company equipment in stores and can be replaced at taverns while survivors remain. If everyone starves, start a new company.
 
-Progress automatically saves in browser local storage. **New company** asks before replacing it. Version-one through version-eight saves migrate, preserving permanent equipment improvements; invalid saves fall back to a fresh company. Browser storage is specific to your browser and origin; moving from a local file to a hosted site does not transfer progress.
+Progress automatically saves in browser local storage. **New company** asks before replacing it. Version-one through version-nine saves migrate, preserving permanent equipment improvements; invalid saves fall back to a fresh company. Browser storage is specific to your browser and origin; moving from a local file to a hosted site does not transfer progress.
 
 ## Validate and develop
 
@@ -184,6 +210,7 @@ PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node
 PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/equipment-smoke.mjs
 PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/survival-smoke.mjs
 PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/camp-jobs-smoke.mjs
+PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/companions-smoke.mjs
 ```
 
 It uses `/usr/bin/chromium` by default; override `CHROMIUM_PATH` or `GAME_URL` as needed. Desktop and mobile screenshots are written under `/tmp`. The village smoke test checks regional offers, renown locks and unlocks, resale, inn recovery, save persistence, and dangerous encounters. The equipment smoke test covers purchases, class restrictions, assignment and transfer, resale, research and crafting, combat restrictions, reloads, mobile layout, and new-company reset.
@@ -192,4 +219,6 @@ The survival smoke test covers camp construction and recovery, saved improvement
 
 The camp jobs smoke test checks duty restrictions, saved assignments, resource production and costs, ration savings, profession practice, fatigue recovery and battle penalties, guard readiness, staffed campsite artwork, and mobile controls.
 
-Next planned additions: companion traits and relationships, regional trading goods and shortages, more equipment types and perks, and faction stories with consequences for player choices. Further development includes terrain cover and disengagement attacks, advanced skill tiers, impassable terrain and pathfinding, durability, procedural encounters, and Android packaging.
+The companion smoke test covers trait previews and hiring, daily costs, capacity, character and bond displays, camp conversations, persistence, trusted battle support, low-resolve warnings, and mobile layout.
+
+Next planned additions: regional trading goods and shortages, more equipment types and perks, and faction stories with consequences for player choices. Further development includes terrain cover and disengagement attacks, advanced skill tiers, impassable terrain and pathfinding, durability, procedural encounters, and Android packaging.
