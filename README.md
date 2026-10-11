@@ -277,6 +277,22 @@ Regional stories are accepted **only at village contract boards**, using the sam
 
 The **Caravan League**, **Border Wardens**, and **Grove Freefolk** remember these choices. Reputation ranges from −30 to +30. At ten League reputation purchases are cheaper; at −10 they become more expensive. Ten Warden reputation unlocks fine equipment without the renown requirement. Ten Freefolk reputation adds two rations to foraging. Ordinary deliveries, bandit victories, wolf hunts, and relieved shortages also build relevant standings. Company shows the current standing, benefits, and accepted or completed stories without offering new contracts outside villages.
 
+## Named adversary bounties
+
+Visit a village contract board to accept its named bounty. Bounties share the active contract slot with ordinary and story contracts; Company shows your progress without offering contracts elsewhere.
+
+| Adversary | Village / destination | Required renown | Reward |
+| --- | --- | --- | --- |
+| Rook the Tollkeeper | Greyhaven / Old Barrow | 5 | 160 crowns, Tollkeeper’s shield, League and Warden standing |
+| Ashfang | Saltbridge / Whispering Grove | 15 | 210 crowns, Ashfang’s tooth spear, Freefolk standing |
+| Maela Cinder-Eye | Emberfall / Redstone Quarry | 30 | 320 crowns, Cinder bow, Warden and League standing |
+
+Rook strengthens his living escort and hits harder below half health. Stun him to interrupt his rally. Ashfang rushes three tiles and heals surviving wolves on even enemy rounds; defeat the pack or stun its leader. Maela marks a cross of tiles for a fire volley on the following enemy turn. Move off the marked tiles, stun her, or defeat her before ending that round. Fire deals four damage through armor; the warning and pending volley survive reloads.
+
+![Maela’s marked volley on mobile](docs/screenshots/bounty-fire-mobile.png)
+
+These unique items cannot be bought or crafted. Each bounty pays once and records its completion in Company. Retreat or defeat leaves an unfinished bounty available to retry; **Abandon bounty** on a village board frees the contract slot without marking it complete.
+
 ## Your first expedition
 
 1. Choose **Visit Contract board** in Greyhaven’s arrival menu and accept _Wolves in human clothing_.
@@ -315,6 +331,7 @@ PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node
 PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/durability-smoke.mjs
 PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/trail-encounters-smoke.mjs
 PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/battle-layouts-smoke.mjs
+PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/bounties-smoke.mjs
 ```
 
 It uses `/usr/bin/chromium` by default; override `CHROMIUM_PATH` or `GAME_URL` as needed. Desktop and mobile screenshots are written under `/tmp`. The village smoke test checks regional offers, renown locks and unlocks, resale, inn recovery, save persistence, and dangerous encounters. The equipment smoke test covers purchases, class restrictions, assignment and transfer, resale, research and crafting, combat restrictions, reloads, mobile layout, and new-company reset.
@@ -335,4 +352,6 @@ The trail-encounters smoke test verifies terrain selection, profession and facti
 
 The battlefield smoke test covers contextual layouts, blocked movement, sight-restricted attacks and skills, terrain tooltips, deployment persistence, caravan fights, field artwork, and mobile combat.
 
-Further development includes named adversaries and Android packaging.
+Further development includes expanded regional stories and Android packaging.
+
+The bounty smoke test checks village acceptance, named challenges, victory and completion persistence, wolf pack composition, saved fire warnings, escaping and interrupting volleys, mobile layout, and abandonment.

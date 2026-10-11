@@ -110,6 +110,12 @@ import {
   canEquipEquipment,
   battleTerrain,
   battlefield,
+  namedAdversaries,
+  bountyOffers,
+  bountyLock,
+  acceptBounty,
+  abandonBounty,
+  bossThreat,
   hasLineOfSight,
   terrainCell,
   battlePath,
@@ -275,7 +281,7 @@ function objective() {
       u = s.battle.units.find((u) => u.id === selected);
     if (abilityMode)
       return `${skillFor(p).name} armed: click an outlined enemy within ${attackRange(p, true, s)} tiles. ${skillFor(p).desc} Costs ${skillFor(p).cost} valor.`;
-    return `${battlefield(s).name} · Round ${s.battle.turn} · Valor ${s.battle.valor}/5 · ${p.name}: ${u?.moved ? "movement used" : `move up to ${movementRange(p)} tiles`}, ${u?.acted ? "action used" : "attack or brace"}. ${resolveLabel(p)} · ${fatigueLabel(p)} · Fatigue ${Math.round(p.fatigue || 0)}/100. ${bondSupport(s, p) ? "Trusted support +1 attack. " : ""}${battlefield(s).text} Cover blocks 2 ranged damage; mud costs 2; Melee flanking +2. Disengage before leaving melee reach.${s.battle.wildlife ? " Wolves rush wounded targets and gain pack damage." : ""}`;
+    return `${battlefield(s).name} · Round ${s.battle.turn} · Valor ${s.battle.valor}/5 · ${p.name}: ${u?.moved ? "movement used" : `move up to ${movementRange(p)} tiles`}, ${u?.acted ? "action used" : "attack or brace"}. ${resolveLabel(p)} · ${fatigueLabel(p)} · Fatigue ${Math.round(p.fatigue || 0)}/100. ${bondSupport(s, p) ? "Trusted support +1 attack. " : ""}${battlefield(s).text} Cover blocks 2 ranged damage; mud costs 2; Melee flanking +2. Disengage before leaving melee reach.${s.battle.wildlife ? " Wolves rush wounded targets and gain pack damage." : ""}${s.battle.bossId ? ` ${namedAdversaries.find((boss) => boss.id === s.battle.bossId).name}: ${bossThreat(s) ? "FIRE INCOMING: move off marked tiles or stun Maela." : "Hover the named enemy for its special mechanic."}` : ""}`;
   }
   if (s.contract)
     return `Active: ${s.contract.name}. ${s.location === s.contract.target ? "Use the gold button below to complete your objective." : `Travel to ${places[s.contract.target].name} by clicking any point on the map.`}`;
@@ -441,6 +447,16 @@ function render() {
           "<p>All companions died of starvation. Start a new company to continue.</p>",
         ),
       );
+    const adversaries = card(
+      "Named adversaries",
+      "<p>Find optional bounties at village contract boards. Each adversary awards one unique item and cannot be hunted repeatedly.</p>",
+    );
+    for (const boss of namedAdversaries) {
+      const text = document.createElement("p");
+      text.textContent = `${boss.name}: ${s.bounties[boss.id] ? `defeated on day ${s.bounties[boss.id].day}` : `${boss.minRenown} renown · bounty issued in ${places[boss.issuer].name}`}`;
+      adversaries.append(text);
+    }
+    panel.append(adversaries);
     const trail = card(
       "Trail journal",
       `<p>${trailRegion(s)} · ${s.trailLedger[trailRegion(s)] === s.day ? "Scouted today" : "Scouting available outside villages"}. Scout once per region each day. Terrain, professions, traits, and faction standing shape your options.</p>`,
@@ -870,6 +886,38 @@ function render() {
       });
   }
   if (tab === "Contracts") {
+    panel.append(
+      card(
+        "Named bounties",
+        "<p>Optional adversaries have special mechanics and one-time unique rewards. Review the encounter before accepting.</p>",
+      ),
+    );
+    if (s.contract?.kind === "boss")
+      panel.append(
+        button(
+          "Abandon bounty",
+          () => abandonBounty(s),
+          !!s.battle || !!s.event,
+        ),
+      );
+    for (const boss of bountyOffers(s)) {
+      const locked = bountyLock(s, boss),
+        c = card(
+          boss.name,
+          `<p>Optional bounty at ${places[boss.target].name} · ${boss.minRenown} renown required.</p><p>${boss.mechanic}</p><p>${boss.reward} crowns and ${equipmentCatalog.find((item) => item.id === boss.gear).name}. Faction reputation and normal battle progression also apply.</p>${locked ? `<p>${locked}</p>` : ""}`,
+        );
+      c.append(
+        button(
+          s.bounties[boss.id]
+            ? `${boss.name} defeated`
+            : `Accept bounty: ${boss.name}`,
+          () => acceptBounty(s, boss.id),
+          !!locked,
+          true,
+        ),
+      );
+      panel.append(c);
+    }
     panel.append(
       card(
         "Regional stories",
@@ -1517,7 +1565,9 @@ function render() {
           button(
             s.contract.kind === "delivery"
               ? "Deliver 5 rations"
-              : "Engage raiders",
+              : s.contract.kind === "boss"
+                ? `Challenge ${namedAdversaries.find((boss) => boss.id === s.contract.bossId).name}`
+                : "Engage raiders",
             () =>
               s.contract.kind === "delivery" ? deliver(s) : startBattle(s),
             s.contract.kind === "delivery" && s.food < 5,
@@ -1640,6 +1690,22 @@ function draw() {
   }
   if (s.battle) {
     drawBattlefield(ctx, s);
+    const threat = bossThreat(s);
+    if (threat)
+      for (const tile of threat.tiles) {
+        ctx.fillStyle = "#b37044";
+        ctx.globalAlpha = 0.35;
+        ctx.fillRect(107 + tile.x * 62, 2 + tile.y * 60, 56, 54);
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = "#a55538";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(108 + tile.x * 62, 3 + tile.y * 60, 54, 52);
+        ctx.fillStyle = "#77432e";
+        ctx.font = "8px monospace";
+        ctx.textAlign = "left";
+        ctx.fillText("FIRE NEXT", 111 + tile.x * 62, 54 + tile.y * 60);
+      }
+
     const active = s.battle.units.find((u) => u.id === selected);
     if (active && (!active.acted || active.safeMove)) {
       const p = s.party[selected],
@@ -1699,7 +1765,7 @@ function draw() {
         ctx.font = "9px monospace";
         ctx.textAlign = "center";
         ctx.fillText(
-          `${e.kind || "raider"}${e.stun ? " STUN" : ""}${e.root ? " ROOT" : ""}${e.bleed ? " BLEED" : ""}`,
+          `${e.name?.split(" ")[0] || e.kind || "raider"}${e.stun ? " STUN" : ""}${e.root ? " ROOT" : ""}${e.bleed ? " BLEED" : ""}`,
           136 + e.x * 62,
           12 + e.y * 60,
         );
@@ -1713,6 +1779,13 @@ function draw() {
           "#a65f49",
         );
       });
+    for (const enemy of s.battle.enemies.filter(
+      (enemy) => enemy.bossId && enemy.hp > 0,
+    )) {
+      ctx.strokeStyle = "#c1a15d";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(116 + enemy.x * 62, 48 + enemy.y * 60, 40, 7);
+    }
     s.battle.units
       .filter((u) => s.party[u.id].hp > 0)
       .forEach((u) => {
@@ -2078,5 +2151,5 @@ canvas.addEventListener("pointermove", (event) => {
   }
   if (enemy)
     $("map-label").textContent =
-      `${enemy.kind || "raider"} · HP ${enemy.hp}/${enemy.max} · Armor ${enemy.armor || 0} · Range ${enemy.kind === "archer" ? 4 : 1}${enemy.kind === "wolf" ? " · Rush 2 · pack hunter" : enemy.kind === "archer" ? " · Keeps distance" : " · Melee flanking +2"}${enemy.stun ? " · Stunned" : ""}${enemy.bleed ? " · Bleeding" : ""}`;
+      `${enemy.name || enemy.kind || "raider"} · HP ${enemy.hp}/${enemy.max} · Armor ${enemy.armor || 0} · Range ${enemy.kind === "archer" ? 4 : 1}${enemy.kind === "wolf" ? ` · Rush ${enemy.bossId === "ashfang" ? 3 : 2} · pack hunter` : enemy.kind === "archer" ? " · Keeps distance" : " · Melee flanking +2"}${enemy.stun ? " · Stunned" : ""}${enemy.bleed ? " · Bleeding" : ""}${enemy.bossId ? ` · ${namedAdversaries.find((boss) => boss.id === enemy.bossId)?.mechanic || "Named adversary"}` : ""}`;
 });

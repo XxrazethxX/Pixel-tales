@@ -91,6 +91,7 @@ function fresh() {
     markets: {},
     reputation: { guild: 0, wardens: 0, freefolk: 0 },
     stories: {},
+    bounties: {},
     gold: 120,
     food: 24,
     morale: 75,
@@ -244,7 +245,12 @@ function startBattle(s, patrolId = null) {
       (!s.contract ||
         s.contract.kind === "delivery" ||
         (s.contract.kind === "story" && s.contract.phase !== "battle") ||
-        s.location !== s.contract.target)) ||
+        s.location !== s.contract.target ||
+        (s.contract.kind === "boss" &&
+          (s.bounties[s.contract.bossId] ||
+            !namedAdversaries.some(
+              (boss) => boss.id === s.contract.bossId,
+            ))))) ||
     !s.party.some((p) => p.hp > 0)
   )
     return false;
@@ -344,6 +350,7 @@ function startBattle(s, patrolId = null) {
     e.damage += difficulty.tier - 1;
   }
   deployBattle(s, patrol);
+  if (!patrol) deployAdversary(s);
   note(
     s,
     "Steel drawn. Select a companion, then a neighboring tile to move or an enemy to attack.",
@@ -406,6 +413,7 @@ function act(s, id, x, y) {
 function win(s) {
   wearBattleEquipment(s);
   const patrolFight = s.battle.kind === "patrol";
+  const bossFight = !patrolFight && s.contract?.kind === "boss";
   const raid = patrolFight && s.battle.caravanRaid;
   const wildlife = patrolFight && s.battle.wildlife;
   const difficulty = wildlife
@@ -454,9 +462,10 @@ function win(s) {
     s,
     `${wildlife ? "Wolf pack defeated · 6 rations and 2 pelts recovered" : raid ? "Caravan plundered · remaining provisions and cargo seized" : patrolFight ? "Patrol defeated" : s.contract?.kind === "story" ? "Faction battle won" : "Contract fulfilled"}. Earned ${reward} crowns, ${difficulty.knowledge} knowledge, and ${difficulty.xp} XP per survivor.`,
   );
-  if (!wildlife) {
+  if (bossFight) finishBounty(s);
+  if (!wildlife && !bossFight) {
     const lootPool = equipmentCatalog.filter(
-      (item) => item.tier === difficulty.tier,
+      (item) => item.tier === difficulty.tier && !item.uniqueBoss,
     );
     const loot =
       lootPool[
@@ -480,6 +489,8 @@ function win(s) {
 function endTurn(s) {
   const b = s.battle;
   if (!b) return false;
+  b.enemies.forEach((e) => (e.stunnedThisRound = false));
+  resolveBossThreat(s);
   for (const e of b.enemies.filter((e) => e.hp > 0)) {
     if (e.bleed > 0) {
       hitEnemy(s, e, 2 + (e.armor || 0));
@@ -488,11 +499,13 @@ function endTurn(s) {
       if (e.hp === 0) continue;
     }
     if (e.stun > 0) {
+      e.stunnedThisRound = true;
       e.stun--;
       e.root = Math.max(0, (e.root || 0) - 1);
       note(s, "A stunned enemy loses its turn.");
       continue;
     }
+    adversaryTurn(s, e);
     const targets = b.units
       .filter((u) => s.party[u.id].hp > 0)
       .sort(
@@ -518,12 +531,13 @@ function endTurn(s) {
       dist = () => Math.abs(t.x - e.x) + Math.abs(t.y - e.y);
     const rooted = (e.root || 0) > 0;
     e.root = Math.max(0, (e.root || 0) - 1);
-    let movement = e.kind === "wolf" ? 2 : 1;
+    const rush = e.bossId === "ashfang" ? 3 : e.kind === "wolf" ? 2 : 1;
+    let movement = rush;
     for (
       let step = 0;
       !rooted &&
       movement > 0 &&
-      step < (e.kind === "wolf" ? 2 : 1) &&
+      step < rush &&
       (dist() > range ||
         !hasLineOfSight(s, e, t) ||
         (e.kind === "archer" && dist() <= 1));
@@ -572,6 +586,7 @@ function endTurn(s) {
       const p = s.party[t.id];
       const power =
         (e.damage || 5) +
+        adversaryPower(s, e) +
         (e.kind === "archer" ? 0 : flankingBonus(s, e, t, "enemies")) +
         (e.kind === "wolf" &&
         b.enemies.some(
@@ -598,6 +613,7 @@ function endTurn(s) {
         `${p.name} takes ${damage} damage${p.hp === 0 ? " and falls unconscious" : ""}.`,
       );
     }
+    if (e.hp > 0) markAdversaryThreat(s, e, t);
   }
   if (b.enemies.every((e) => e.hp === 0)) {
     win(s);
@@ -606,7 +622,8 @@ function endTurn(s) {
   if (s.party.every((p) => p.hp === 0)) {
     wearBattleEquipment(s, "defeat");
     s.battle = null;
-    if (b.kind !== "patrol" && s.contract?.kind !== "story") s.contract = null;
+    if (b.kind !== "patrol" && !["story", "boss"].includes(s.contract?.kind))
+      s.contract = null;
     s.gold = Math.max(0, s.gold - 20);
     s.location = 0;
     s.position = { x: places[0].x, y: places[0].y };
@@ -991,6 +1008,66 @@ function restore(raw) {
       result.contract.phase !== "investigate")
   )
     result.event = null;
+  result.bounties = {};
+  for (const boss of namedAdversaries) {
+    const day = raw.bounties?.[boss.id]?.day;
+    if (Number.isInteger(day) && day > 0 && day <= result.day)
+      result.bounties[boss.id] = { day };
+  }
+  if (result.contract?.kind === "boss") {
+    const boss = namedAdversaries.find(
+      (boss) => boss.id === result.contract.bossId,
+    );
+    if (!boss || result.bounties[boss.id]) {
+      result.contract = null;
+      result.battle = null;
+    } else
+      result.contract = {
+        kind: "boss",
+        bossId: boss.id,
+        name: `Bounty: ${boss.name}`,
+        issuer: boss.issuer,
+        target: boss.target,
+        reward: boss.reward,
+        tier: boss.tier,
+      };
+  }
+  if (
+    result.battle?.bossId &&
+    (result.contract?.kind !== "boss" ||
+      result.contract.bossId !== result.battle.bossId ||
+      !namedAdversaries.some((boss) => boss.id === result.battle.bossId))
+  )
+    result.battle = null;
+  if (result.battle?.danger) {
+    const threat = result.battle.danger;
+    if (
+      result.battle.bossId !== "maela" ||
+      threat.source !== "maela" ||
+      !Number.isInteger(threat.firesAt) ||
+      threat.firesAt < result.battle.turn ||
+      !Array.isArray(threat.tiles)
+    )
+      result.battle.danger = null;
+    else
+      result.battle.danger = {
+        source: "maela",
+        firesAt: Math.min(result.battle.turn + 1, threat.firesAt),
+        tiles: threat.tiles
+          .filter(
+            (tile) =>
+              tile &&
+              Number.isInteger(tile.x) &&
+              Number.isInteger(tile.y) &&
+              tile.x >= 0 &&
+              tile.x < 9 &&
+              tile.y >= 0 &&
+              tile.y < 7,
+          )
+          .slice(0, 5)
+          .map((tile) => ({ x: tile.x, y: tile.y })),
+      };
+  }
   result.encounterSerial =
     Number.isSafeInteger(raw.encounterSerial) && raw.encounterSerial >= 0
       ? Math.min(1e9, raw.encounterSerial)
@@ -4864,6 +4941,234 @@ function resolveTrailEncounter(s, choiceId) {
   return true;
 }
 
+const namedAdversaries = [
+  {
+    id: "rook",
+    name: "Rook the Tollkeeper",
+    issuer: 0,
+    target: 2,
+    minRenown: 5,
+    tier: 2,
+    reward: 160,
+    gear: "rook-shield",
+    reputation: { guild: 4, wardens: 3 },
+    mechanic:
+      "Rook rallies living allies for +1 damage and gains +2 damage below half health. Defeat his escort or control him with stuns.",
+    kind: "brute",
+    hp: 40,
+    damage: 6,
+    armor: 3,
+  },
+  {
+    id: "ashfang",
+    name: "Ashfang",
+    issuer: 3,
+    target: 7,
+    minRenown: 15,
+    tier: 2,
+    reward: 210,
+    gear: "ashfang-spear",
+    reputation: { freefolk: 5 },
+    mechanic:
+      "Ashfang rushes 3 tiles. On even enemy rounds, its howl heals other living wolves by 3. Stuns interrupt the howl; fallen wolves stay fallen.",
+    kind: "wolf",
+    hp: 46,
+    damage: 6,
+    armor: 1,
+  },
+  {
+    id: "maela",
+    name: "Maela Cinder-Eye",
+    issuer: 6,
+    target: 9,
+    minRenown: 30,
+    tier: 3,
+    reward: 320,
+    gear: "cinder-bow",
+    reputation: { wardens: 5, guild: 2 },
+    mechanic:
+      "Maela marks a cross of tiles for 4 fire damage on the next enemy turn. Move out, stun her, or defeat her to cancel the volley. Fire ignores armor.",
+    kind: "archer",
+    hp: 44,
+    damage: 7,
+    armor: 2,
+  },
+];
+equipmentCatalog.push(
+  {
+    id: "rook-shield",
+    name: "Tollkeeper's shield",
+    slot: "shield",
+    role: null,
+    tier: 3,
+    rarity: "Unique",
+    bonus: 3,
+    price: 110,
+    perk: "bastion",
+    uniqueBoss: "rook",
+  },
+  {
+    id: "ashfang-spear",
+    name: "Ashfang's tooth",
+    slot: "weapon",
+    role: "Spearman",
+    tier: 3,
+    rarity: "Unique",
+    bonus: 5,
+    price: 140,
+    perk: "bleeding",
+    uniqueBoss: "ashfang",
+  },
+  {
+    id: "cinder-bow",
+    name: "Cinder bow",
+    slot: "weapon",
+    role: "Archer",
+    tier: 3,
+    rarity: "Unique",
+    bonus: 6,
+    price: 165,
+    perk: "reach",
+    uniqueBoss: "maela",
+  },
+);
+function bountyLock(s, boss) {
+  if (!boss) return "Unknown adversary.";
+  if (s.bounties[boss.id])
+    return "Already defeated; this bounty cannot be repeated.";
+  if (s.contract) return "Complete or abandon the active contract first.";
+  if (s.renown < boss.minRenown) return `${boss.minRenown} renown required.`;
+  return null;
+}
+function bountyOffers(s) {
+  return contracts(s).length
+    ? namedAdversaries.filter((boss) => boss.issuer === s.location)
+    : [];
+}
+function acceptBounty(s, id) {
+  const boss = bountyOffers(s).find((boss) => boss.id === id);
+  if (!boss || bountyLock(s, boss)) return false;
+  s.contract = {
+    kind: "boss",
+    bossId: id,
+    name: `Bounty: ${boss.name}`,
+    issuer: boss.issuer,
+    target: boss.target,
+    reward: boss.reward,
+    tier: boss.tier,
+  };
+  note(s, `Accepted bounty for ${boss.name}. ${boss.mechanic}`);
+  return true;
+}
+function abandonBounty(s) {
+  if (s.contract?.kind !== "boss" || s.battle || s.event) return false;
+  note(s, `Abandoned ${s.contract.name}; the adversary remains undefeated.`);
+  s.contract = null;
+  return true;
+}
+function deployAdversary(s) {
+  if (s.contract?.kind !== "boss") return;
+  const boss = namedAdversaries.find((boss) => boss.id === s.contract.bossId);
+  s.battle.bossId = boss.id;
+  const leader = s.battle.enemies[0];
+  Object.assign(leader, {
+    bossId: boss.id,
+    name: boss.name,
+    kind: boss.kind,
+    hp: boss.hp,
+    max: boss.hp,
+    damage: boss.damage,
+    armor: boss.armor,
+  });
+  if (boss.id === "ashfang")
+    for (const e of s.battle.enemies.slice(1))
+      Object.assign(e, { kind: "wolf", hp: 18, max: 18, damage: 4, armor: 0 });
+}
+function finishBounty(s) {
+  const boss = namedAdversaries.find((boss) => boss.id === s.contract?.bossId);
+  if (!boss || s.bounties[boss.id]) return false;
+  s.bounties[boss.id] = { day: s.day };
+  grantEquipment(s, boss.gear);
+  for (const [faction, n] of Object.entries(boss.reputation))
+    changeReputation(s, faction, n);
+  note(
+    s,
+    `${boss.name} defeated. Recovered ${equipmentCatalog.find((item) => item.id === boss.gear).name}; the bounty is recorded permanently.`,
+  );
+  return true;
+}
+function bossThreat(s) {
+  const threat = s.battle?.danger,
+    source = s.battle?.enemies.find((e) => e.bossId === threat?.source);
+  return threat && source?.hp > 0 && !(source.stun > 0) ? threat : null;
+}
+function resolveBossThreat(s) {
+  const threat = s.battle.danger;
+  if (!threat || threat.firesAt > s.battle.turn) return;
+  const active = bossThreat(s);
+  s.battle.danger = null;
+  if (!active) {
+    note(s, "Maela's marked volley was interrupted.");
+    return;
+  }
+  for (const u of s.battle.units) {
+    const p = s.party[u.id];
+    if (
+      p.hp <= 0 ||
+      !threat.tiles.some((tile) => tile.x === u.x && tile.y === u.y)
+    )
+      continue;
+    p.hp = Math.max(0, p.hp - 4);
+    note(s, `${p.name} takes 4 fire damage from Maela's volley.`);
+  }
+}
+function adversaryPower(s, e) {
+  const rook = s.battle.enemies.find(
+    (leader) => leader.bossId === "rook" && leader.hp > 0,
+  );
+  return (
+    (rook && rook !== e && !(rook.stun > 0) && !rook.stunnedThisRound ? 1 : 0) +
+    (e.bossId === "rook" && e.hp <= e.max / 2 ? 2 : 0)
+  );
+}
+function adversaryTurn(s, e) {
+  if (e.bossId === "rook" && e.hp <= e.max / 2 && !e.enraged) {
+    e.enraged = true;
+    note(s, "Rook becomes desperate: his attacks gain 2 damage.");
+  }
+  if (e.bossId === "ashfang" && s.battle.turn % 2 === 0) {
+    let healed = 0;
+    for (const wolf of s.battle.enemies.filter(
+      (wolf) => wolf !== e && wolf.kind === "wolf" && wolf.hp > 0,
+    )) {
+      const amount = Math.min(3, wolf.max - wolf.hp);
+      wolf.hp += amount;
+      healed += amount;
+    }
+    note(s, `Ashfang howls: its living pack recovers ${healed} health.`);
+  }
+}
+function markAdversaryThreat(s, e, target) {
+  if (
+    e.bossId !== "maela" ||
+    s.party[target.id].hp <= 0 ||
+    !hasLineOfSight(s, e, target)
+  )
+    return;
+  const tiles = [
+    { x: target.x, y: target.y },
+    { x: target.x + 1, y: target.y },
+    { x: target.x - 1, y: target.y },
+    { x: target.x, y: target.y + 1 },
+    { x: target.x, y: target.y - 1 },
+  ].filter((tile) => tile.x >= 0 && tile.x < 9 && tile.y >= 0 && tile.y < 7);
+  s.battle.danger = { source: "maela", firesAt: s.battle.turn + 1, tiles };
+  note(
+    s,
+    `Maela marks ${s.party[target.id].name}'s position. Move off the marked tiles before the next enemy turn, or stun her to interrupt.`,
+  );
+}
+
 // Original, hand-built pixel artwork. All coordinates are logical pixels.
 const artPalette = {
   meadow: "#a3a775",
@@ -6039,7 +6344,7 @@ function objective() {
       u = s.battle.units.find((u) => u.id === selected);
     if (abilityMode)
       return `${skillFor(p).name} armed: click an outlined enemy within ${attackRange(p, true, s)} tiles. ${skillFor(p).desc} Costs ${skillFor(p).cost} valor.`;
-    return `${battlefield(s).name} · Round ${s.battle.turn} · Valor ${s.battle.valor}/5 · ${p.name}: ${u?.moved ? "movement used" : `move up to ${movementRange(p)} tiles`}, ${u?.acted ? "action used" : "attack or brace"}. ${resolveLabel(p)} · ${fatigueLabel(p)} · Fatigue ${Math.round(p.fatigue || 0)}/100. ${bondSupport(s, p) ? "Trusted support +1 attack. " : ""}${battlefield(s).text} Cover blocks 2 ranged damage; mud costs 2; Melee flanking +2. Disengage before leaving melee reach.${s.battle.wildlife ? " Wolves rush wounded targets and gain pack damage." : ""}`;
+    return `${battlefield(s).name} · Round ${s.battle.turn} · Valor ${s.battle.valor}/5 · ${p.name}: ${u?.moved ? "movement used" : `move up to ${movementRange(p)} tiles`}, ${u?.acted ? "action used" : "attack or brace"}. ${resolveLabel(p)} · ${fatigueLabel(p)} · Fatigue ${Math.round(p.fatigue || 0)}/100. ${bondSupport(s, p) ? "Trusted support +1 attack. " : ""}${battlefield(s).text} Cover blocks 2 ranged damage; mud costs 2; Melee flanking +2. Disengage before leaving melee reach.${s.battle.wildlife ? " Wolves rush wounded targets and gain pack damage." : ""}${s.battle.bossId ? ` ${namedAdversaries.find((boss) => boss.id === s.battle.bossId).name}: ${bossThreat(s) ? "FIRE INCOMING: move off marked tiles or stun Maela." : "Hover the named enemy for its special mechanic."}` : ""}`;
   }
   if (s.contract)
     return `Active: ${s.contract.name}. ${s.location === s.contract.target ? "Use the gold button below to complete your objective." : `Travel to ${places[s.contract.target].name} by clicking any point on the map.`}`;
@@ -6205,6 +6510,16 @@ function render() {
           "<p>All companions died of starvation. Start a new company to continue.</p>",
         ),
       );
+    const adversaries = card(
+      "Named adversaries",
+      "<p>Find optional bounties at village contract boards. Each adversary awards one unique item and cannot be hunted repeatedly.</p>",
+    );
+    for (const boss of namedAdversaries) {
+      const text = document.createElement("p");
+      text.textContent = `${boss.name}: ${s.bounties[boss.id] ? `defeated on day ${s.bounties[boss.id].day}` : `${boss.minRenown} renown · bounty issued in ${places[boss.issuer].name}`}`;
+      adversaries.append(text);
+    }
+    panel.append(adversaries);
     const trail = card(
       "Trail journal",
       `<p>${trailRegion(s)} · ${s.trailLedger[trailRegion(s)] === s.day ? "Scouted today" : "Scouting available outside villages"}. Scout once per region each day. Terrain, professions, traits, and faction standing shape your options.</p>`,
@@ -6634,6 +6949,38 @@ function render() {
       });
   }
   if (tab === "Contracts") {
+    panel.append(
+      card(
+        "Named bounties",
+        "<p>Optional adversaries have special mechanics and one-time unique rewards. Review the encounter before accepting.</p>",
+      ),
+    );
+    if (s.contract?.kind === "boss")
+      panel.append(
+        button(
+          "Abandon bounty",
+          () => abandonBounty(s),
+          !!s.battle || !!s.event,
+        ),
+      );
+    for (const boss of bountyOffers(s)) {
+      const locked = bountyLock(s, boss),
+        c = card(
+          boss.name,
+          `<p>Optional bounty at ${places[boss.target].name} · ${boss.minRenown} renown required.</p><p>${boss.mechanic}</p><p>${boss.reward} crowns and ${equipmentCatalog.find((item) => item.id === boss.gear).name}. Faction reputation and normal battle progression also apply.</p>${locked ? `<p>${locked}</p>` : ""}`,
+        );
+      c.append(
+        button(
+          s.bounties[boss.id]
+            ? `${boss.name} defeated`
+            : `Accept bounty: ${boss.name}`,
+          () => acceptBounty(s, boss.id),
+          !!locked,
+          true,
+        ),
+      );
+      panel.append(c);
+    }
     panel.append(
       card(
         "Regional stories",
@@ -7281,7 +7628,9 @@ function render() {
           button(
             s.contract.kind === "delivery"
               ? "Deliver 5 rations"
-              : "Engage raiders",
+              : s.contract.kind === "boss"
+                ? `Challenge ${namedAdversaries.find((boss) => boss.id === s.contract.bossId).name}`
+                : "Engage raiders",
             () =>
               s.contract.kind === "delivery" ? deliver(s) : startBattle(s),
             s.contract.kind === "delivery" && s.food < 5,
@@ -7404,6 +7753,22 @@ function draw() {
   }
   if (s.battle) {
     drawBattlefield(ctx, s);
+    const threat = bossThreat(s);
+    if (threat)
+      for (const tile of threat.tiles) {
+        ctx.fillStyle = "#b37044";
+        ctx.globalAlpha = 0.35;
+        ctx.fillRect(107 + tile.x * 62, 2 + tile.y * 60, 56, 54);
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = "#a55538";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(108 + tile.x * 62, 3 + tile.y * 60, 54, 52);
+        ctx.fillStyle = "#77432e";
+        ctx.font = "8px monospace";
+        ctx.textAlign = "left";
+        ctx.fillText("FIRE NEXT", 111 + tile.x * 62, 54 + tile.y * 60);
+      }
+
     const active = s.battle.units.find((u) => u.id === selected);
     if (active && (!active.acted || active.safeMove)) {
       const p = s.party[selected],
@@ -7463,7 +7828,7 @@ function draw() {
         ctx.font = "9px monospace";
         ctx.textAlign = "center";
         ctx.fillText(
-          `${e.kind || "raider"}${e.stun ? " STUN" : ""}${e.root ? " ROOT" : ""}${e.bleed ? " BLEED" : ""}`,
+          `${e.name?.split(" ")[0] || e.kind || "raider"}${e.stun ? " STUN" : ""}${e.root ? " ROOT" : ""}${e.bleed ? " BLEED" : ""}`,
           136 + e.x * 62,
           12 + e.y * 60,
         );
@@ -7477,6 +7842,13 @@ function draw() {
           "#a65f49",
         );
       });
+    for (const enemy of s.battle.enemies.filter(
+      (enemy) => enemy.bossId && enemy.hp > 0,
+    )) {
+      ctx.strokeStyle = "#c1a15d";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(116 + enemy.x * 62, 48 + enemy.y * 60, 40, 7);
+    }
     s.battle.units
       .filter((u) => s.party[u.id].hp > 0)
       .forEach((u) => {
@@ -7842,7 +8214,7 @@ canvas.addEventListener("pointermove", (event) => {
   }
   if (enemy)
     $("map-label").textContent =
-      `${enemy.kind || "raider"} · HP ${enemy.hp}/${enemy.max} · Armor ${enemy.armor || 0} · Range ${enemy.kind === "archer" ? 4 : 1}${enemy.kind === "wolf" ? " · Rush 2 · pack hunter" : enemy.kind === "archer" ? " · Keeps distance" : " · Melee flanking +2"}${enemy.stun ? " · Stunned" : ""}${enemy.bleed ? " · Bleeding" : ""}`;
+      `${enemy.name || enemy.kind || "raider"} · HP ${enemy.hp}/${enemy.max} · Armor ${enemy.armor || 0} · Range ${enemy.kind === "archer" ? 4 : 1}${enemy.kind === "wolf" ? ` · Rush ${enemy.bossId === "ashfang" ? 3 : 2} · pack hunter` : enemy.kind === "archer" ? " · Keeps distance" : " · Melee flanking +2"}${enemy.stun ? " · Stunned" : ""}${enemy.bleed ? " · Bleeding" : ""}${enemy.bossId ? ` · ${namedAdversaries.find((boss) => boss.id === enemy.bossId)?.mechanic || "Named adversary"}` : ""}`;
 });
 
 })();
