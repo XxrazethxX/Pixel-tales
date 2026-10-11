@@ -41,6 +41,8 @@ test("stash search and lock picking gate rewards, permit feedback and survive sa
   siteAction(s, "search", 0);
   assert.equal(s.event.stage, "search");
   assert.equal(s.gold, 120);
+  siteAction(s, "search", 8);
+  siteAction(s, "search", 2);
   siteAction(s, "search", 7);
   siteAction(s, "pick", 0);
   assert.match(s.event.message, /higher/);
@@ -50,6 +52,8 @@ test("stash search and lock picking gate rewards, permit feedback and survive sa
   siteAction(copy, "pick", 4);
   siteAction(copy, "pick", 1);
   assert.equal(copy.event.stage, "opened");
+  assert.equal(copy.gold, 120);
+  assert.equal(siteAction(copy, "take-all"), true);
   assert.equal(copy.gold, 150);
   assert.equal(copy.knowledge, 1);
   assert.equal(copy.contract.target, 1);
@@ -63,6 +67,8 @@ test("three lock mistakes cost an hour and reset the pins without granting loot"
   const s = fresh();
   arrive(s, 10);
   enterSite(s);
+  siteAction(s, "search", 8);
+  siteAction(s, "search", 2);
   siteAction(s, "search", 7);
   siteAction(s, "pick", 2);
   for (let i = 0; i < 3; i++) siteAction(s, "pick", 0);

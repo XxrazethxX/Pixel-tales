@@ -90,7 +90,7 @@ test("old saves migrate and malformed saves recover", () => {
   s.gold = 99;
   const migrated = restore(s);
   assert.equal(migrated.gold, 99);
-  assert.equal(migrated.version, 13);
+  assert.equal(migrated.version, 14);
   assert.equal(migrated.inventory.medicine, 1);
   assert.equal(restore({ version: 1 }).party.length, 4);
   assert.equal(restore(null).day, 1);
@@ -193,8 +193,9 @@ test("party walks to arbitrary wilderness coordinates and leaves town services",
   assert.equal(s.position.x, 170);
   advanceMovement(s, 0.5);
   assert.ok(s.position.x > 170 && s.position.x < 280);
-  assert.equal(s.location, -1);
+  assert.equal(s.location, 0); // Still inside the expanded village entry radius.
   advanceMovement(s, 10);
+  assert.equal(s.location, -1);
   assert.equal(s.position.x, 280);
   assert.equal(s.position.y, 300);
   assert.equal(s.destination, null);
@@ -365,8 +366,11 @@ test("hidden stashes pay once and new event choices have concrete effects", () =
   s.position = { x: 350, y: 620 };
   assert.equal(explore(s), false);
   enterSite(s);
+  siteAction(s, "search", 8);
+  siteAction(s, "search", 2);
   siteAction(s, "search", 7);
   for (const v of [2, 4, 1]) siteAction(s, "pick", v);
+  siteAction(s, "take-all");
   siteAction(s, "leave");
   assert.equal(s.gold, 150);
   assert.equal(explore(s), false);
@@ -887,7 +891,7 @@ test("gear migration preserves old upgrades and valid equipment while rejecting 
   old.party[0].armor = 3;
   delete old.party[0].equipment;
   const migrated = restore(old);
-  assert.equal(migrated.version, 13);
+  assert.equal(migrated.version, 14);
   assert.deepEqual(migrated.gear, []);
   assert.equal(migrated.party[0].weapon, 4);
   assert.equal(armorPower(migrated, migrated.party[0]), 3);

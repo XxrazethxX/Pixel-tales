@@ -18,8 +18,11 @@ const explore = (s) => {
   if (![4, 9, 10].includes(s.location)) return exploreWorld(s);
   if (s.explored.includes(s.location) || !enterSite(s)) return false;
   if (s.location === 10) {
+    siteAction(s, "search", 8);
+    siteAction(s, "search", 2);
     siteAction(s, "search", 7);
     for (const n of [2, 4, 1]) siteAction(s, "pick", n);
+    siteAction(s, "take-all");
   } else {
     siteAction(s, "vein");
     siteAction(s, "mine");

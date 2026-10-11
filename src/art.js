@@ -513,13 +513,46 @@ export function portraitArtwork(p) {
   image.setAttribute("aria-hidden", "true");
   return image;
 }
-export function drawWagon(c, x, y, hostile = false) {
+export function drawWagon(c, x, y, hostile = false, cargoType = "mixed") {
   pixel(c, x - 21, y + 10, 43, 8, "#77835688");
   pixel(c, x - 18, y - 3, 35, 17, "#6c573c");
   pixel(c, x - 17, y - 2, 33, 13, "#ae8e59");
   for (let i = 0; i < 5; i++) pixel(c, x - 17, y + i * 3, 33, 1, "#896d47");
-  steppedOval(c, x - 17, y - 18, 34, 26, hostile ? "#a67a5b" : "#d5c697");
-  pixel(c, x - 17, y - 3, 34, 4, hostile ? "#88634c" : "#afa177");
+  if (cargoType === "mixed") {
+    steppedOval(c, x - 17, y - 18, 34, 26, hostile ? "#a67a5b" : "#d5c697");
+    pixel(c, x - 17, y - 3, 34, 4, hostile ? "#88634c" : "#afa177");
+  } else if (cargoType === "wheat") {
+    for (const [dx, dy] of [
+      [-11, -7],
+      [0, -11],
+      [10, -6],
+    ]) {
+      steppedOval(c, x + dx - 6, y + dy - 9, 13, 14, "#d8ba6e");
+      pixel(c, x + dx - 3, y + dy - 8, 1, 10, "#f0d890");
+      pixel(c, x + dx + 1, y + dy - 9, 1, 11, "#ae8445");
+      pixel(c, x + dx - 5, y + dy - 2, 10, 2, "#8a6f45");
+    }
+  } else if (cargoType === "armor") {
+    pixel(c, x - 14, y - 16, 11, 16, "#7d8990");
+    pixel(c, x - 12, y - 17, 7, 3, "#d1d0b7");
+    pixel(c, x - 16, y - 12, 3, 6, "#a7afa7");
+    pixel(c, x - 4, y - 12, 3, 6, "#a7afa7");
+    steppedOval(c, x + 1, y - 14, 13, 15, "#596c73");
+    pixel(c, x + 6, y - 12, 3, 11, "#bcb598");
+    pixel(c, x + 13, y - 20, 2, 18, "#d3d0b5");
+  } else {
+    for (let i = 0; i < 3; i++) {
+      pixel(
+        c,
+        x - 14 + i * 10,
+        y - 12 - (i % 2) * 5,
+        9,
+        14,
+        ["#b88278", "#859cad", "#c1b28c"][i],
+      );
+      pixel(c, x - 12 + i * 10, y - 10 - (i % 2) * 5, 2, 10, "#ded1ac");
+    }
+  }
   for (const dx of [-11, 9]) {
     pixel(c, x + dx - 3, y + 10, 7, 8, "#454538");
     pixel(c, x + dx - 1, y + 11, 3, 6, "#a39466");
@@ -827,6 +860,11 @@ export function drawBattlefield(c, s) {
           pixel(c, x + 2, y + 2, 56, 53, "#708f8b");
           for (let i = 0; i < 4; i++)
             pixel(c, x + 8 + i * 9, y + 12 + i * 8, 16, 2, "#9eb3a1");
+        } else if (tile.kind === "tree") {
+          pixel(c, x + 26, y + 26, 8, 20, "#71583e");
+          steppedOval(c, x + 10, y + 7, 42, 31, "#4d6540");
+          steppedOval(c, x + 15, y + 5, 31, 21, "#7b8c54");
+          pixel(c, x + 19, y + 12, 10, 3, "#a0aa70");
         } else if (tile.kind === "log") {
           pixel(c, x + 5, y + 20, 47, 14, "#635c42");
           pixel(c, x + 7, y + 23, 42, 3, "#9b8456");
@@ -865,7 +903,7 @@ export function drawBattlefield(c, s) {
         pixel(c, x + 17, y + 34, 22, 3, "#a79870");
       }
       c.fillStyle = "#5b5c3e";
-      c.font = "8px monospace";
+      c.font = "9px monospace";
       c.textAlign = "left";
       c.fillText(
         tile.blocked
@@ -873,7 +911,7 @@ export function drawBattlefield(c, s) {
           : tile.kind === "bridge"
             ? "CROSSING"
             : tile.cover
-              ? "COVER 2"
+              ? `COVER ${tile.cover} · COST ${tile.cost}`
               : "COST 2",
         x + 5,
         y + 54,
@@ -1207,11 +1245,34 @@ export function drawSiteInterior(c, s) {
     pixel(c, 208, 213, 9, 43, "#705337");
     pixel(c, 196, 210, 21, 6, "#705337");
     pixel(c, 215, 203, 16, 7, "#705337");
+    for (const i of s.stash.searched) {
+      pixel(
+        c,
+        188 + (i % 4) * 85,
+        77 + Math.floor(i / 4) * 78,
+        23,
+        10,
+        "#96835a",
+      );
+    }
+    pixel(c, 373, 58, 22, 18, "#85866b");
+    pixel(c, 376, 60, 15, 2, "#ceca9f");
     if (e.stage !== "search") {
-      pixel(c, 448, 137, 47, 27, "#795537");
-      pixel(c, 448, 137, 47, 8, "#ac8e57");
-      pixel(c, 466, 143, 10, 17, "#c3b072");
-      pixel(c, 469, 149, 4, 7, "#3f4433");
+      if (e.stage === "opened") {
+        pixel(c, 448, 119, 47, 17, "#9e7b49");
+        pixel(c, 451, 122, 41, 10, "#5e4935");
+        pixel(c, 448, 140, 47, 25, "#795537");
+        pixel(c, 451, 140, 41, 12, "#403c2e");
+        if (Object.keys(s.stash.loot).length) {
+          pixel(c, 457, 144, 8, 5, "#e0c675");
+          pixel(c, 471, 143, 12, 6, "#b8b7a5");
+        }
+      } else {
+        pixel(c, 448, 137, 47, 27, "#795537");
+        pixel(c, 448, 137, 47, 8, "#ac8e57");
+        pixel(c, 466, 143, 10, 17, "#c3b072");
+        pixel(c, 469, 149, 4, 7, "#3f4433");
+      }
     }
   } else {
     for (let i = 0; i < 9; i++) {
@@ -1344,4 +1405,37 @@ export function drawFarmInterior(c, s) {
   drawMapLabel(c, "Old well", 537, 187);
   const p = s.party.find((p) => !p.dead);
   drawCharacter(c, 410, 350, p.coat || partyCoats[0], 0, p.role, p.id, p);
+}
+
+export function chestPreview(contents) {
+  const canvas = surface(112, 72),
+    c = canvas.getContext("2d");
+  pixel(c, 12, 52, 89, 13, "#77805b55");
+  pixel(c, 19, 8, 74, 24, "#9e7b49");
+  pixel(c, 24, 12, 64, 15, "#5e4935");
+  pixel(c, 20, 34, 73, 29, "#795537");
+  pixel(c, 23, 33, 67, 17, "#403c2e");
+  pixel(c, 20, 54, 73, 4, "#ae8e59");
+  pixel(c, 29, 37, 4, 25, "#b5a06b");
+  pixel(c, 80, 37, 4, 25, "#b5a06b");
+  if (Object.keys(contents).length) {
+    if (contents.gold) {
+      pixel(c, 39, 41, 17, 6, "#e0c675");
+      pixel(c, 44, 37, 11, 6, "#f0d890");
+    }
+    if (contents.medicine || contents.herbs) {
+      pixel(c, 64, 36, 10, 12, "#92a56a");
+      pixel(c, 66, 33, 6, 4, "#c9c2a3");
+    }
+    if (contents.ore || contents.wood) pixel(c, 56, 43, 11, 7, "#b8b7a5");
+  }
+  canvas.className = "chest-preview";
+  canvas.setAttribute("role", "img");
+  canvas.setAttribute(
+    "aria-label",
+    Object.keys(contents).length
+      ? "Open chest with uncollected loot"
+      : "Empty open chest",
+  );
+  return canvas;
 }

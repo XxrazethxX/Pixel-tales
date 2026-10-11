@@ -71,7 +71,7 @@ test("ambush preparation costs time and food and is consumed by battle", () => {
   s.contract = { target: 1, reward: 65 };
   startBattle(s);
   assert.equal(s.battle.valor, 4);
-  assert.equal(s.battle.enemies[0].stun, 1);
+  assert.equal(s.battle.openingAmbush, true);
   assert.equal(s.ambushReady, false);
 });
 test("shield walls protect adjacent companions and overwatch consumes one attack", () => {

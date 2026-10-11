@@ -47,7 +47,7 @@ Choose **Begin adventure** to start in Greyhaven. If you already have a company,
 
 Founders can be male or female independently of their class. Choose skin tone, hair color, short/long/braided hair, and individual coat colors in the company creator. Portraits, map sprites, camp companions, and combat sprites use these choices. Existing companions can be edited through **Company → Customize avatar** outside encounters and combat. Appearance does not change combat stats.
 
-At **Forgotten Stash**, choose **Enter Forgotten Stash**. The broken oak and inscription form a ground-search puzzle. Find the buried chest, then use the lockpick dial to set three pins. Test tension for directional feedback; three mistakes reset the pins and cost one hour. Progress survives reloads. Loot is awarded only after the chest opens, including any accepted rumor find, and cannot be collected twice.
+At **Forgotten Stash**, choose **Enter Forgotten Stash**. The broken oak and inscription form a ground-search puzzle. Find the buried chest, then use the lockpick dial to set three pins. Test tension for directional feedback; three mistakes reset the pins and cost one hour. Progress survives reloads. Opening the chest reveals its contents, including any accepted rumor find. Choose individual items or take everything; leftovers stay in the chest for later visits and cannot be collected twice.
 
 **Iron Hollow** and **Redstone Quarry** are enterable mines. Move between the entrance, timbered gallery, and ore chamber. Inspect the abandoned cart for a one-time ore find and survey the seam for normal exploration materials and knowledge. Leave the interior to resume free map travel or repeatable fieldwork. Site visits pause the exploration clock, while explicit lock repair costs still advance it.
 
@@ -59,7 +59,7 @@ Roaming wolf packs now use actual wolf sprites on the map as well as in tactical
 
 The map fills the game screen. **Click or tap any ground** to set your own destination; the party walks there with animated companions following the route you actually took. Click again to redirect, use **Stop walking** to halt, or hold **WASD / arrow keys** to steer. There are no preset travel paths. Optional journal travel controls set a destination that you can redirect freely. The camera follows the company on narrow screens, keeping sprite proportions intact.
 
-Towns and other sites offer actions only when you are within 28 world pixels. Arriving at a village stops the party and opens its places menu: visit the market for supplies, the blacksmith to buy and equip weapons or armor, the tavern to recruit companions, or the contract board for paid work. Available contracts appear only at village boards; your accepted objective remains visible during exploration. Management menus are overlays opened from the bottom toolbar; opening one pauses walking. Close the panel to return to exploration. You can forage and pitch camp anywhere. A full day takes **four minutes of active exploration**, independent of walking distance. Shallows slow travel. Menus, pitched camps, battles, encounters, and hidden browser tabs pause the exploration clock. Foraging and fieldwork advance six in-game hours; construction takes two hours. Saves retain your exact position and time, and reload safely stopped.
+Towns and other sites offer actions only when you are within 64 world pixels of villages or 54 pixels of other sites. Arriving at a village stops the party and opens its places menu: visit the market for supplies, the blacksmith to buy and equip weapons or armor, the tavern to recruit companions, or the contract board for paid work. Available contracts appear only at village boards; your accepted objective remains visible during exploration. Management menus are overlays opened from the bottom toolbar; opening one pauses walking. Close the panel to return to exploration. You can forage and pitch camp anywhere. A full day takes **four minutes of active exploration**, independent of walking distance. Shallows slow travel. Menus, pitched camps, battles, encounters, and hidden browser tabs pause the exploration clock. Foraging and fieldwork advance six in-game hours; construction takes two hours. Saves retain your exact position and time, and reload safely stopped.
 
 ## The living borderlands
 
@@ -436,7 +436,7 @@ The sites-and-avatars smoke test covers founder appearance, stash searching and 
 ### Campaign expansion (0.24)
 
 - **Playable dungeons:** use Explore dungeon at mines and ruins, then move through the interior grid. Inspect the concealed door, disarm traps, reinforce unstable passages, and mine deposits with a Miner. Defeat the guards before opening the vault; deposits, secrets, and treasure are saved and cannot be repeatedly looted.
-- **Tactical actions:** Archers can set overwatch, Shieldbearers can protect adjacent allies with a shield wall, and companions can spend valor to push adjacent enemies into difficult terrain for extra damage. Preparing an ambush costs food and time and improves the next battle's opening.
+- **Tactical actions:** Archers can set overwatch, Shieldbearers can protect adjacent allies with a shield wall, and companions can spend valor to push adjacent enemies into difficult terrain for extra damage. Preparing an ambush costs food and time and grants a full free company turn before enemies can respond.
 - **Companion stories:** camp conversations offer personal goals with resource costs and permanent rewards. Support or refusal changes loyalty and relationships. Disloyal companions can be released, and refused companions may leave when wages remain unpaid.
 - **Camp furnishing:** build and reposition a shared table, drying rack, and brazier across six spaces. They improve healing, staffed forge output, and storm shelter. Cooking, smithing, and treatment have visible camp activity.
 - **Crime and pursuit:** attacking caravans creates witnesses and a wanted level. Stolen cargo sales increase attention, and pursuing Wardens can intercept the company. Village fines clear the warrant and surrender carried trade cargo; faction reputation still remembers your attacks.
@@ -501,8 +501,29 @@ Supported companion stories now continue through a personal investigation and a 
 
 [Setting and campaign direction](docs/THE_BROKEN_ROAD.md) · [Fantasy company creator](docs/screenshots/fantasy-company.png) · [Spell slots on mobile](docs/screenshots/spell-slots-mobile.png)
 
-Saves migrate through version 13, preserving existing companies as human companions. Verify the new chapter, magic, recruitment, and mobile controls with:
+Saves migrate through version 14, preserving existing companies as human companions. Verify the new chapter, magic, recruitment, and mobile controls with:
 
 ```sh
 GAME_URL=http://127.0.0.1:3002/ PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/broken-road-magic-smoke.mjs
+```
+
+
+## Caravans, road tolls, hiding, and selective loot (v0.27)
+
+Four caravan loads travel independently: the mixed Copper Road caravan, Golden Sheaf wheat wagon, Ironbound armory wagon, and Silk Road cloth wagon. Open-backed wagons visibly carry wheat bundles, armor and shields, or cloth rolls. Trade their finite cargo; the armory also sells actual equipment. Purchases stay depleted after reload. Raiding an armory captures its remaining equipment alongside supplies and incurs the usual crime consequences.
+
+Bandits automatically stop visible companies within 36 pixels. Before combat, choose between their crown demand, **8 rations**, or **Refuse · Fight**. Paying buys **eight game hours** of passage from that patrol, including after reload; it does not clear the stronghold. Wolves and authorities cannot be paid through this bandit menu.
+
+**Hide company** activates a visible concealment meter. Standing still builds it faster in forests or at night. Sneaking travels at 55% speed and drains concealment; enemies within 22 pixels can expose you. At **60%**, authorities and other hostile patrols lose track of you. At **75%**, use a nearby enemy's **Ambush** action to attack directly with a full free opening turn. Finish that opening to refresh every companion's action and movement before any enemy responds. Spells still consume slots and reagents. Hiding preserves your wanted level; leaving hiding restores pursuit. Paid ambush preparation also remains available.
+
+Village entry prompts now appear within **64 pixels**, and other site prompts within **54 pixels**. A dotted ring marks the current location's entry area. The nearest location wins if ranges overlap.
+
+Forgotten Stash requires both the broken oak and marker-stone clues before the chest can be excavated. Checked squares and clues remain recorded. Lock pins show progress and strain; tension feedback guides the dial. Opening the lid shows a readable loot menu with individual selections, **Take all contents**, and the option to leave items behind.
+
+Battles also include **Deadfall trail** and **Hedgerow road**, with variations selected from the encounter context and campaign day. Standing trees and fallen trunks block movement and line of sight. Bushes provide **1 ranged cover** and cost **2 movement points**; rubble still provides 2 cover. The path finder, enemy movement, ranged attacks, spells, and previews use the same terrain rules.
+
+[Bandit negotiations on mobile](docs/screenshots/bandit-negotiation-mobile.png) · [Open stash and loot selection](docs/screenshots/open-stash-mobile.png) · [Deadfall battlefield](docs/screenshots/deadfall-battle-mobile.png)
+
+```sh
+GAME_URL=http://127.0.0.1:3002/ PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/roads-stealth-loot-smoke.mjs
 ```

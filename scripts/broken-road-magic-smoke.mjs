@@ -100,7 +100,7 @@ try {
   await page.screenshot({ path: "/tmp/pixel-merrit-escort.png" });
   progress = await state();
   progress.location = -1;
-  progress.position = { x: places[3].x - 34, y: places[3].y };
+  progress.position = { x: places[3].x - 70, y: places[3].y };
   progress.trail = [{ ...progress.position }];
   await seed(progress);
   await close();

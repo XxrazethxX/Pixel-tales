@@ -406,7 +406,7 @@ test("old saves migrate safely and malformed campaign, quest, race and slot data
   s.party[0].spellSpent = { 1: -9, 2: 999 };
   s.party[0].personalQuest = { stage: 999, outcome: "evil" };
   const loaded = save(s);
-  assert.equal(loaded.version, 13);
+  assert.equal(loaded.version, 14);
   assert.equal(loaded.campaign.phase, "unstarted");
   assert.equal(loaded.party[0].race, "human");
   assert.equal(loaded.party[0].spellSpent[1], 0);
@@ -421,8 +421,9 @@ test("stronghold raiders intercept nearby companies and clearing the camp preven
   s.position = { x: 470, y: 490 };
   s.location = 12;
   advancePatrols(s, 0.1);
-  assert.equal(s.battle.patrolId, "briar-raiders");
-  s.battle = null;
+  assert.equal(s.event.patrolId, "briar-raiders");
+  assert.equal(s.event.kind, "negotiation");
+  s.event = null;
   clearStronghold(s);
   advancePatrols(s, 0.1);
   assert.equal(s.battle, null);

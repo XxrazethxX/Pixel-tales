@@ -75,7 +75,7 @@ test("cover mitigates real ranged attacks for both sides and mud consumes moveme
   b.units[2].y = 2;
   const hp = b.enemies[0].hp;
   assert.ok(act(s, 2, 3, 2));
-  assert.equal(b.enemies[0].hp, hp - 4);
+  assert.equal(b.enemies[0].hp, hp - 5);
   b.units = [b.units[0]];
   b.units[0].x = 5;
   b.units[0].y = 4;
@@ -83,7 +83,7 @@ test("cover mitigates real ranged attacks for both sides and mud consumes moveme
     { id: 0, x: 7, y: 4, kind: "archer", damage: 4, hp: 16, max: 16 },
   ];
   endTurn(s);
-  assert.equal(s.party[0].hp, 26);
+  assert.equal(s.party[0].hp, 25);
   b.units[0].x = 4;
   b.units[0].y = 6;
   assert.equal(terrainCell(s, 4, 5).cost, 2);
@@ -503,7 +503,7 @@ test("old saves migrate without losing gear, and malformed economy or story data
   delete s.stories;
   s.gold = 99;
   const migrated = restore(s);
-  assert.equal(migrated.version, 13);
+  assert.equal(migrated.version, 14);
   assert.equal(migrated.gold, 99);
   assert.equal(cargoLoad(migrated), 0);
   s.cargo = { grain: 999, cloth: 999, salt: -1, iron: NaN };

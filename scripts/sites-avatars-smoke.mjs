@@ -53,6 +53,8 @@ try {
   assert.equal((await state()).event.stage, "search");
   await click("Search 1,1");
   assert.equal((await state()).gold, 120);
+  await click("Broken oak");
+  await click("Marker stone");
   await click("Search 4,2");
   assert.equal((await state()).event.stage, "lock");
   const dial = () => page.getByRole("slider", { name: "Lockpick dial" });
@@ -65,6 +67,8 @@ try {
     await dial().fill(v);
     await click("Test tension");
   }
+  assert.equal((await state()).gold, 120);
+  await click("Take all contents");
   assert.equal((await state()).gold, 150);
   await click("Leave site");
   await click("Enter Forgotten Stash");

@@ -1,4 +1,12 @@
 import {
+  toggleStealth,
+  advanceStealth,
+  isHidden,
+  confrontPatrol,
+  negotiateBandits,
+  banditDemand,
+  tradeCaravanEquipment,
+  entryRadius,
   beginCampaign,
   campaignTasks,
   campaignAction,
@@ -182,6 +190,7 @@ import {
   tradeGoodsAtVillage,
   supplyOffer,
   regionalSalePrice,
+  purchaseModifier,
   caravanCargoPrice,
   tradeCaravanCargo,
   caravanFoodPrice,
@@ -210,6 +219,7 @@ import {
   partyCoats,
   drawCampScene,
   drawWolf,
+  chestPreview,
   drawSiteInterior,
   drawDungeonInterior,
   drawFarmInterior,
@@ -347,7 +357,7 @@ function objective() {
       return `Spell prepared: ${spellBook.find((v) => v.id === spellMode)?.name}. Select an outlined target or use Spell targets below. Slots persist between battles.`;
     if (abilityMode)
       return `${skillFor(p).name} armed: click an outlined enemy within ${attackRange(p, true, s)} tiles. ${skillFor(p).desc} Costs ${skillFor(p).cost} valor.`;
-    return `${battlefield(s).name} · Round ${s.battle.turn} · Valor ${s.battle.valor}/5 · ${p.name}: ${u?.moved ? "movement used" : `move up to ${movementRange(p)} tiles`}, ${u?.acted ? "action used" : "attack or brace"}. ${resolveLabel(p)} · ${fatigueLabel(p)} · Fatigue ${Math.round(p.fatigue || 0)}/100. ${bondSupport(s, p) ? "Trusted support +1 attack. " : ""}${battlefield(s).text} Cover blocks 2 ranged damage; mud costs 2; Melee flanking +2. Disengage before leaving melee reach.${s.battle.wildlife ? " Wolves rush wounded targets and gain pack damage." : ""}${s.battle.bossId ? ` ${namedAdversaries.find((boss) => boss.id === s.battle.bossId).name}: ${bossThreat(s) ? "FIRE INCOMING: move off marked tiles or stun Maela." : "Hover the named enemy for its special mechanic."}` : ""}`;
+    return `${s.battle.openingAmbush ? "AMBUSH · Free opening turn · " : ""}${battlefield(s).name} · Round ${s.battle.turn} · Valor ${s.battle.valor}/5 · ${p.name}: ${u?.moved ? "movement used" : `move up to ${movementRange(p)} tiles`}, ${u?.acted ? "action used" : "attack or brace"}. ${resolveLabel(p)} · ${fatigueLabel(p)} · Fatigue ${Math.round(p.fatigue || 0)}/100. ${bondSupport(s, p) ? "Trusted support +1 attack. " : ""}${battlefield(s).text} Rubble blocks 2 ranged damage; bushes block 1 and cost 2 movement; trees and deadfall block movement and sight; Melee flanking +2. Disengage before leaving melee reach.${s.battle.wildlife ? " Wolves rush wounded targets and gain pack damage." : ""}${s.battle.bossId ? ` ${namedAdversaries.find((boss) => boss.id === s.battle.bossId).name}: ${bossThreat(s) ? "FIRE INCOMING: move off marked tiles or stun Maela." : "Hover the named enemy for its special mechanic."}` : ""}`;
   }
   if (s.contract)
     return `Active: ${s.contract.name}. ${s.location === s.contract.target ? "Use the gold button below to complete your objective." : `Travel to ${places[s.contract.target].name} by clicking any point on the map.`}`;
@@ -1881,7 +1891,7 @@ function render() {
           `<p>Carried cargo ${cargoLoad(s)}/${cargoCapacity}. Caravan food: ${caravan.foodStock} rations. Cargo purchases reduce its stock; raiding seizes remaining cargo and harms League and Warden reputation.</p>`,
         ),
       );
-      for (const good of tradeGoods) {
+      for (const good of tradeGoods.filter((g) => caravan.cargo[g.id] > 0)) {
         const cost = caravanCargoPrice(s, good.id),
           c = card(
             good.name,
@@ -1897,6 +1907,23 @@ function render() {
           ),
         );
         panel.append(c);
+      }
+      for (const id of caravan.gearStock || []) {
+        const item = equipmentCatalog.find((item) => item.id === id);
+        if (!item) continue;
+        const cost = Math.ceil(item.price * purchaseModifier(s));
+        const row = card(
+          item.name,
+          `<p>${item.slot} · ${item.rarity} · bonus ${item.bonus}. One available.</p>`,
+        );
+        row.append(
+          button(
+            `Buy ${item.name} · ${cost} crowns`,
+            () => tradeCaravanEquipment(s, caravan.id, id),
+            s.gold < cost,
+          ),
+        );
+        panel.append(row);
       }
     } else
       panel.append(
@@ -1932,9 +1959,33 @@ function render() {
       );
     $("map-label").textContent = `${s.companyName} · camp`;
   } else if (s.event) {
-    const c = card(s.event.title, `<p>${s.event.text}</p>`);
+    const bandits =
+      s.event.kind === "negotiation" &&
+      s.patrols.find((p) => p.id === s.event.patrolId);
+    const c = card(
+      bandits ? `${bandits.name} · Road toll` : s.event.title,
+      bandits
+        ? `<p>The bandits close around your company. Pay ${banditDemand(s, bandits.id)} crowns or surrender 8 rations for eight game hours of passage. Refusing starts combat.</p>`
+        : `<p>${s.event.text}</p>`,
+    );
     c.id = "event";
-    if (s.event.kind === "dungeon") {
+    if (bandits) {
+      heldKeys.clear();
+      c.append(
+        button(
+          `Pay ${banditDemand(s, bandits.id)} crowns`,
+          () => negotiateBandits(s, "gold"),
+          s.gold < banditDemand(s, bandits.id),
+          true,
+        ),
+        button(
+          "Offer 8 rations",
+          () => negotiateBandits(s, "food"),
+          s.food < 8,
+        ),
+        button("Refuse · Fight", () => negotiateBandits(s, "refuse")),
+      );
+    } else if (s.event.kind === "dungeon") {
       const e = s.event,
         layout = dungeonLayout(e.site),
         c = card(
@@ -2066,34 +2117,44 @@ function render() {
       const c = card(
         e.site === 10 ? "Buried stash" : "Mine interior",
         e.site === 10
-          ? "<p>A broken oak marks the southwest square. The inscription reads: three squares east, one square north. Search the ground, then pick the chest’s three pins.</p>"
+          ? "<p>Inspect the <strong>broken oak</strong> and <strong>marker stone</strong> to reconstruct the route. Search the right square, open the lock, then choose your loot.</p>"
           : "<p>Walk into the timbered gallery, inspect the abandoned cart, and enter the ore chamber to survey the exposed seam.</p>",
       );
+      if (e.site === 10) c.classList.add("stash-card");
       if (e.message) {
         const feedback = document.createElement("p");
+        feedback.className = "site-feedback";
+        feedback.setAttribute("role", "status");
         feedback.textContent = e.message;
         c.append(feedback);
       }
       if (e.site === 10 && e.stage === "search") {
         const grid = document.createElement("div");
         grid.className = "stash-grid";
-        for (let i = 0; i < 16; i++)
-          grid.append(
-            button(
-              i === 8
-                ? "Broken oak"
-                : `Search ${(i % 4) + 1},${Math.floor(i / 4) + 1}`,
-              () => siteAction(s, "search", i),
-            ),
-          );
+        for (let i = 0; i < 16; i++) {
+          const label =
+            i === 8
+              ? "Broken oak"
+              : i === 2
+                ? "Marker stone"
+                : s.stash.searched.includes(i)
+                  ? `Checked ${(i % 4) + 1},${Math.floor(i / 4) + 1}`
+                  : `Search ${(i % 4) + 1},${Math.floor(i / 4) + 1}`;
+          const tile = button(label, () => siteAction(s, "search", i));
+          if (s.stash.clues.includes(i)) tile.classList.add("clue-found");
+          grid.append(tile);
+        }
+        const clues = document.createElement("p");
+        clues.className = "stash-clues";
+        clues.textContent = `Clues ${s.stash.clues.length}/2. ${s.stash.clues.includes(8) ? "Oak: THREE squares EAST. " : "Inspect the oak. "}${s.stash.clues.includes(2) ? "Stone: ONE square NORTH." : "Inspect the marker stone."}`;
+        c.append(clues);
         c.append(grid);
       }
       if (e.site === 10 && e.stage === "lock") {
-        c.append(
-          document.createTextNode(
-            `Pin ${e.pin + 1}/3 · Strain ${e.strain}/3. Listen to the tension feedback.`,
-          ),
-        );
+        const pins = document.createElement("p");
+        pins.className = "lock-pins";
+        pins.textContent = `Pins ${[0, 1, 2].map((i) => (i < e.pin ? "◆" : "◇")).join(" ")} · Set pin ${e.pin + 1}/3 · Strain ${e.strain}/3`;
+        c.append(pins);
         const dial = document.createElement("input");
         dial.type = "range";
         dial.min = 0;
@@ -2111,6 +2172,30 @@ function render() {
             siteAction(s, "pick", Number(dial.value)),
           ),
         );
+      }
+      if (e.site === 10 && e.stage === "opened") {
+        c.append(chestPreview(s.stash.loot));
+        const contents = Object.entries(s.stash.loot);
+        const heading = document.createElement("p");
+        heading.textContent = contents.length
+          ? "Open chest — choose what to carry. Leftover items remain here."
+          : "The chest is empty. You have collected its contents.";
+        c.append(heading);
+        for (const [key, amount] of contents)
+          c.append(
+            button(`Take ${amount} ${key === "gold" ? "crowns" : key}`, () =>
+              siteAction(s, "take", key),
+            ),
+          );
+        if (contents.length)
+          c.append(
+            button(
+              "Take all contents",
+              () => siteAction(s, "take-all"),
+              false,
+              true,
+            ),
+          );
       }
       if (e.site !== 10) {
         c.append(
@@ -2222,7 +2307,9 @@ function render() {
     );
     a.append(
       button(
-        `End round ${s.battle.turn}`,
+        s.battle.openingAmbush
+          ? "Finish ambush · Take additional turn"
+          : `End round ${s.battle.turn}`,
         () => {
           abilityMode = false;
           endTurn(s);
@@ -2391,6 +2478,9 @@ function render() {
       "Select ally · click tile to move / enemy to attack";
   } else {
     a.append(
+      button(s.stealth.active ? "Leave hiding" : "Hide company", () =>
+        toggleStealth(s),
+      ),
       button("Make camp", () => {
         if (openCamp(s)) {
           heldKeys.clear();
@@ -2416,9 +2506,11 @@ function render() {
       button(
         s.ambushReady
           ? "Ambush prepared"
-          : "Prepare ambush · 1 ration / 2 hours",
+          : isHidden(s) && s.stealth.concealment >= 75
+            ? "Ambush ready · Confront a patrol"
+            : "Prepare ambush · 1 ration / 2 hours",
         () => prepareAmbush(s),
-        !!s.ambushReady,
+        !!s.ambushReady || (isHidden(s) && s.stealth.concealment >= 75),
       ),
     );
     if (s.location === 12 && s.campaign.phase === "grain")
@@ -2540,10 +2632,15 @@ function render() {
           );
         a.append(button(`Attack ${p.name}`, () => startBattle(s, p.id)));
         a.lastChild.title =
-          "Fight caravan guards for 60 crowns, up to 10 remaining rations, and available cargo. First attack costs 10 morale and 5 renown, League −12 and Wardens −6; the caravan stops trading.";
+          "Fight caravan guards for 60 crowns, up to 10 remaining rations, and remaining cargo and equipment. First attack costs 10 morale and 5 renown, League −12 and Wardens −6; the caravan stops trading.";
       } else
         a.append(
-          button(`Confront ${p.name}`, () => startBattle(s, p.id), false, true),
+          button(
+            `${isHidden(s) && s.stealth.concealment >= 75 ? "Ambush" : "Confront"} ${p.name}`,
+            () => confrontPatrol(s, p.id),
+            (p.passageUntil || 0) > s.day * 24 + s.timeOfDay,
+            true,
+          ),
         );
     });
     if (s.destination)
@@ -2588,7 +2685,14 @@ function render() {
   }
   updateClockUI();
   renderHelp();
+  positionObjective();
   draw();
+}
+function positionObjective() {
+  $("objective").style.bottom =
+    !s.battle && !s.event && !s.campOpen
+      ? `${$("actions").offsetHeight + (innerWidth <= 700 ? 20 : 26)}px`
+      : "";
 }
 function rect(x, y, w, h, c) {
   ctx.fillStyle = c;
@@ -2837,6 +2941,16 @@ function draw() {
   ctx.drawImage(fogArtwork(s.charted), 0, 0);
   places.forEach((p, i) => {
     if (!s.discovered.includes(i) && s.contract?.target !== i) return;
+    if (s.location === i) {
+      ctx.save();
+      ctx.strokeStyle = "#e5d18b99";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([4, 6]);
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, entryRadius(p), 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
     drawLandmark(ctx, p, i);
     drawMapLabel(ctx, p.name, p.x, p.y + (p.type === "town" ? 58 : 39));
     if (i === 13 && s.travelers.farmRebuilt)
@@ -2878,7 +2992,8 @@ function draw() {
         drawMapLabel(ctx, p.name, p.x, p.y - 37, true);
         return;
       }
-      if (p.kind === "merchant") drawWagon(ctx, p.x - 9, p.y - 8, p.hostile);
+      if (p.kind === "merchant")
+        drawWagon(ctx, p.x - 9, p.y - 8, p.hostile, p.caravanType);
       else
         person(
           p.x - 17,
@@ -2909,6 +3024,7 @@ function draw() {
     rect(goal.x - 1, goal.y - 14, 2, 6, "#e2cd8e");
     rect(goal.x - 1, goal.y + 9, 2, 6, "#e2cd8e");
   }
+  if (s.stealth.active) ctx.globalAlpha = isHidden(s) ? 0.55 : 0.85;
   partyPositions(s)
     .map((point, i) => ({ ...point, i }))
     .filter((p) => !s.party[p.i].dead)
@@ -2931,6 +3047,9 @@ function draw() {
       );
       drawLoadout(ctx, s, s.party[p.i], p.x, p.y);
     });
+  ctx.globalAlpha = 1;
+  if (isHidden(s))
+    drawMapLabel(ctx, "HIDDEN", s.position.x, s.position.y - 35, true);
   if (s.travelers.merrit === "escorting") {
     drawWagon(ctx, s.position.x - 45, s.position.y + 28, false);
     person(s.position.x - 23, s.position.y + 28, "#bc9b65", 0, "", 2);
@@ -3001,6 +3120,10 @@ function updateClockUI() {
     $("resources").append(weather);
   }
   weather.textContent = weatherInfo(s).label;
+  $("hidden-scale").value = s.stealth.concealment;
+  $("hidden-label").textContent =
+    `${isHidden(s) ? "Hidden" : s.stealth.active ? "Concealing" : "Visible"} · ${Math.round(s.stealth.concealment)}%${s.stealth.concealment >= 75 && s.stealth.active ? " · Ambush ready" : ""}`;
+
   const info = clockInfo(s);
   const label = `Day ${s.day} · ${info.time} · ${info.period}`;
   if ($("clock-label").textContent !== label)
@@ -3077,6 +3200,9 @@ function animate(time) {
     !document.hidden
   ) {
     const dayBefore = s.day;
+    const ambushBefore = isHidden(s) && s.stealth.concealment >= 75;
+    advanceStealth(s, seconds, heldKeys.size > 0 || !!s.destination);
+    if (ambushBefore !== (isHidden(s) && s.stealth.concealment >= 75)) render();
     advanceClock(s, seconds * (menuSettings.slowDays ? 0.5 : 1));
     if (dayBefore !== s.day || s.event || companyLost(s)) render();
     updateClockUI();
@@ -3086,6 +3212,7 @@ function animate(time) {
     advancePatrols(s, seconds);
     if (
       s.battle ||
+      s.event ||
       nearbyBefore !==
         nearbyPatrols(s)
           .map((p) => p.id)
@@ -3121,7 +3248,10 @@ function animate(time) {
 }
 requestAnimationFrame(animate);
 
-window.addEventListener("resize", () => draw());
+window.addEventListener("resize", () => {
+  positionObjective();
+  draw();
+});
 
 const walkingKeys = [
   "w",
