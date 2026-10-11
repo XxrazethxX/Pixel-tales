@@ -193,7 +193,7 @@ test("save migration sanitizes new survival fields and retains old company progr
   s.campUpgrades = { tents: 99, forge: -1, infirmary: "yes" };
   s.campOpen = true;
   const loaded = restore(s);
-  assert.equal(loaded.version, 10);
+  assert.equal(loaded.version, 11);
   assert.equal(loaded.gold, 77);
   assert.equal(loaded.timeOfDay, 8);
   assert.equal(loaded.hungerDays, 0);

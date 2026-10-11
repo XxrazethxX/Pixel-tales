@@ -58,7 +58,7 @@ studies.push(
 );
 function fresh() {
   return {
-    version: 10,
+    version: 11,
     inventory: { ore: 0, wood: 0, herbs: 0, medicine: 1, pelts: 0 },
     gear: [],
     nextGearId: 1,
@@ -83,6 +83,10 @@ function fresh() {
     lastConversationDay: -1,
     recruitSerial: 0,
     hiredRecruits: [],
+    cargo: { grain: 0, cloth: 0, salt: 0, iron: 0 },
+    markets: {},
+    reputation: { guild: 0, wardens: 0, freefolk: 0 },
+    stories: {},
     gold: 120,
     food: 24,
     morale: 75,
@@ -134,7 +138,7 @@ function fresh() {
       professionXP: 0,
       professionXPBy: {},
       talent: null,
-      equipment: { weapon: null, armor: null },
+      equipment: { weapon: null, armor: null, shield: null, helmet: null },
     })),
   };
 }
@@ -234,6 +238,7 @@ function startBattle(s, patrolId = null) {
     (!patrol &&
       (!s.contract ||
         s.contract.kind === "delivery" ||
+        (s.contract.kind === "story" && s.contract.phase !== "battle") ||
         s.location !== s.contract.target)) ||
     !s.party.some((p) => p.hp > 0)
   )
@@ -243,6 +248,8 @@ function startBattle(s, patrolId = null) {
     patrol.hostile = true;
     s.morale = Math.max(0, s.morale - 10);
     s.renown = Math.max(0, s.renown - 5);
+    changeReputation(s, "guild", -12);
+    changeReputation(s, "wardens", -6);
     for (const p of livingParty(s))
       if (hasTrait(p, "compassionate")) changeResolve(p, -8);
     note(
@@ -342,14 +349,29 @@ function act(s, id, x, y) {
   if (!b) return false;
   const u = b.units.find((u) => u.id === id),
     p = s.party.find((p) => p.id === id);
-  if (!u || u.acted || p.hp <= 0 || x < 0 || y < 0 || x > 8 || y > 6)
+  if (
+    !u ||
+    (u.acted && !u.safeMove) ||
+    p.hp <= 0 ||
+    !Number.isInteger(x) ||
+    !Number.isInteger(y) ||
+    x < 0 ||
+    y < 0 ||
+    x > 8 ||
+    y > 6
+  )
     return false;
   const d = Math.abs(x - u.x) + Math.abs(y - u.y);
   const e = b.enemies.find((e) => e.hp > 0 && e.x === x && e.y === y);
   if (e) {
-    if (d > attackRange(p)) return false;
+    if (u.acted || d > attackRange(p, false, s)) return false;
     const flank = p.role === "Archer" ? 0 : flankingBonus(s, u, e);
-    const damage = hitEnemy(s, e, attackPower(s, p) + flank);
+    const damage = hitEnemy(
+      s,
+      e,
+      attackPower(s, p) + flank - (d > 1 ? terrainCell(s, e.x, e.y).cover : 0),
+    );
+    equipmentOnHit(s, p, e, true);
     note(
       s,
       `${p.name} strikes for ${damage} damage${flank ? " · flanking +2" : ""}.`,
@@ -363,9 +385,9 @@ function act(s, id, x, y) {
       b.units.some((v) => v.x === x && v.y === y && s.party[v.id].hp > 0)
     )
       return false;
-    u.x = x;
-    u.y = y;
-    u.moved = true;
+    const path = battlePath(s, u, x, y);
+    if (!path) return false;
+    moveCombatUnit(s, u, path);
   }
   if (b.enemies.every((e) => e.hp === 0)) win(s);
   return true;
@@ -388,15 +410,22 @@ function win(s) {
     s.food += 6;
     s.inventory.pelts += 2;
   }
-  if (raid) s.food += 10;
+  if (raid)
+    lootCaravanCargo(
+      s,
+      s.patrols.find((p) => p.id === s.battle.patrolId),
+    );
   s.gold += reward;
   s.knowledge += difficulty.knowledge;
   if (patrolFight) {
     s.skirmishes++;
     const patrol = s.patrols.find((p) => p.id === s.battle.patrolId);
     if (patrol) patrol.cleared = true;
-  } else s.completed++;
-  if (!raid) s.renown += difficulty.renown;
+  } else if (s.contract.kind !== "story") s.completed++;
+  if (!raid) {
+    s.renown += difficulty.renown;
+    changeReputation(s, wildlife ? "freefolk" : "wardens", 1);
+  }
   s.inventory.ore += difficulty.salvage;
   s.inventory.wood += difficulty.salvage;
   growPartyBonds(s, 3, true);
@@ -411,20 +440,29 @@ function win(s) {
   }
   note(
     s,
-    `${wildlife ? "Wolf pack defeated · 6 rations and 2 pelts recovered" : raid ? "Caravan plundered · 10 rations seized" : patrolFight ? "Patrol defeated" : "Contract fulfilled"}. Earned ${reward} crowns, ${difficulty.knowledge} knowledge, and ${difficulty.xp} XP per survivor.`,
+    `${wildlife ? "Wolf pack defeated · 6 rations and 2 pelts recovered" : raid ? "Caravan plundered · remaining provisions and cargo seized" : patrolFight ? "Patrol defeated" : s.contract?.kind === "story" ? "Faction battle won" : "Contract fulfilled"}. Earned ${reward} crowns, ${difficulty.knowledge} knowledge, and ${difficulty.xp} XP per survivor.`,
   );
   if (!wildlife) {
     const lootPool = equipmentCatalog.filter(
       (item) => item.tier === difficulty.tier,
     );
-    const loot = lootPool[(s.completed + s.skirmishes - 1) % lootPool.length];
+    const loot =
+      lootPool[
+        Math.max(
+          0,
+          s.completed +
+            s.skirmishes +
+            (s.contract?.kind === "story" ? 1 : 0) -
+            1,
+        ) % lootPool.length
+      ];
     grantEquipment(s, loot.id);
     note(
       s,
       `Recovered ${loot.rarity.toLowerCase()} ${loot.name}. Open Equipment to assign the loot.`,
     );
   }
-  if (!patrolFight) s.contract = null;
+  if (!patrolFight && !storyBattleWon(s)) s.contract = null;
   s.battle = null;
 }
 function endTurn(s) {
@@ -468,9 +506,11 @@ function endTurn(s) {
       dist = () => Math.abs(t.x - e.x) + Math.abs(t.y - e.y);
     const rooted = (e.root || 0) > 0;
     e.root = Math.max(0, (e.root || 0) - 1);
+    let movement = e.kind === "wolf" ? 2 : 1;
     for (
       let step = 0;
       !rooted &&
+      movement > 0 &&
       step < (e.kind === "wolf" ? 2 : 1) &&
       (dist() > range || (e.kind === "archer" && dist() <= 1));
       step++
@@ -482,6 +522,7 @@ function endTurn(s) {
         [e.x, e.y - 1],
       ].filter(
         ([x, y]) =>
+          terrainCell(s, x, y).cost <= movement &&
           x >= 0 &&
           x <= 8 &&
           y >= 0 &&
@@ -499,42 +540,38 @@ function endTurn(s) {
             (Math.abs(c[0] - t.x) + Math.abs(c[1] - t.y))) *
           (retreat ? -1 : 1),
       );
-      if (options.length) [e.x, e.y] = options[0];
+      if (options.length) {
+        enemyDisengagement(s, e, options[0]);
+        if (e.hp <= 0) break;
+        movement -= terrainCell(s, options[0][0], options[0][1]).cost;
+        [e.x, e.y] = options[0];
+      }
     }
-    if (dist() <= range) {
-      const p = s.party[t.id],
-        aura = b.units.some(
-          (u) =>
-            u.id !== t.id &&
-            u.guard &&
-            s.party[u.id].hp > 0 &&
-            s.party[u.id].talent === "bulwark" &&
-            Math.abs(u.x - t.x) + Math.abs(u.y - t.y) <= 1,
-        )
-          ? 2
-          : 0;
-      const damage = Math.max(
-        1,
+    if (e.hp > 0 && dist() <= range) {
+      const p = s.party[t.id];
+      const power =
         (e.damage || 5) +
-          (e.kind === "archer" ? 0 : flankingBonus(s, e, t, "enemies")) +
-          (e.kind === "wolf" &&
-          b.enemies.some(
-            (ally) =>
-              ally !== e &&
-              ally.kind === "wolf" &&
-              ally.hp > 0 &&
-              Math.abs(ally.x - t.x) + Math.abs(ally.y - t.y) === 1,
-          )
-            ? 1
-            : 0) -
-          (p.role === "Shieldbearer" ? 2 : 0) -
-          armorPower(s, p) -
-          (t.guard ? 2 : 0) -
-          bondProtection(s, t) -
-          aura,
-      );
-      p.hp = Math.max(0, p.hp - damage);
-      p.injury = p.hp < p.max / 2;
+        (e.kind === "archer" ? 0 : flankingBonus(s, e, t, "enemies")) +
+        (e.kind === "wolf" &&
+        b.enemies.some(
+          (ally) =>
+            ally !== e &&
+            ally.kind === "wolf" &&
+            ally.hp > 0 &&
+            Math.abs(ally.x - t.x) + Math.abs(ally.y - t.y) === 1,
+        )
+          ? 1
+          : 0);
+      const damage = damageCompanion(s, t, power, e.kind === "archer");
+      if (
+        p.hp > 0 &&
+        t.guard &&
+        e.kind !== "archer" &&
+        gearPerk(s, p, "riposte")
+      ) {
+        hitEnemy(s, e, 2);
+        note(s, `${p.name} ripostes.`);
+      }
       note(
         s,
         `${p.name} takes ${damage} damage${p.hp === 0 ? " and falls unconscious" : ""}.`,
@@ -547,7 +584,7 @@ function endTurn(s) {
   }
   if (s.party.every((p) => p.hp === 0)) {
     s.battle = null;
-    if (b.kind !== "patrol") s.contract = null;
+    if (b.kind !== "patrol" && s.contract?.kind !== "story") s.contract = null;
     s.gold = Math.max(0, s.gold - 20);
     s.location = 0;
     s.position = { x: places[0].x, y: places[0].y };
@@ -563,6 +600,7 @@ function endTurn(s) {
       "Company defeated. Rescuers bring you to Greyhaven; lost 20 crowns.",
     );
   } else {
+    b.enemies.forEach((e) => (e.reacted = false));
     b.turn++;
     b.valor = Math.min(5, (b.valor ?? 3) + 1);
     b.units.forEach((u) => {
@@ -570,6 +608,8 @@ function endTurn(s) {
       u.moved = false;
       u.guard = false;
       u.cooldown = Math.max(0, (u.cooldown || 0) - 1);
+      u.reacted = false;
+      u.safeMove = false;
     });
   }
   return true;
@@ -579,7 +619,7 @@ function restore(raw) {
   const base = fresh();
   if (
     !raw ||
-    ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10].includes(raw.version) ||
+    ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].includes(raw.version) ||
     !Array.isArray(raw.party) ||
     raw.party.length < 1 ||
     raw.party.length > 6 ||
@@ -605,7 +645,7 @@ function restore(raw) {
   const result = {
     ...base,
     ...raw,
-    version: 10,
+    version: 11,
     inventory: { ...base.inventory, ...raw.inventory },
     explored: raw.explored || [],
     event: raw.event || null,
@@ -671,6 +711,21 @@ function restore(raw) {
             : 0,
           cleared: !!saved.cleared,
           hostile: !!saved.hostile,
+          ...(p.kind === "merchant"
+            ? {
+                foodStock: Number.isInteger(saved.foodStock)
+                  ? Math.max(0, Math.min(30, saved.foodStock))
+                  : 30,
+                cargo: Object.fromEntries(
+                  tradeGoods.map((g) => [
+                    g.id,
+                    Number.isInteger(saved.cargo?.[g.id])
+                      ? Math.max(0, Math.min(20, saved.cargo[g.id]))
+                      : p.cargo[g.id],
+                  ]),
+                ),
+              }
+            : {}),
         }
       : p;
   });
@@ -728,8 +783,8 @@ function restore(raw) {
   const assigned = new Set();
   for (const p of result.party) {
     const saved = p.equipment;
-    p.equipment = { weapon: null, armor: null };
-    for (const slot of ["weapon", "armor"]) {
+    p.equipment = { weapon: null, armor: null, shield: null, helmet: null };
+    for (const slot of equipmentSlots) {
       const item = result.gear.find((item) => item.id === saved?.[slot]);
       const template =
         item &&
@@ -737,7 +792,7 @@ function restore(raw) {
       if (
         template &&
         template.slot === slot &&
-        (!template.role || template.role === p.role) &&
+        canEquipEquipment(result, template, p) &&
         !assigned.has(item.id)
       ) {
         p.equipment[slot] = item.id;
@@ -771,7 +826,7 @@ function restore(raw) {
     p.dead = !!p.dead;
     if (p.dead) {
       p.hp = 0;
-      p.equipment = { weapon: null, armor: null };
+      p.equipment = { weapon: null, armor: null, shield: null, helmet: null };
     }
   }
   result.bonds = {};
@@ -805,6 +860,103 @@ function restore(raw) {
         ),
       ]
     : [];
+  result.cargo = Object.fromEntries(
+    tradeGoods.map((g) => [
+      g.id,
+      Number.isInteger(raw.cargo?.[g.id])
+        ? Math.max(0, Math.min(cargoCapacity, raw.cargo[g.id]))
+        : 0,
+    ]),
+  );
+  let cargoRoom = cargoCapacity;
+  for (const good of tradeGoods) {
+    result.cargo[good.id] = Math.min(result.cargo[good.id], cargoRoom);
+    cargoRoom -= result.cargo[good.id];
+  }
+  result.reputation = Object.fromEntries(
+    factions.map((f) => [
+      f.id,
+      Number.isFinite(raw.reputation?.[f.id])
+        ? Math.max(-30, Math.min(30, Math.floor(raw.reputation[f.id])))
+        : 0,
+    ]),
+  );
+  result.markets = {};
+  for (const id of Object.keys(regionalMarkets)) {
+    const market = raw.markets?.[id];
+    if (
+      market &&
+      Number.isInteger(market.epoch) &&
+      market.epoch >= 0 &&
+      regionalMarkets[id].shortages.includes(market.shortage)
+    )
+      result.markets[id] = {
+        epoch: market.epoch,
+        shortage: market.shortage,
+        demand: Number.isInteger(market.demand)
+          ? Math.max(0, Math.min(8, market.demand))
+          : 8,
+        stock: Object.fromEntries(
+          tradeGoods.map((g) => [
+            g.id,
+            Number.isInteger(market.stock?.[g.id])
+              ? Math.max(0, Math.min(100, market.stock[g.id]))
+              : 0,
+          ]),
+        ),
+      };
+  }
+  result.stories = {};
+  for (const story of regionalStories) {
+    const saved = raw.stories?.[story.id];
+    if (saved && ["active", "completed"].includes(saved.status))
+      result.stories[story.id] = {
+        status: saved.status,
+        branch: story.choices.some((c) => c.id === saved.branch)
+          ? saved.branch
+          : null,
+      };
+  }
+  if (result.contract?.kind === "story") {
+    const c = result.contract,
+      story = regionalStories.find((q) => q.id === c.storyId),
+      progress = story && result.stories[story.id],
+      choice = story?.choices.find((q) => q.id === progress?.branch);
+    if (
+      !story ||
+      progress?.status !== "active" ||
+      !["investigate", "battle", "return"].includes(c.phase) ||
+      (c.phase !== "investigate" && !choice) ||
+      (c.phase === "battle" && !choice?.battle)
+    ) {
+      result.contract = null;
+      result.battle = null;
+      if (progress?.status === "active") delete result.stories[story.id];
+    } else
+      result.contract = {
+        kind: "story",
+        storyId: story.id,
+        name: story.name,
+        issuer: story.issuer,
+        phase: c.phase,
+        target: c.phase === "return" ? story.issuer : story.target,
+        tier: choice?.tier || 1,
+        reward:
+          c.phase === "battle" ? 40 : c.phase === "return" ? choice.reward : 0,
+      };
+  }
+  for (const story of regionalStories)
+    if (
+      result.stories[story.id]?.status === "active" &&
+      result.contract?.storyId !== story.id
+    )
+      delete result.stories[story.id];
+  if (
+    result.event?.kind === "story" &&
+    (result.contract?.storyId !== result.event.storyId ||
+      result.contract.phase !== "investigate")
+  )
+    result.event = null;
   result.campJobs = {};
   for (const role of campRoles) {
     const id = raw.campJobs?.[role.id];
@@ -849,7 +1001,10 @@ function guard(s, id) {
   if (!u || u.acted || s.party[id].hp <= 0) return false;
   u.guard = true;
   u.acted = true;
-  s.battle.valor = Math.min(5, (s.battle.valor ?? 3) + 1);
+  s.battle.valor = Math.min(
+    5,
+    (s.battle.valor ?? 3) + (gearPerk(s, s.party[id], "inspiring") ? 2 : 1),
+  );
   note(s, `${s.party[id].name} braces: incoming damage reduced this round.`);
   return true;
 }
@@ -911,7 +1066,7 @@ function recruit(s, offerId = null) {
     professionXP: 0,
     professionXPBy: {},
     talent: null,
-    equipment: { weapon: null, armor: null },
+    equipment: { weapon: null, armor: null, shield: null, helmet: null },
   };
   for (const other of s.party) delete s.bonds[bondKey(id, other.id)];
   if (vacancy >= 0) s.party[id] = companion;
@@ -1046,7 +1201,7 @@ function explore(s) {
 }
 function forage(s) {
   if (s.battle || s.event || companyLost(s)) return false;
-  s.food += 6;
+  s.food += forageAmount(s);
   const herbalist = professional(s, "Herbalist");
   if (herbalist) {
     s.inventory.herbs += 1 + professionRank(herbalist);
@@ -1054,10 +1209,11 @@ function forage(s) {
   }
   spendHours(s, 6);
   s.morale = Math.max(0, s.morale - 3);
-  note(s, "Gathered 6 rations in six hours.");
+  note(s, `Gathered ${forageAmount(s)} rations in six hours.`);
   return true;
 }
 function resolveEvent(s, choice) {
+  if (s.event?.kind === "story") return chooseStory(s, choice);
   if (s.event?.kind === "camp") {
     if (
       !["search", "leave"].includes(choice) ||
@@ -1236,7 +1392,14 @@ const villageJobs = {
   ],
 };
 function contracts(s) {
-  if (places[s.location]?.type !== "town" || s.battle || s.event) return [];
+  if (
+    places[s.location]?.type !== "town" ||
+    s.battle ||
+    s.event ||
+    s.campOpen ||
+    companyLost(s)
+  )
+    return [];
   return (villageJobs[s.location] || []).map((c) => ({
     ...c,
     issuer: s.location,
@@ -1267,6 +1430,7 @@ function deliver(s) {
   )
     return false;
   s.food -= 5;
+  changeReputation(s, "guild", 2);
   s.gold += s.contract.reward;
   s.knowledge++;
   s.renown += 2;
@@ -1279,28 +1443,20 @@ function deliver(s) {
   return true;
 }
 function buy(s, item) {
-  const offers = {
-      food: [15, 10],
-      ore: [10, 3],
-      herbs: [8, 3],
-      wood: [6, 3],
-      medicine: [12, 1],
-    },
-    o = offers[item];
+  const offer = supplyOffer(s, item);
   if (
-    !o ||
+    !offer ||
     s.battle ||
     s.event ||
-    places[s.location]?.type !== "town" ||
-    s.gold < (s.research.includes("barter") ? Math.ceil(o[0] * 0.8) : o[0])
+    s.campOpen ||
+    companyLost(s) ||
+    s.gold < offer.price
   )
     return false;
-  const price = s.research.includes("barter") ? Math.ceil(o[0] * 0.8) : o[0];
-  if (s.gold < price) return false;
-  s.gold -= price;
-  if (item === "food") s.food += o[1];
-  else s.inventory[item] += o[1];
-  note(s, `Bought ${o[1]} ${item} for ${price} crowns.`);
+  s.gold -= offer.price;
+  if (item === "food") s.food += offer.quantity;
+  else s.inventory[item] += offer.quantity;
+  note(s, `Bought ${offer.quantity} ${item} for ${offer.price} crowns.`);
   return true;
 }
 
@@ -1466,6 +1622,8 @@ function initialPatrols() {
       id: "caravan",
       name: "Copper Road caravan",
       kind: "merchant",
+      cargo: { grain: 4, cloth: 2, salt: 3, iron: 1 },
+      foodStock: 30,
       x: 285,
       y: 355,
       waypoint: 0,
@@ -1603,10 +1761,22 @@ function tradeCaravan(s, id) {
   const p = nearbyPatrols(s).find(
       (p) => p.id === id && p.kind === "merchant" && !p.hostile,
     ),
-    price = s.research.includes("barter") ? 10 : 12;
-  if (!p || s.battle || s.event || s.gold < price) return false;
+    price = Math.ceil(
+      (s.research.includes("barter") ? 10 : 12) *
+        (s.reputation.guild >= 10 ? 0.9 : s.reputation.guild <= -10 ? 1.25 : 1),
+    );
+  if (
+    !p ||
+    s.battle ||
+    s.event ||
+    s.campOpen ||
+    p.foodStock < 10 ||
+    s.gold < price
+  )
+    return false;
   s.gold -= price;
   s.food += 10;
+  p.foodStock -= 10;
   note(s, `Bought 10 rations from ${p.name} for ${price} crowns.`);
   return true;
 }
@@ -1847,7 +2017,7 @@ function learnTalent(s, id, talent) {
   note(s, `${p.name} specializes as ${t.name}.`);
   return true;
 }
-function attackRange(p, skill = false) {
+function attackRange(p, skill = false, s = null) {
   return (
     (skill
       ? classSkills[p.role]?.range || 1
@@ -1855,7 +2025,9 @@ function attackRange(p, skill = false) {
         ? 4
         : p.role === "Spearman"
           ? 2
-          : 1) + (p.talent === "marksman" ? 1 : 0)
+          : 1) +
+    (p.talent === "marksman" ? 1 : 0) +
+    (s && gearPerk(s, p, "reach") ? 1 : 0)
   );
 }
 function movementRange(p) {
@@ -1889,7 +2061,7 @@ function useSkill(s, id, x, y) {
     u.cooldown > 0 ||
     b.valor < skill.cost ||
     !enemy ||
-    Math.abs(x - u.x) + Math.abs(y - u.y) > attackRange(p, true)
+    Math.abs(x - u.x) + Math.abs(y - u.y) > attackRange(p, true, s)
   )
     return false;
   b.valor -= skill.cost;
@@ -1903,7 +2075,16 @@ function useSkill(s, id, x, y) {
       : [enemy];
   victims.forEach((e) => {
     const flank = p.role === "Archer" ? 0 : flankingBonus(s, u, e);
-    const damage = hitEnemy(s, e, attackPower(s, p) + skill.bonus + flank);
+    const damage = hitEnemy(
+      s,
+      e,
+      attackPower(s, p) +
+        skill.bonus +
+        flank -
+        (Math.abs(e.x - u.x) + Math.abs(e.y - u.y) > 1
+          ? terrainCell(s, e.x, e.y).cover
+          : 0),
+    );
     if (p.role === "Shieldbearer") e.stun = p.talent === "stalwart" ? 2 : 1;
     if (p.talent === "pinning") e.root = 2;
     if (p.talent === "reaver" || p.talent === "bloodletter") e.bleed = 2;
@@ -1940,7 +2121,7 @@ function buyGear(s, item, target = 0) {
 
 const salePrices = { ore: 2, wood: 1, herbs: 1, medicine: 4, pelts: 3 };
 function sell(s, item, quantity = 1) {
-  const price = salePrices[item];
+  const price = salePrices[item] ? regionalSalePrice(s, item) : null;
   if (
     !price ||
     !Number.isSafeInteger(quantity) ||
@@ -2037,13 +2218,19 @@ function equippedItem(s, p, slot) {
 }
 function gearOwner(s, id) {
   return (
-    s.party.find(
-      (p) => p.equipment?.weapon === id || p.equipment?.armor === id,
+    s.party.find((p) =>
+      equipmentSlots.some((slot) => p.equipment?.[slot] === id),
     ) || null
   );
 }
 function armorPower(s, p) {
-  return (p.armor || 0) + (equippedItem(s, p, "armor")?.bonus || 0);
+  return (
+    (p.armor || 0) +
+    ["armor", "helmet", "shield"].reduce(
+      (total, slot) => total + (equippedItem(s, p, slot)?.bonus || 0),
+      0,
+    )
+  );
 }
 function grantEquipment(s, templateId) {
   if (!equipmentCatalog.some((item) => item.id === templateId)) return false;
@@ -2060,13 +2247,14 @@ function equipEquipment(s, id, target) {
     p.dead ||
     s.battle ||
     s.event ||
-    (item.role && item.role !== p.role) ||
+    !canEquipEquipment(s, item, p) ||
     p.equipment?.[item.slot] === id
   )
     return false;
   const previous = gearOwner(s, id);
   if (previous) previous.equipment[item.slot] = null;
-  p.equipment ||= { weapon: null, armor: null };
+  p.equipment ||= { weapon: null, armor: null, shield: null, helmet: null };
+  if (item.twoHanded) p.equipment.shield = null;
   p.equipment[item.slot] = id;
   note(
     s,
@@ -2079,7 +2267,7 @@ function unequipEquipment(s, target, slot) {
   if (
     !p ||
     p.dead ||
-    !["weapon", "armor"].includes(slot) ||
+    !equipmentSlots.includes(slot) ||
     !p.equipment?.[slot] ||
     s.battle ||
     s.event
@@ -2091,16 +2279,14 @@ function unequipEquipment(s, target, slot) {
   return true;
 }
 function equipmentPrice(s, item) {
-  return s.research.includes("barter")
-    ? Math.ceil(item.price * 0.8)
-    : item.price;
+  return Math.ceil(item.price * purchaseModifier(s));
 }
 function buyEquipment(s, templateId) {
   const item = equipmentCatalog.find((item) => item.id === templateId);
   if (
     !item ||
     item.tier > 2 ||
-    (item.tier === 2 && s.renown < 5) ||
+    (item.tier === 2 && s.renown < 5 && s.reputation.wardens < 10) ||
     s.battle ||
     s.event ||
     places[s.location]?.type !== "town" ||
@@ -2201,7 +2387,7 @@ function settleDay(s, mealsProvided = false) {
         p.dead = true;
         for (const other of livingParty(s))
           changeResolve(other, bondValue(s, p.id, other.id) >= 25 ? -12 : -6);
-        p.equipment = { weapon: null, armor: null };
+        p.equipment = { weapon: null, armor: null, shield: null, helmet: null };
         for (const role of campRoles)
           if (s.campJobs[role.id] === p.id) delete s.campJobs[role.id];
         note(
@@ -2787,6 +2973,831 @@ function recruitmentOffers(s) {
   ];
   return offers.filter(
     (offer) => offer.standard || !s.hiredRecruits.includes(offer.id),
+  );
+}
+
+// Terrain, movement, and disengagement share the same rules with the canvas UI.
+function battleTerrain(s) {
+  const forest = s.battle?.wildlife || places[s.location]?.type === "forest";
+  return [
+    { x: 3, y: 2, kind: forest ? "brush" : "rubble", cover: 2, cost: 1 },
+    { x: 5, y: 4, kind: forest ? "brush" : "rubble", cover: 2, cost: 1 },
+    { x: 4, y: 0, kind: "rubble", cover: 2, cost: 1 },
+    { x: 4, y: 5, kind: "mud", cover: 0, cost: 2 },
+    { x: 2, y: 6, kind: "mud", cover: 0, cost: 2 },
+  ];
+}
+function terrainCell(s, x, y) {
+  return (
+    battleTerrain(s).find((t) => t.x === x && t.y === y) || {
+      kind: "open",
+      cover: 0,
+      cost: 1,
+    }
+  );
+}
+function battlePath(
+  s,
+  unit,
+  x,
+  y,
+  budget = movementRange(s.party[unit.id]),
+) {
+  if (
+    !s.battle ||
+    !Number.isInteger(x) ||
+    !Number.isInteger(y) ||
+    x < 0 ||
+    x > 8 ||
+    y < 0 ||
+    y > 6
+  )
+    return null;
+  const queue = [{ x: unit.x, y: unit.y, cost: 0, path: [] }],
+    seen = new Map();
+  while (queue.length) {
+    queue.sort((a, b) => a.cost - b.cost);
+    const step = queue.shift(),
+      key = `${step.x}:${step.y}`;
+    if (seen.has(key)) continue;
+    seen.set(key, step.cost);
+    if (step.x === x && step.y === y) return step.path;
+    for (const [nx, ny] of [
+      [step.x + 1, step.y],
+      [step.x - 1, step.y],
+      [step.x, step.y + 1],
+      [step.x, step.y - 1],
+    ]) {
+      const cost = step.cost + terrainCell(s, nx, ny).cost;
+      if (
+        nx < 0 ||
+        nx > 8 ||
+        ny < 0 ||
+        ny > 6 ||
+        cost > budget ||
+        s.battle.enemies.some((e) => e.hp > 0 && e.x === nx && e.y === ny) ||
+        s.battle.units.some(
+          (u) =>
+            u.id !== unit.id &&
+            s.party[u.id].hp > 0 &&
+            u.x === nx &&
+            u.y === ny,
+        )
+      )
+        continue;
+      queue.push({
+        x: nx,
+        y: ny,
+        cost,
+        path: [...step.path, { x: nx, y: ny }],
+      });
+    }
+  }
+  return null;
+}
+function disengageCost(s, id) {
+  const u = s.battle?.units.find((u) => u.id === id);
+  return u && gearPerk(s, s.party[id], "nimble") && !u.freeDisengageUsed
+    ? 0
+    : 1;
+}
+function disengage(s, id) {
+  const u = s.battle?.units.find((u) => u.id === id),
+    cost = disengageCost(s, id);
+  if (!u || u.acted || u.moved || s.party[id].hp <= 0 || s.battle.valor < cost)
+    return false;
+  s.battle.valor -= cost;
+  u.acted = true;
+  u.safeMove = true;
+  if (cost === 0) u.freeDisengageUsed = true;
+  note(
+    s,
+    `${s.party[id].name} disengages safely. Movement remains available; their attack is spent.`,
+  );
+  return true;
+}
+function moveCombatUnit(s, u, path) {
+  const p = s.party[u.id];
+  for (const point of path) {
+    if (!u.safeMove)
+      for (const enemy of s.battle.enemies) {
+        if (
+          enemy.hp <= 0 ||
+          enemy.kind === "archer" ||
+          enemy.stun ||
+          enemy.reacted ||
+          Math.abs(enemy.x - u.x) + Math.abs(enemy.y - u.y) !== 1 ||
+          Math.abs(enemy.x - point.x) + Math.abs(enemy.y - point.y) <= 1
+        )
+          continue;
+        enemy.reacted = true;
+        damageCompanion(s, u, enemy.damage || 5, false);
+        note(s, `${p.name} suffers a disengagement attack.`);
+        if (p.hp === 0) break;
+      }
+    if (p.hp === 0) break;
+    u.x = point.x;
+    u.y = point.y;
+  }
+  u.moved = true;
+  u.safeMove = false;
+}
+function enemyDisengagement(s, enemy, point) {
+  if (enemy.kind === "wolf" && enemy.root) return;
+  for (const u of s.battle.units) {
+    const p = s.party[u.id];
+    if (
+      p.hp <= 0 ||
+      p.role === "Archer" ||
+      u.reacted ||
+      Math.abs(u.x - enemy.x) + Math.abs(u.y - enemy.y) !== 1 ||
+      Math.abs(u.x - point[0]) + Math.abs(u.y - point[1]) <= 1
+    )
+      continue;
+    u.reacted = true;
+    hitEnemy(s, enemy, attackPower(s, p));
+    note(s, `${p.name} strikes a retreating ${enemy.kind}.`);
+    if (enemy.hp <= 0) break;
+  }
+}
+function damageCompanion(s, target, power, ranged = false) {
+  const p = s.party[target.id],
+    aura = s.battle.units.some(
+      (u) =>
+        u.id !== target.id &&
+        u.guard &&
+        s.party[u.id].hp > 0 &&
+        s.party[u.id].talent === "bulwark" &&
+        Math.abs(u.x - target.x) + Math.abs(u.y - target.y) <= 1,
+    )
+      ? 2
+      : 0;
+  const damage = Math.max(
+    1,
+    power -
+      (p.role === "Shieldbearer" ? 2 : 0) -
+      armorPower(s, p) -
+      (target.guard ? 2 + (gearPerk(s, p, "bastion") ? 2 : 0) : 0) -
+      bondProtection(s, target) -
+      aura -
+      (ranged ? terrainCell(s, target.x, target.y).cover : 0),
+  );
+  p.hp = Math.max(0, p.hp - damage);
+  p.injury = p.hp < p.max / 2;
+  return damage;
+}
+function gearPerk(s, p, id) {
+  return equipmentSlots.some((slot) => equippedItem(s, p, slot)?.perk === id);
+}
+const equipmentSlots = ["weapon", "armor", "shield", "helmet"];
+const equipmentPerks = {
+  sweep:
+    "Basic melee attacks also hit one enemy next to the target for half damage.",
+  reach: "Basic attacks and class abilities reach one extra tile.",
+  bleeding: "Basic attacks inflict two turns of bleeding.",
+  bastion: "Bracing reduces incoming damage by two extra points.",
+  nimble:
+    "Your first Disengage in each battle costs no valor; it still spends your action.",
+  inspiring: "Bracing restores two valor instead of one.",
+  riposte:
+    "When braced and hit in melee, counterattack for two damage before enemy armor.",
+};
+equipmentCatalog.push(
+  {
+    id: "greatsword-1",
+    name: "Iron greatsword",
+    role: "Swordswoman",
+    slot: "weapon",
+    tier: 1,
+    rarity: "Common",
+    bonus: 4,
+    price: 58,
+    twoHanded: true,
+  },
+  {
+    id: "greatsword-2",
+    name: "Executioner's blade",
+    role: "Swordswoman",
+    slot: "weapon",
+    tier: 2,
+    rarity: "Fine",
+    bonus: 5,
+    price: 105,
+    twoHanded: true,
+    perk: "sweep",
+  },
+  {
+    id: "pike-2",
+    name: "Long pike",
+    role: "Spearman",
+    slot: "weapon",
+    tier: 2,
+    rarity: "Fine",
+    bonus: 3,
+    price: 85,
+    twoHanded: true,
+    perk: "reach",
+  },
+  {
+    id: "barbed-spear-2",
+    name: "Barbed spear",
+    role: "Spearman",
+    slot: "weapon",
+    tier: 2,
+    rarity: "Fine",
+    bonus: 3,
+    price: 80,
+    perk: "bleeding",
+  },
+  {
+    id: "duelist-sword-2",
+    name: "Duelist sabre",
+    role: "Swordswoman",
+    slot: "weapon",
+    tier: 2,
+    rarity: "Fine",
+    bonus: 3,
+    price: 85,
+    perk: "riposte",
+  },
+  {
+    id: "shield-1",
+    name: "Round shield",
+    slot: "shield",
+    tier: 1,
+    rarity: "Common",
+    bonus: 1,
+    price: 24,
+  },
+  {
+    id: "shield-2",
+    name: "Sentinel shield",
+    slot: "shield",
+    tier: 2,
+    rarity: "Fine",
+    bonus: 2,
+    price: 65,
+    perk: "bastion",
+  },
+  {
+    id: "helmet-1",
+    name: "Iron cap",
+    slot: "helmet",
+    tier: 1,
+    rarity: "Common",
+    bonus: 1,
+    price: 22,
+  },
+  {
+    id: "hood-2",
+    name: "Scout hood",
+    slot: "helmet",
+    tier: 2,
+    rarity: "Fine",
+    bonus: 1,
+    price: 60,
+    perk: "nimble",
+  },
+  {
+    id: "helm-2",
+    name: "Captain's helm",
+    slot: "helmet",
+    tier: 2,
+    rarity: "Fine",
+    bonus: 1,
+    price: 72,
+    perk: "inspiring",
+  },
+);
+function canEquipEquipment(s, item, p) {
+  return !!(
+    item &&
+    p &&
+    !p.dead &&
+    (!item.role || item.role === p.role) &&
+    (item.slot !== "shield" ||
+      (p.role !== "Archer" && !equippedItem(s, p, "weapon")?.twoHanded))
+  );
+}
+function equipmentOnHit(s, p, target, basic = false) {
+  if (target.hp > 0 && basic && gearPerk(s, p, "bleeding")) target.bleed = 2;
+  if (basic && gearPerk(s, p, "sweep")) {
+    const extra = s.battle.enemies.find(
+      (e) =>
+        e !== target &&
+        e.hp > 0 &&
+        Math.abs(e.x - target.x) + Math.abs(e.y - target.y) === 1,
+    );
+    if (extra) {
+      const damage = hitEnemy(
+        s,
+        extra,
+        Math.max(1, Math.floor(attackPower(s, p) / 2)),
+      );
+      note(s, `${p.name}'s sweeping blade hits another enemy for ${damage}.`);
+    }
+  }
+}
+
+// Finite regional stocks make trade routes and shortage relief useful.
+const tradeGoods = [
+  { id: "grain", name: "Grain sacks" },
+  { id: "cloth", name: "Cloth bolts" },
+  { id: "salt", name: "Salt crates" },
+  { id: "iron", name: "Iron ingots" },
+];
+const cargoCapacity = 20;
+const regionalMarkets = {
+  0: {
+    prices: { grain: 6, cloth: 11, salt: 16, iron: 14 },
+    shortages: ["cloth", "salt"],
+    supply: { food: 1, ore: 1, wood: 1, herbs: 1, medicine: 1 },
+  },
+  3: {
+    prices: { grain: 12, cloth: 14, salt: 6, iron: 12 },
+    shortages: ["iron", "grain"],
+    supply: { food: 1.2, ore: 1.2, wood: 1.4, herbs: 0.8, medicine: 1 },
+  },
+  6: {
+    prices: { grain: 18, cloth: 8, salt: 13, iron: 5 },
+    shortages: ["grain", "cloth"],
+    supply: { food: 1.6, ore: 0.7, wood: 1.3, herbs: 1.3, medicine: 1.2 },
+  },
+};
+const factions = [
+  {
+    id: "guild",
+    name: "Caravan League",
+    desc: "At 10 reputation, purchases cost 10% less. Below −10, merchants charge 25% more.",
+  },
+  {
+    id: "wardens",
+    name: "Border Wardens",
+    desc: "At 10 reputation, fine blacksmith equipment is available without a renown requirement.",
+  },
+  {
+    id: "freefolk",
+    name: "Grove Freefolk",
+    desc: "At 10 reputation, foraging yields two extra rations.",
+  },
+];
+function factionStanding(value) {
+  return value >= 10
+    ? "Allied"
+    : value >= 5
+      ? "Recognized"
+      : value <= -10
+        ? "Distrusted"
+        : value < 0
+          ? "Wary"
+          : "Unknown";
+}
+function changeReputation(s, id, amount) {
+  const faction = factions.find((f) => f.id === id);
+  if (!faction) return;
+  s.reputation[id] = Math.max(
+    -30,
+    Math.min(30, (s.reputation[id] || 0) + amount),
+  );
+  note(
+    s,
+    `${faction.name}: ${s.reputation[id]} reputation (${factionStanding(s.reputation[id])}).`,
+  );
+}
+function purchaseModifier(s) {
+  return (
+    (s.research.includes("barter") ? 0.8 : 1) *
+    (s.reputation.guild >= 10 ? 0.9 : s.reputation.guild <= -10 ? 1.25 : 1)
+  );
+}
+function supplyOffer(s, item) {
+  const basics = {
+      food: [15, 10],
+      ore: [10, 3],
+      wood: [6, 3],
+      herbs: [8, 3],
+      medicine: [12, 1],
+    },
+    offer = basics[item],
+    region = regionalMarkets[s.location];
+  return offer && region
+    ? {
+        quantity: offer[1],
+        price: Math.ceil(offer[0] * region.supply[item] * purchaseModifier(s)),
+      }
+    : null;
+}
+function regionalSalePrice(s, item) {
+  return Math.max(
+    1,
+    Math.floor(
+      (salePrices[item] || 0) *
+        (regionalMarkets[s.location]?.supply[item] || 1),
+    ),
+  );
+}
+function marketState(s, location = s.location) {
+  const region = regionalMarkets[location];
+  if (!region) return null;
+  const epoch = Math.floor((s.day - 1) / 3);
+  let market = s.markets[location];
+  if (!market || market.epoch !== epoch) {
+    const shortage = region.shortages[epoch % region.shortages.length];
+    market = {
+      epoch,
+      shortage,
+      demand: 8,
+      stock: Object.fromEntries(
+        tradeGoods.map((g) => [g.id, g.id === shortage ? 2 : 12]),
+      ),
+    };
+    s.markets[location] = market;
+  }
+  return market;
+}
+function cargoLoad(s) {
+  return tradeGoods.reduce((load, g) => load + (s.cargo[g.id] || 0), 0);
+}
+function tradePrice(
+  s,
+  good,
+  side = "buy",
+  location = s.location,
+  demand = null,
+) {
+  const base = regionalMarkets[location]?.prices[good],
+    market = marketState(s, location);
+  if (!base || !market) return null;
+  const shortage =
+    market.shortage === good && (demand === null ? market.demand : demand) > 0;
+  return side === "sell"
+    ? Math.max(1, Math.floor(base * (shortage ? 1.5 : 1) * 0.65))
+    : Math.ceil(base * (shortage ? 1.5 : 1) * purchaseModifier(s));
+}
+function tradeQuote(s, good, quantity, side = "buy") {
+  if (
+    !tradeGoods.some((g) => g.id === good) ||
+    !Number.isSafeInteger(quantity) ||
+    quantity < 1 ||
+    quantity > cargoCapacity ||
+    !["buy", "sell"].includes(side) ||
+    !regionalMarkets[s.location]
+  )
+    return null;
+  const market = marketState(s);
+  if (side === "buy") return tradePrice(s, good) * quantity;
+  return Array.from({ length: quantity }, (_, i) =>
+    tradePrice(s, good, "sell", s.location, Math.max(0, market.demand - i)),
+  ).reduce((sum, p) => sum + p, 0);
+}
+function tradeGoodsAtVillage(s, good, quantity = 1, side = "buy") {
+  const quote = tradeQuote(s, good, quantity, side),
+    market = marketState(s);
+  if (
+    quote === null ||
+    !market ||
+    s.battle ||
+    s.event ||
+    s.campOpen ||
+    companyLost(s)
+  )
+    return false;
+  if (side === "buy") {
+    if (
+      s.gold < quote ||
+      market.stock[good] < quantity ||
+      cargoLoad(s) + quantity > cargoCapacity
+    )
+      return false;
+    s.gold -= quote;
+    s.cargo[good] += quantity;
+    market.stock[good] -= quantity;
+  } else {
+    if (s.cargo[good] < quantity) return false;
+    s.cargo[good] -= quantity;
+    s.gold += quote;
+    market.stock[good] = Math.min(100, market.stock[good] + quantity);
+    if (market.shortage === good && market.demand > 0) {
+      const previous = market.demand;
+      market.demand = Math.max(0, previous - quantity);
+      if (market.demand === 0) {
+        changeReputation(s, "guild", 2);
+        note(s, `${places[s.location].name}'s ${good} shortage was relieved.`);
+      }
+    }
+  }
+  note(
+    s,
+    `${side === "buy" ? "Bought" : "Sold"} ${quantity} ${good} for ${quote} crowns in ${places[s.location].name}.`,
+  );
+  return true;
+}
+function caravanCargoPrice(s, good) {
+  const base = { grain: 9, cloth: 12, salt: 10, iron: 11 }[good];
+  return base ? Math.ceil(base * purchaseModifier(s)) : null;
+}
+function tradeCaravanCargo(s, id, good, quantity = 1) {
+  const p = nearbyPatrols(s).find(
+      (p) => p.id === id && p.kind === "merchant" && !p.hostile,
+    ),
+    unit = caravanCargoPrice(s, good);
+  if (
+    !p ||
+    !unit ||
+    !Number.isSafeInteger(quantity) ||
+    quantity < 1 ||
+    quantity > cargoCapacity ||
+    s.battle ||
+    s.event ||
+    s.campOpen ||
+    companyLost(s) ||
+    p.cargo[good] < quantity ||
+    cargoLoad(s) + quantity > cargoCapacity ||
+    s.gold < unit * quantity
+  )
+    return false;
+  s.gold -= unit * quantity;
+  p.cargo[good] -= quantity;
+  s.cargo[good] += quantity;
+  note(s, `Bought ${quantity} ${good} from ${p.name}.`);
+  return true;
+}
+function lootCaravanCargo(s, p) {
+  if (!p) return;
+  const rations = Math.min(10, p.foodStock);
+  s.food += rations;
+  p.foodStock -= rations;
+  for (const good of tradeGoods) {
+    const recovered = Math.min(p.cargo[good.id], cargoCapacity - cargoLoad(s));
+    if (recovered > 0) {
+      s.cargo[good.id] += recovered;
+      p.cargo[good.id] -= recovered;
+      note(s, `Seized ${recovered} ${good.id} from caravan cargo.`);
+    }
+  }
+}
+function forageAmount(s) {
+  return 6 + (s.reputation.freefolk >= 10 ? 2 : 0);
+}
+
+const regionalStories = [
+  {
+    id: "road",
+    name: "Salt on the road",
+    issuer: 0,
+    target: 2,
+    minRenown: 0,
+    text: "At Old Barrow, refugees and caravan guards both claim a seized shipment. Decide who deserves it.",
+    choices: [
+      {
+        id: "guild",
+        label: "Return the cargo to the League",
+        desc: "Fight the raiders, then return to Greyhaven. League +8, Freefolk −3; 110 crowns and a Sentinel shield.",
+        battle: true,
+        tier: 1,
+        reward: 110,
+        gear: "shield-2",
+        rep: { guild: 8, freefolk: -3 },
+      },
+      {
+        id: "relief",
+        label: "Feed the refugees · 6 rations",
+        desc: "Spend 6 rations and return to Greyhaven peacefully. Freefolk +8, League −3; 55 crowns.",
+        food: 6,
+        reward: 55,
+        rep: { freefolk: 8, guild: -3 },
+      },
+      {
+        id: "seize",
+        label: "Claim the cargo for your company",
+        desc: "Take 4 salt crates if cargo space allows, then return to Greyhaven. League −8, Wardens −4; 85 crowns.",
+        cargo: { salt: 4 },
+        reward: 85,
+        rep: { guild: -8, wardens: -4 },
+      },
+    ],
+  },
+  {
+    id: "grove",
+    name: "Whispering Grove oath",
+    issuer: 3,
+    target: 7,
+    minRenown: 5,
+    requires: "road",
+    text: "Timber merchants want the grove cleared. The Freefolk shelter there and ask you to drive off armed loggers.",
+    choices: [
+      {
+        id: "defend",
+        label: "Defend the grove",
+        desc: "Defeat a dangerous logging band and return to Saltbridge. Freefolk +10, League −2; 120 crowns and a Long pike.",
+        battle: true,
+        tier: 2,
+        reward: 120,
+        gear: "pike-2",
+        rep: { freefolk: 10, guild: -2 },
+      },
+      {
+        id: "timber",
+        label: "Back the timber merchants",
+        desc: "Take 8 wood and return peacefully. Freefolk −8, League +4, Wardens +2; 95 crowns.",
+        wood: 8,
+        reward: 95,
+        rep: { freefolk: -8, guild: 4, wardens: 2 },
+      },
+    ],
+  },
+  {
+    id: "crown",
+    name: "Claim to the Broken Crown",
+    issuer: 6,
+    target: 11,
+    minRenown: 15,
+    requires: "grove",
+    text: "At Broken Crown, the Wardens demand an ancestral seal while displaced families seek recognition. Both sides prepare to fight.",
+    choices: [
+      {
+        id: "wardens",
+        label: "Back the Wardens",
+        desc: "Defeat an elite rebel band and return to Emberfall. Wardens +12, Freefolk −8; 190 crowns and a Captain's helm.",
+        battle: true,
+        tier: 3,
+        reward: 190,
+        gear: "helm-2",
+        rep: { wardens: 12, freefolk: -8 },
+      },
+      {
+        id: "freefolk",
+        label: "Protect the displaced families",
+        desc: "Defeat a dangerous Warden patrol and return to Emberfall. Freefolk +12, Wardens −8; 150 crowns and a Barbed spear.",
+        battle: true,
+        tier: 2,
+        reward: 150,
+        gear: "barbed-spear-2",
+        rep: { freefolk: 12, wardens: -8 },
+      },
+      {
+        id: "peace",
+        label: "Broker peace · 30 crowns",
+        desc: "Requires 5 reputation with both Wardens and Freefolk. Return peacefully; all factions +6; 100 crowns.",
+        gold: 30,
+        peace: true,
+        reward: 100,
+        rep: { guild: 6, wardens: 6, freefolk: 6 },
+      },
+    ],
+  },
+];
+function storyLock(s, story) {
+  if (s.stories[story.id]?.status === "completed") return "Story completed";
+  if (s.stories[story.id]?.status === "active") return "Already accepted";
+  if (story.requires && s.stories[story.requires]?.status !== "completed")
+    return `Complete ${regionalStories.find((q) => q.id === story.requires).name} first`;
+  if (s.renown < story.minRenown) return `${story.minRenown} renown required`;
+  return "";
+}
+function storyOffers(s) {
+  return places[s.location]?.type === "town" &&
+    !s.battle &&
+    !s.event &&
+    !s.campOpen
+    ? regionalStories.filter((q) => q.issuer === s.location)
+    : [];
+}
+function acceptStory(s, id) {
+  const story = storyOffers(s).find((q) => q.id === id);
+  if (!story || storyLock(s, story) || s.contract || companyLost(s))
+    return false;
+  s.stories[id] = { status: "active", branch: null };
+  s.contract = {
+    kind: "story",
+    storyId: id,
+    name: story.name,
+    issuer: story.issuer,
+    target: story.target,
+    phase: "investigate",
+    reward: 0,
+    tier: 1,
+  };
+  note(
+    s,
+    `Accepted regional contract: ${story.name}. Investigate ${places[story.target].name}.`,
+  );
+  return true;
+}
+function storyChoiceLock(s, choice) {
+  if (choice.food && s.food < choice.food)
+    return `Needs ${choice.food} rations`;
+  if (choice.gold && s.gold < choice.gold) return `Needs ${choice.gold} crowns`;
+  if (
+    choice.cargo &&
+    cargoLoad(s) + Object.values(choice.cargo).reduce((a, b) => a + b, 0) >
+      cargoCapacity
+  )
+    return "Not enough cargo space";
+  if (choice.peace && (s.reputation.wardens < 5 || s.reputation.freefolk < 5))
+    return "Needs 5 Warden and Freefolk reputation";
+  return "";
+}
+function interactStory(s) {
+  const c = s.contract,
+    story = regionalStories.find((q) => q.id === c?.storyId);
+  if (
+    !story ||
+    c.kind !== "story" ||
+    s.battle ||
+    s.event ||
+    s.campOpen ||
+    s.location !== c.target ||
+    companyLost(s)
+  )
+    return false;
+  if (c.phase === "return") return finishStory(s, story);
+  if (c.phase !== "investigate") return false;
+  s.destination = null;
+  s.event = {
+    kind: "story",
+    storyId: story.id,
+    title: story.name,
+    text: story.text,
+  };
+  return true;
+}
+function chooseStory(s, id) {
+  const c = s.contract,
+    story = regionalStories.find((q) => q.id === s.event?.storyId),
+    choice = story?.choices.find((q) => q.id === id);
+  if (
+    !story ||
+    !choice ||
+    c?.kind !== "story" ||
+    c.storyId !== story.id ||
+    c.phase !== "investigate" ||
+    s.location !== story.target ||
+    s.battle ||
+    companyLost(s) ||
+    storyChoiceLock(s, choice)
+  )
+    return false;
+  if (choice.food) s.food -= choice.food;
+  if (choice.gold) s.gold -= choice.gold;
+  if (choice.wood) s.inventory.wood += choice.wood;
+  if (choice.cargo)
+    for (const [good, quantity] of Object.entries(choice.cargo))
+      s.cargo[good] += quantity;
+  s.stories[story.id].branch = id;
+  s.event = null;
+  c.phase = choice.battle ? "battle" : "return";
+  c.tier = choice.tier || 1;
+  c.reward = choice.battle ? 40 : choice.reward;
+  c.target = choice.battle ? story.target : story.issuer;
+  note(
+    s,
+    `${story.name}: ${choice.label}. ${choice.battle ? "Fight at the site, then return for your reward." : "Return to the issuing village for your reward."}`,
+  );
+  return true;
+}
+function storyBattleWon(s) {
+  const c = s.contract,
+    story = regionalStories.find((q) => q.id === c?.storyId);
+  if (c?.kind !== "story" || !story) return false;
+  const choice = story.choices.find(
+    (q) => q.id === s.stories[story.id]?.branch,
+  );
+  if (!choice) return false;
+  c.phase = "return";
+  c.target = story.issuer;
+  c.reward = choice.reward;
+  note(
+    s,
+    `${story.name}: the fighting is over. Return to ${places[story.issuer].name} to settle the contract.`,
+  );
+  return true;
+}
+function finishStory(s, story) {
+  const progress = s.stories[story.id],
+    choice = story.choices.find((q) => q.id === progress?.branch);
+  if (!choice || progress.status !== "active" || s.location !== story.issuer)
+    return false;
+  progress.status = "completed";
+  s.gold += choice.reward;
+  s.knowledge += 2;
+  s.renown += 3;
+  s.completed++;
+  for (const [faction, amount] of Object.entries(choice.rep))
+    changeReputation(s, faction, amount);
+  if (choice.gear) grantEquipment(s, choice.gear);
+  note(
+    s,
+    `${story.name} completed: ${choice.label}. Earned ${choice.reward} crowns and 2 knowledge${choice.gear ? ` plus ${equipmentCatalog.find((i) => i.id === choice.gear).name}` : ""}. Your choice is remembered.`,
+  );
+  s.contract = null;
+  return true;
+}
+
+function caravanFoodPrice(s) {
+  return Math.ceil(
+    (s.research.includes("barter") ? 10 : 12) *
+      (s.reputation.guild >= 10 ? 0.9 : s.reputation.guild <= -10 ? 1.25 : 1),
   );
 }
 
@@ -3467,7 +4478,7 @@ function venueArtwork(venue) {
   image.setAttribute("aria-hidden", "true");
   return image;
 }
-function drawBattlefield(c) {
+function drawBattlefield(c, s) {
   pixel(c, 0, 0, 768, 432, "#879064");
   for (let i = 0; i < 360; i++) {
     const x = Math.floor(noise(i, 8) * 768),
@@ -3495,6 +4506,32 @@ function drawBattlefield(c) {
           "#969e70",
         );
       pixel(c, 106 + x * 62, 57 + y * 60, 58, 1, "#899568");
+    }
+  if (s)
+    for (const tile of battleTerrain(s)) {
+      const x = 105 + tile.x * 62,
+        y = tile.y * 60;
+      if (tile.kind === "brush") {
+        for (let i = 0; i < 4; i++)
+          steppedOval(
+            c,
+            x + 5 + i * 11,
+            y + 29 - (i % 2) * 4,
+            17,
+            15,
+            "#7c8d5b",
+          );
+      } else if (tile.kind === "rubble") {
+        for (let i = 0; i < 3; i++)
+          rock(c, x + 15 + i * 13, y + 39 - (i % 2) * 4, i);
+      } else {
+        steppedOval(c, x + 8, y + 22, 42, 22, "#8d8161");
+        pixel(c, x + 17, y + 34, 22, 3, "#a79870");
+      }
+      c.fillStyle = "#5b5c3e";
+      c.font = "8px monospace";
+      c.textAlign = "left";
+      c.fillText(tile.cover ? "COVER 2" : "COST 2", x + 5, y + 54);
     }
   drawTree(c, 41, 50, 0);
   drawTree(c, 65, 94, 2);
@@ -3743,6 +4780,7 @@ function drawCampScene(c, s) {
         ? stations[duty.id]
         : { x: 286 + (i % 3) * 32, y: 280 + Math.floor(i / 3) * 30 };
       drawCharacter(c, point.x, point.y, partyCoats[p.id], 0, p.role, p.id);
+      drawLoadout(c, s, p, point.x, point.y);
       if (duty)
         drawMapLabel(
           c,
@@ -3758,6 +4796,22 @@ function drawCampScene(c, s) {
   pixel(c, 324, 241, 3, 10, "#f1d389");
 }
 
+function drawLoadout(c, s, p, x, y) {
+  if (equippedItem(s, p, "helmet")) {
+    pixel(c, x - 4, y - 15, 9, 5, "#87918b");
+    pixel(c, x - 5, y - 11, 11, 2, "#bdc0a0");
+  }
+  if (equippedItem(s, p, "shield")) {
+    pixel(c, x - 12, y + 1, 8, 11, "#565e50");
+    pixel(c, x - 11, y + 2, 6, 8, "#ac9971");
+    pixel(c, x - 9, y + 5, 2, 2, "#c9c5a3");
+  }
+  if (equippedItem(s, p, "weapon")?.twoHanded) {
+    pixel(c, x + 10, y - 14, 2, 24, "#c5c9ac");
+    pixel(c, x + 7, y + 4, 8, 2, "#7b6844");
+  }
+}
+
 let s = fresh();
 try {
   s = restore(JSON.parse(localStorage.getItem("pixel-tales")));
@@ -3771,7 +4825,8 @@ let drawerOpen = false,
 let tab = "Company",
   selected = 0,
   craftTarget = 0,
-  gearTarget = 0;
+  gearTarget = 0,
+  caravanId = null;
 const $ = (id) => document.getElementById(id),
   canvas = $("map"),
   ctx = canvas.getContext("2d");
@@ -3815,12 +4870,23 @@ function card(title, body) {
 function equipmentCard(item) {
   const c = card(
     item.name,
-    `<p class="gear-quality quality-${item.tier}">${item.rarity} · ${item.role || "All companions"}</p><p>+${item.bonus} ${item.slot === "weapon" ? "attack" : "armor"} when equipped</p>`,
+    `<p class="gear-quality quality-${item.tier}">${item.rarity} · ${item.role || (item.slot === "shield" ? "Melee companions" : "All companions")} · ${item.slot}</p><p>+${item.bonus} ${item.slot === "weapon" ? "attack" : "armor"} when equipped</p>${item.twoHanded ? "<p>Two-handed: returns your shield to stores.</p>" : ""}${item.perk ? `<p class="gear-perk">${equipmentPerks[item.perk]}</p>` : ""}`,
   );
   c.classList.add("gear-card");
   c.dataset.quality = item.tier;
   c.querySelector(".pixel-icon").replaceWith(
-    pixelIcon(item.slot === "armor" ? "shield" : item.id.split("-")[0], 28),
+    pixelIcon(
+      item.slot === "shield" || item.slot === "armor"
+        ? "shield"
+        : item.slot === "helmet"
+          ? "sun"
+          : item.role === "Spearman"
+            ? "spear"
+            : item.id.includes("sword") || item.role === "Swordswoman"
+              ? "sword"
+              : item.id.split("-")[0],
+      28,
+    ),
   );
   return c;
 }
@@ -3831,8 +4897,8 @@ function objective() {
     const p = s.party[selected],
       u = s.battle.units.find((u) => u.id === selected);
     if (abilityMode)
-      return `${classSkills[p.role].name} armed: click an outlined enemy within ${attackRange(p, true)} tiles. ${classSkills[p.role].desc} Costs ${classSkills[p.role].cost} valor.`;
-    return `Valor ${s.battle.valor}/5 · Round ${s.battle.turn} · ${p.name}: ${u?.moved ? "movement used" : `move up to ${movementRange(p)} tiles`} · ${u?.acted ? "action used" : "attack or brace"}. ${resolveLabel(p)} · ${bondSupport(s, p) ? "Trusted support +1 attack · " : ""}${fatigueLabel(p)} · Fatigue ${Math.round(p.fatigue || 0)}/100. Melee flanking +2: place allies on opposite sides of a foe. Wolves rush wounded targets and gain +1 damage when hunting together.`;
+      return `${classSkills[p.role].name} armed: click an outlined enemy within ${attackRange(p, true, s)} tiles. ${classSkills[p.role].desc} Costs ${classSkills[p.role].cost} valor.`;
+    return `Valor ${s.battle.valor}/5 · Round ${s.battle.turn} · ${p.name}: ${u?.moved ? "movement used" : `move up to ${movementRange(p)} tiles`} · ${u?.acted ? "action used" : "attack or brace"}. ${resolveLabel(p)} · ${bondSupport(s, p) ? "Trusted support +1 attack · " : ""}${fatigueLabel(p)} · Fatigue ${Math.round(p.fatigue || 0)}/100. Melee flanking +2: place allies on opposite sides of a foe. Wolves rush wounded targets and gain +1 damage when hunting together. Cover blocks 2 ranged damage; mud costs 2 movement. Disengage before leaving melee reach.`;
   }
   if (s.contract)
     return `Active: ${s.contract.name}. ${s.location === s.contract.target ? "Use the gold button below to complete your objective." : `Travel to ${places[s.contract.target].name} by clicking any point on the map.`}`;
@@ -3958,6 +5024,29 @@ function render() {
       card(
         "Daily upkeep",
         `<p>${livingParty(s).length} living companions require ${campCost(s)} rations and ${dailyWages(s)} crowns per day. ${s.wageDebt ? `${s.wageDebt} crowns are overdue.` : "Wages are up to date."} ${s.hungerDays ? `<strong>STARVING · day ${s.hungerDays}. Find food; hunger damages the company every day.</strong>` : "The company is fed."}</p>`,
+      ),
+    );
+    const politics = card(
+      "Factions & regional tales",
+      "<p>Faction choices change trading terms, equipment access, and wilderness support. Regional story contracts are posted only at village boards.</p>",
+    );
+    for (const faction of factions) {
+      const text = document.createElement("p");
+      text.textContent = `${faction.name} · ${s.reputation[faction.id]} · ${factionStanding(s.reputation[faction.id])}. ${faction.desc}`;
+      politics.append(text);
+    }
+    for (const story of regionalStories)
+      if (s.stories[story.id]) {
+        const text = document.createElement("p"),
+          progress = s.stories[story.id];
+        text.textContent = `${story.name} · ${progress.status}${progress.branch ? ` · ${story.choices.find((c) => c.id === progress.branch)?.label || ""}` : ""}`;
+        politics.append(text);
+      }
+    panel.append(
+      politics,
+      card(
+        "Trade cargo",
+        `<p>${cargoLoad(s)}/${cargoCapacity} capacity · ${tradeGoods.map((g) => `${g.name}: ${s.cargo[g.id]}`).join(" · ")}</p><p>Visit village markets or nearby caravans to trade.</p>`,
       ),
     );
     if (s.wageDebt)
@@ -4115,7 +5204,7 @@ function render() {
     );
     rest.append(
       button("Rest until dawn", () => camp(s), false, true),
-      button("Forage · 6 rations / 6 hours", () => forage(s)),
+      button(`Forage · ${forageAmount(s)} rations / 6 hours`, () => forage(s)),
       button("Open camp workshop", () => {
         tab = "Workshop";
       }),
@@ -4248,10 +5337,10 @@ function render() {
       `${p.name}'s loadout`,
       `<p>ATK ${attackPower(s, p)} · Armor ${armorPower(s, p)}<br>Permanent improvements: weapon +${p.weapon}, armor +${p.armor}</p>`,
     );
-    for (const slot of ["weapon", "armor"]) {
+    for (const slot of equipmentSlots) {
       const item = equippedItem(s, p, slot);
       const line = document.createElement("p");
-      line.textContent = `${slot === "weapon" ? "Weapon" : "Armor"}: ${item?.name || "Company issue"}`;
+      line.textContent = `${slot[0].toUpperCase() + slot.slice(1)}: ${item?.name || "Company issue"}`;
       loadout.append(line);
       if (item)
         loadout.append(
@@ -4278,7 +5367,7 @@ function render() {
       ownership.textContent = owner
         ? `Equipped by ${owner.name}`
         : "In company stores";
-      if (owner?.id !== p.id && (!item.role || item.role === p.role)) {
+      if (owner?.id !== p.id && canEquipEquipment(s, item, p)) {
         const delta = item.bonus - (equippedItem(s, p, item.slot)?.bonus || 0);
         const comparison = document.createElement("p");
         comparison.textContent = `For ${p.name}: ${delta >= 0 ? "+" : ""}${delta} ${item.slot === "weapon" ? "attack" : "armor"} compared with current gear.`;
@@ -4292,7 +5381,7 @@ function render() {
           !!s.battle ||
             !!s.event ||
             owner?.id === p.id ||
-            (item.role && item.role !== p.role),
+            !canEquipEquipment(s, item, p),
           true,
         ),
       );
@@ -4318,7 +5407,7 @@ function render() {
       panel.append(
         card(
           s.contract.name,
-          `<p>Destination: ${places[s.contract.target].name}</p><p>Reward: ${s.contract.reward} crowns</p><span class="badge">ACTIVE · ${s.contract.kind === "delivery" ? "Deliver 5 rations" : `Defeat ${contractDifficulty(s.contract).enemies} enemies`}</span>`,
+          `<p>Destination: ${places[s.contract.target].name}</p><p>Reward: ${s.contract.reward} crowns</p><span class="badge">ACTIVE · ${s.contract.kind === "story" ? `${s.contract.phase === "investigate" ? "Investigate and choose" : s.contract.phase === "return" ? "Return to claim reward" : "Win the faction battle"}` : s.contract.kind === "delivery" ? "Deliver 5 rations" : `Defeat ${contractDifficulty(s.contract).enemies} enemies`}</span>`,
         ),
       );
     else
@@ -4349,6 +5438,29 @@ function render() {
         );
         panel.append(el);
       });
+  }
+  if (tab === "Contracts") {
+    panel.append(
+      card(
+        "Regional stories",
+        "<p>One-time branching contracts connect the regions. Your choices affect factions and unlock the next chapter.</p>",
+      ),
+    );
+    for (const story of storyOffers(s)) {
+      const locked = storyLock(s, story),
+        c = card(
+          story.name,
+          `<p>Investigate ${places[story.target].name}. ${story.text}</p><p>${locked || "Choose a side or seek a peaceful solution. Rewards depend on your decisions."}</p>`,
+        );
+      c.append(
+        button(
+          `Accept ${story.name}`,
+          () => acceptStory(s, story.id),
+          !!locked || !!s.contract,
+        ),
+      );
+      panel.append(c);
+    }
   }
   if (tab === "Research") {
     panel.append(
@@ -4454,6 +5566,14 @@ function render() {
         }),
       );
     if (tab === "Town") {
+      if (
+        s.contract?.kind === "story" &&
+        s.contract.phase === "return" &&
+        s.contract.target === s.location
+      )
+        panel.append(
+          button("Claim story reward", () => interactStory(s), false, true),
+        );
       panel.append(
         card(
           places[s.location].name,
@@ -4501,30 +5621,29 @@ function render() {
     }
     if (tab === "Market") {
       const market = card("Quartermaster", "");
-      [
-        ["food", "10 rations", 15],
-        ["ore", "3 ore", 10],
-        ["wood", "3 wood", 6],
-        ["herbs", "3 herbs", 8],
-        ["medicine", "1 medicine", 12],
-      ].forEach(([id, label, cost]) =>
+      for (const [id, label] of [
+        ["food", "10 rations"],
+        ["ore", "3 ore"],
+        ["wood", "3 wood"],
+        ["herbs", "3 herbs"],
+        ["medicine", "1 medicine"],
+      ]) {
+        const offer = supplyOffer(s, id);
         market.append(
           button(
-            `${label} · ${s.research.includes("barter") ? Math.ceil(cost * 0.8) : cost} crowns`,
+            `${label} · ${offer.price} crowns`,
             () => buy(s, id),
-            s.gold <
-              (s.research.includes("barter") ? Math.ceil(cost * 0.8) : cost) ||
-              !!s.event ||
-              !!s.battle,
+            s.gold < offer.price,
           ),
-        ),
-      );
+        );
+      }
       panel.append(market);
       const resale = card(
         "Sell supplies",
         "<p>Turn surplus loot into crowns. Keep materials needed for crafting.</p>",
       );
-      for (const [item, price] of Object.entries(salePrices)) {
+      for (const item of Object.keys(salePrices)) {
+        const price = regionalSalePrice(s, item);
         const owned = s.inventory[item];
         resale.append(
           button(
@@ -4541,6 +5660,40 @@ function render() {
           );
       }
       panel.append(resale);
+      const stock = marketState(s),
+        marketInfo = card(
+          "Regional trade",
+          `<p>Cargo ${cargoLoad(s)}/${cargoCapacity}. ${stock.demand > 0 ? `Shortage: ${stock.shortage} · ${stock.demand} units still needed. Deliver goods to earn League reputation.` : "The regional shortage has been relieved."} Stocks and demand change every three days. Selling a bulk load quotes each unit as the shortage is filled.</p>`,
+        );
+      panel.append(marketInfo);
+      for (const good of tradeGoods) {
+        const c = card(
+          good.name,
+          `<p>${s.cargo[good.id]} carried · ${stock.stock[good.id]} in stock. Buy ${tradePrice(s, good.id)} / sell ${tradePrice(s, good.id, "sell")} crowns per unit.</p>`,
+        );
+        for (const quantity of [1, 5]) {
+          const cost = tradeQuote(s, good.id, quantity);
+          c.append(
+            button(
+              `Buy ${quantity} ${good.id} · ${cost} crowns`,
+              () => tradeGoodsAtVillage(s, good.id, quantity),
+              s.gold < cost ||
+                stock.stock[good.id] < quantity ||
+                cargoLoad(s) + quantity > cargoCapacity,
+            ),
+          );
+        }
+        if (s.cargo[good.id]) {
+          const quantity = s.cargo[good.id],
+            value = tradeQuote(s, good.id, quantity, "sell");
+          c.append(
+            button(`Sell ${quantity} ${good.id} · ${value} crowns`, () =>
+              tradeGoodsAtVillage(s, good.id, quantity, "sell"),
+            ),
+          );
+        }
+        panel.append(c);
+      }
     }
     if (tab === "Tavern") {
       const inn = card(
@@ -4636,7 +5789,8 @@ function render() {
         button(
           `Buy ${item.name} · ${price} crowns`,
           () => buyEquipment(s, item.id),
-          s.gold < price || (item.tier === 2 && s.renown < 5),
+          s.gold < price ||
+            (item.tier === 2 && s.renown < 5 && s.reputation.wardens < 10),
         ),
       );
       panel.append(c);
@@ -4646,6 +5800,42 @@ function render() {
         tab = "Equipment";
       }),
     );
+  }
+  if (tab === "Caravan") {
+    const caravan = nearbyPatrols(s).find(
+      (p) => p.id === caravanId && p.kind === "merchant" && !p.hostile,
+    );
+    if (caravan) {
+      panel.append(
+        card(
+          caravan.name,
+          `<p>Carried cargo ${cargoLoad(s)}/${cargoCapacity}. Caravan food: ${caravan.foodStock} rations. Cargo purchases reduce its stock; raiding seizes remaining cargo and harms League and Warden reputation.</p>`,
+        ),
+      );
+      for (const good of tradeGoods) {
+        const cost = caravanCargoPrice(s, good.id),
+          c = card(
+            good.name,
+            `<p>${caravan.cargo[good.id]} available · ${s.cargo[good.id]} carried.</p>`,
+          );
+        c.append(
+          button(
+            `Buy caravan ${good.id} · ${cost} crowns`,
+            () => tradeCaravanCargo(s, caravan.id, good.id),
+            s.gold < cost ||
+              caravan.cargo[good.id] < 1 ||
+              cargoLoad(s) >= cargoCapacity,
+          ),
+        );
+        panel.append(c);
+      }
+    } else
+      panel.append(
+        card(
+          "Caravan unavailable",
+          "<p>Approach a friendly caravan to trade its cargo.</p>",
+        ),
+      );
   }
   const a = $("actions");
   a.replaceChildren();
@@ -4675,7 +5865,22 @@ function render() {
   } else if (s.event) {
     const c = card(s.event.title, `<p>${s.event.text}</p>`);
     c.id = "event";
-    if (s.event.kind === "camp")
+    if (s.event.kind === "story") {
+      const story = regionalStories.find((q) => q.id === s.event.storyId);
+      for (const choice of story.choices) {
+        const row = card(choice.label, `<p>${choice.desc}</p>`),
+          locked = storyChoiceLock(s, choice);
+        if (locked) {
+          const hint = document.createElement("p");
+          hint.textContent = locked;
+          row.append(hint);
+        }
+        row.append(
+          button(choice.label, () => chooseStory(s, choice.id), !!locked, true),
+        );
+        c.append(row);
+      }
+    } else if (s.event.kind === "camp")
       c.append(
         button(
           "Search · 2 rations",
@@ -4720,6 +5925,13 @@ function render() {
         },
         false,
         true,
+      ),
+      button(
+        `Disengage · ${disengageCost(s, selected)} valor`,
+        () => disengage(s, selected),
+        s.battle.units.find((u) => u.id === selected)?.acted ||
+          s.battle.units.find((u) => u.id === selected)?.moved ||
+          s.battle.valor < disengageCost(s, selected),
       ),
       button(
         "Brace · reduce damage",
@@ -4771,7 +5983,7 @@ function render() {
           drawerOpen = true;
         }
       }),
-      button("Forage · +6 rations / 6 hours", () => forage(s)),
+      button(`Forage · +${forageAmount(s)} rations / 6 hours`, () => forage(s)),
     );
     if (places[s.location]?.type === "town")
       a.append(
@@ -4808,30 +6020,57 @@ function render() {
             ),
         ),
       );
-    if (s.contract?.target === s.location)
-      a.append(
-        button(
-          s.contract.kind === "delivery"
-            ? "Deliver 5 rations"
-            : "Engage raiders",
-          () => (s.contract.kind === "delivery" ? deliver(s) : startBattle(s)),
-          s.contract.kind === "delivery" && s.food < 5,
-          true,
-        ),
-      );
+    if (s.contract?.target === s.location) {
+      if (s.contract.kind === "story")
+        a.append(
+          button(
+            s.contract.phase === "battle"
+              ? "Fight for your chosen faction"
+              : s.contract.phase === "return"
+                ? "Claim story reward"
+                : `Investigate ${s.contract.name}`,
+            () => {
+              drawerOpen = false;
+              s.contract.phase === "battle" ? startBattle(s) : interactStory(s);
+            },
+            false,
+            true,
+          ),
+        );
+      else
+        a.append(
+          button(
+            s.contract.kind === "delivery"
+              ? "Deliver 5 rations"
+              : "Engage raiders",
+            () =>
+              s.contract.kind === "delivery" ? deliver(s) : startBattle(s),
+            s.contract.kind === "delivery" && s.food < 5,
+            true,
+          ),
+        );
+    }
     nearbyPatrols(s).forEach((p) => {
       if (p.kind === "merchant") {
         if (!p.hostile)
           a.append(
             button(
-              `Trade · 10 rations / ${s.research.includes("barter") ? 10 : 12} crowns`,
+              `Trade · 10 rations / ${caravanFoodPrice(s)} crowns`,
               () => tradeCaravan(s, p.id),
-              s.gold < (s.research.includes("barter") ? 10 : 12),
+              s.gold < caravanFoodPrice(s) || p.foodStock < 10,
             ),
+          );
+        if (!p.hostile)
+          a.append(
+            button("View caravan cargo", () => {
+              caravanId = p.id;
+              tab = "Caravan";
+              drawerOpen = true;
+            }),
           );
         a.append(button(`Attack ${p.name}`, () => startBattle(s, p.id)));
         a.lastChild.title =
-          "Fight caravan guards for 60 crowns and 10 rations. First attack costs 10 morale and 5 renown; the caravan stops trading.";
+          "Fight caravan guards for 60 crowns, up to 10 remaining rations, and available cargo. First attack costs 10 morale and 5 renown, League −12 and Wardens −6; the caravan stops trading.";
       } else
         a.append(
           button(`Confront ${p.name}`, () => startBattle(s, p.id), false, true),
@@ -4925,11 +6164,11 @@ function draw() {
     return;
   }
   if (s.battle) {
-    drawBattlefield(ctx);
+    drawBattlefield(ctx, s);
     const active = s.battle.units.find((u) => u.id === selected);
-    if (active && !active.acted) {
+    if (active && (!active.acted || active.safeMove)) {
       const p = s.party[selected],
-        range = attackRange(p, abilityMode);
+        range = attackRange(p, abilityMode, s);
       for (let y = 0; y < 7; y++)
         for (let x = 0; x < 9; x++) {
           const distance = Math.abs(active.x - x) + Math.abs(active.y - y),
@@ -4940,13 +6179,13 @@ function draw() {
               (u) => s.party[u.id].hp > 0 && u.x === x && u.y === y,
             );
           if (
-            (enemy && distance <= range) ||
+            (enemy && !active.acted && distance <= range) ||
             (!abilityMode &&
               !active.moved &&
               !enemy &&
               !occupied &&
               distance > 0 &&
-              distance <= movementRange(p))
+              battlePath(s, active, x, y) !== null)
           ) {
             ctx.strokeStyle = enemy
               ? abilityMode
@@ -5011,6 +6250,7 @@ function draw() {
           s.party[u.id].role,
           u.id,
         );
+        drawLoadout(ctx, s, s.party[u.id], 136 + u.x * 62, 28 + u.y * 60);
         ctx.font = "bold 9px monospace";
         ctx.textAlign = "center";
         ctx.fillStyle = "#474b33";
@@ -5096,6 +6336,7 @@ function draw() {
           : -2
         : 0;
       person(p.x, p.y, partyCoats[p.i], step, s.party[p.i].role, p.i);
+      drawLoadout(ctx, s, s.party[p.i], p.x, p.y);
     });
   drawLighting(ctx, s, canvas.width, canvas.height);
 }
@@ -5351,6 +6592,11 @@ canvas.addEventListener("pointermove", (event) => {
     ),
     y = Math.floor((view.y + (event.clientY - bounds.top) / view.scale) / 60),
     enemy = s.battle.enemies.find((e) => e.hp > 0 && e.x === x && e.y === y);
+  if (x >= 0 && x < 9 && y >= 0 && y < 7) {
+    const tile = terrainCell(s, x, y);
+    $("map-label").textContent =
+      `${tile.kind} · movement cost ${tile.cost} · ranged cover ${tile.cover}`;
+  }
   if (enemy)
     $("map-label").textContent =
       `${enemy.kind || "raider"} · HP ${enemy.hp}/${enemy.max} · Armor ${enemy.armor || 0} · Range ${enemy.kind === "archer" ? 4 : 1}${enemy.kind === "wolf" ? " · Rush 2 · pack hunter" : enemy.kind === "archer" ? " · Keeps distance" : " · Melee flanking +2"}${enemy.stun ? " · Stunned" : ""}${enemy.bleed ? " · Bleeding" : ""}`;

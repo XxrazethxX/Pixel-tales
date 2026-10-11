@@ -1,5 +1,13 @@
 // Original, hand-built pixel artwork. All coordinates are logical pixels.
-import { WORLD, places, terrainAt, campRoles, campWorker } from "./game.js";
+import {
+  WORLD,
+  places,
+  terrainAt,
+  campRoles,
+  campWorker,
+  battleTerrain,
+  equippedItem,
+} from "./game.js";
 export const artPalette = {
   meadow: "#a3a775",
   grass: "#8c9867",
@@ -676,7 +684,7 @@ export function venueArtwork(venue) {
   image.setAttribute("aria-hidden", "true");
   return image;
 }
-export function drawBattlefield(c) {
+export function drawBattlefield(c, s) {
   pixel(c, 0, 0, 768, 432, "#879064");
   for (let i = 0; i < 360; i++) {
     const x = Math.floor(noise(i, 8) * 768),
@@ -704,6 +712,32 @@ export function drawBattlefield(c) {
           "#969e70",
         );
       pixel(c, 106 + x * 62, 57 + y * 60, 58, 1, "#899568");
+    }
+  if (s)
+    for (const tile of battleTerrain(s)) {
+      const x = 105 + tile.x * 62,
+        y = tile.y * 60;
+      if (tile.kind === "brush") {
+        for (let i = 0; i < 4; i++)
+          steppedOval(
+            c,
+            x + 5 + i * 11,
+            y + 29 - (i % 2) * 4,
+            17,
+            15,
+            "#7c8d5b",
+          );
+      } else if (tile.kind === "rubble") {
+        for (let i = 0; i < 3; i++)
+          rock(c, x + 15 + i * 13, y + 39 - (i % 2) * 4, i);
+      } else {
+        steppedOval(c, x + 8, y + 22, 42, 22, "#8d8161");
+        pixel(c, x + 17, y + 34, 22, 3, "#a79870");
+      }
+      c.fillStyle = "#5b5c3e";
+      c.font = "8px monospace";
+      c.textAlign = "left";
+      c.fillText(tile.cover ? "COVER 2" : "COST 2", x + 5, y + 54);
     }
   drawTree(c, 41, 50, 0);
   drawTree(c, 65, 94, 2);
@@ -952,6 +986,7 @@ export function drawCampScene(c, s) {
         ? stations[duty.id]
         : { x: 286 + (i % 3) * 32, y: 280 + Math.floor(i / 3) * 30 };
       drawCharacter(c, point.x, point.y, partyCoats[p.id], 0, p.role, p.id);
+      drawLoadout(c, s, p, point.x, point.y);
       if (duty)
         drawMapLabel(
           c,
@@ -965,4 +1000,20 @@ export function drawCampScene(c, s) {
   pixel(c, 319, 240, 11, 13, "#c8773d");
   pixel(c, 322, 236, 6, 15, "#e5aa54");
   pixel(c, 324, 241, 3, 10, "#f1d389");
+}
+
+export function drawLoadout(c, s, p, x, y) {
+  if (equippedItem(s, p, "helmet")) {
+    pixel(c, x - 4, y - 15, 9, 5, "#87918b");
+    pixel(c, x - 5, y - 11, 11, 2, "#bdc0a0");
+  }
+  if (equippedItem(s, p, "shield")) {
+    pixel(c, x - 12, y + 1, 8, 11, "#565e50");
+    pixel(c, x - 11, y + 2, 6, 8, "#ac9971");
+    pixel(c, x - 9, y + 5, 2, 2, "#c9c5a3");
+  }
+  if (equippedItem(s, p, "weapon")?.twoHanded) {
+    pixel(c, x + 10, y - 14, 2, 24, "#c5c9ac");
+    pixel(c, x + 7, y + 4, 8, 2, "#7b6844");
+  }
 }

@@ -69,7 +69,11 @@ try {
   assert.equal(saved.inventory.ore, 2);
   assert.equal(saved.inventory.herbs, 8);
   assert.equal(saved.preparedValor, 1);
-  assert.equal(Math.round(saved.party[0].fatigue), 42);
+  const expectedFatigue = Math.max(
+    0,
+    before.party[0].fatigue - ((8 - before.timeOfDay + 24) % 24 || 24) * 3,
+  );
+  assert.ok(Math.abs(saved.party[0].fatigue - expectedFatigue) < 1e-6);
   assert.equal(saved.party[0].professionXP, 2);
   await click("View camp");
   await page.screenshot({ path: "/tmp/pixel-staffed-camp.png" });
@@ -88,7 +92,11 @@ try {
   await page.reload();
   saved = await state();
   assert.equal(saved.campJobs.cook, 3);
-  assert.equal(Math.round(saved.party[0].fatigue), 42);
+  assert.ok(
+    Math.abs(
+      saved.party[0].fatigue - expectedFatigue - (saved.timeOfDay - 8) * 2,
+    ) < 1e-6,
+  );
   await click("Make camp");
   assert.equal(
     await page.getByLabel("Camp cook", { exact: true }).inputValue(),
@@ -96,7 +104,9 @@ try {
   );
   await click("Company");
   assert.ok(
-    (await page.locator("#panel").textContent()).includes("Fatigue 42/100"),
+    (await page.locator("#panel").textContent()).includes(
+      `Fatigue ${Math.round((await state()).party[0].fatigue)}/100`,
+    ),
   );
   const battle = fresh();
   battle.location = 1;
