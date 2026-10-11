@@ -1,4 +1,43 @@
 import {
+  tacticalMissions,
+  missionLock,
+  acceptMission,
+  abandonMission,
+  startMission,
+  missionObjective,
+  missionActionLock,
+  missionAction,
+  careerPaths,
+  careersFor,
+  activeCareer,
+  careerLock,
+  learnCareer,
+  careerActionLock,
+  careerAction,
+  observationTrails,
+  visibleClues,
+  observeClues,
+  interpretClueLock,
+  interpretClue,
+  followObservation,
+  conversationLock,
+  respondConversation,
+  upkeepForecast,
+  homeUpgrades,
+  homeLock,
+  purchaseHome,
+  enterHome,
+  homeWorker,
+  assignHomeJob,
+  upgradeHome,
+  reserveCapacity,
+  reserveLoad,
+  transferHome,
+  restAtHome,
+  harvestHome,
+  homeRepair,
+  homeCraft,
+  recoverMagicAtHome,
   fantasyStrongholds,
   realmHold,
   fantasyHoldLock,
@@ -270,6 +309,7 @@ import {
   chestPreview,
   drawSiteInterior,
   drawDungeonInterior,
+  drawCompanyHome,
   drawFarmInterior,
   drawLighting,
   drawLoadout,
@@ -401,11 +441,16 @@ function objective() {
   if (s.battle) {
     const p = s.party[selected],
       u = s.battle.units.find((u) => u.id === selected);
+    if (missionObjective(s)) return missionObjective(s);
     if (spellMode)
       return `Spell prepared: ${spellBook.find((v) => v.id === spellMode)?.name}. Select an outlined target or use Spell targets below. Slots persist between battles.`;
     if (abilityMode)
       return `${skillFor(p).name} armed: click an outlined enemy within ${attackRange(p, true, s)} tiles. ${skillFor(p).desc} Costs ${skillFor(p).cost} valor.`;
     return `${s.battle.openingAmbush ? "AMBUSH · Free opening turn · " : ""}${battlefield(s).name} · Round ${s.battle.turn} · Valor ${s.battle.valor}/5 · ${p.name}: ${u?.moved ? "movement used" : `move up to ${movementRange(p)} tiles`}, ${u?.acted ? "action used" : "attack or brace"}. ${resolveLabel(p)} · ${fatigueLabel(p)} · Fatigue ${Math.round(p.fatigue || 0)}/100. ${bondSupport(s, p) ? "Trusted support +1 attack. " : ""}${battlefield(s).text} Rubble blocks 2 ranged damage; bushes block 1 and cost 2 movement; trees and deadfall block movement and sight; Melee flanking +2. Disengage before leaving melee reach.${s.battle.wildlife ? " Wolves rush wounded targets and gain pack damage." : ""}${s.battle.bossId ? ` ${namedAdversaries.find((boss) => boss.id === s.battle.bossId).name}: ${bossThreat(s) ? "FIRE INCOMING: move off marked tiles or stun Maela." : "Hover the named enemy for its special mechanic."}` : ""}`;
+  }
+  if (s.expedition.mission) {
+    const m = tacticalMissions.find((v) => v.id === s.expedition.mission);
+    return `${m.name}: travel to ${places[m.site].name}. ${m.desc}`;
   }
   if (s.contract)
     return `Active: ${s.contract.name}. ${s.location === s.contract.target ? "Use the gold button below to complete your objective." : `Travel to ${places[s.contract.target].name} by clicking any point on the map.`}`;
@@ -661,6 +706,7 @@ function render() {
   const panel = $("panel");
   panel.replaceChildren();
   if (tab === "Company") {
+    appendExpeditionCompany(panel);
     appendRealmCompany(panel);
     appendTravelJobs(panel);
     appendWagonPanel(panel);
@@ -1364,6 +1410,7 @@ function render() {
     panel.append(chapter);
   }
   if (tab === "Contracts") {
+    appendMissionBoard(panel);
     if (s.caravanEscort) appendEscortPanel(panel);
     for (const route of caravanEscortOffers(s)) {
       const p = s.patrols.find((p) => p.id === route.patrolId);
@@ -2072,7 +2119,24 @@ function render() {
     const raided =
       s.event.kind === "caravan-raid" &&
       s.patrols.find((p) => p.id === s.event.patrolId);
-    if (s.event.kind === "wagon-travel") {
+    if (s.event.kind === "home") {
+      appendHomePanel(c);
+    } else if (s.event.kind === "travel-conversation") {
+      for (const [choice, label] of [
+        ["meal", "Share a meal · 2 rations"],
+        ["listen", "Listen and share the burden"],
+        ["pay", "Settle overdue wages"],
+        ["promise", "Promise payment by dawn"],
+        ["dismiss", "Dismiss their concerns"],
+      ])
+        c.append(
+          lockedButton(
+            label,
+            () => respondConversation(s, choice),
+            conversationLock(s, choice),
+          ),
+        );
+    } else if (s.event.kind === "wagon-travel") {
       for (const [choice, label] of [
         ["duty", "Use assigned travel specialist"],
         ["materials", "Secure wagon · 2 wood / 1 hour"],
@@ -2474,6 +2538,8 @@ function render() {
       ),
       button("Retreat · lose 15 crowns", () => retreatBattle(s)),
     );
+    appendMissionCombat(a);
+    appendCareerCombat(a);
     const actor = s.party[selected],
       unit = s.battle.units.find((u) => u.id === selected),
       skill = skillFor(actor);
@@ -2873,6 +2939,7 @@ function render() {
     $("map-label").textContent =
       `${places[s.location]?.name || terrainAt(s.position).toUpperCase()} · ${Math.round(s.position.x)}, ${Math.round(s.position.y)}`;
   }
+  appendExpeditionWorld(a);
   appendRealmWorldActions(a);
   const rumorJournal = $("rumor-journal");
   rumorJournal.replaceChildren();
@@ -2912,6 +2979,7 @@ function render() {
   }
   updateClockUI();
   renderHelp();
+  appendActionRequirements();
   positionObjective();
   draw();
 }
@@ -2967,7 +3035,7 @@ function draw() {
     view.x = 325 - w / view.scale / 2;
     view.y = 225 - Math.max(160, h - 180) / view.scale / 2;
   }
-  if (["site", "dungeon", "farm"].includes(s.event?.kind)) {
+  if (["site", "dungeon", "farm", "home"].includes(s.event?.kind)) {
     view.scale = Math.min(w / 768, Math.max(160, h - 160) / 432);
     view.x = (768 - w / view.scale) / 2;
     view.y = (432 - Math.max(160, h - 160) / view.scale) / 2;
@@ -2981,6 +3049,7 @@ function draw() {
     );
     if (s.event.kind === "dungeon") drawDungeonInterior(ctx, s);
     else if (s.event.kind === "farm") drawFarmInterior(ctx, s);
+    else if (s.event.kind === "home") drawCompanyHome(ctx, s);
     else drawSiteInterior(ctx, s);
     return;
   }
@@ -3009,6 +3078,7 @@ function draw() {
   if (s.battle) {
     drawBattlefield(ctx, s);
     drawRealmMagic();
+    drawMissionObjective();
     const threat = bossThreat(s);
     if (threat)
       for (const tile of threat.tiles) {
@@ -3210,6 +3280,7 @@ function draw() {
   }
   ctx.drawImage(worldArtwork(), 0, 0);
   ctx.drawImage(fogArtwork(s.charted), 0, 0);
+  drawObservationClues();
   places.forEach((p, i) => {
     if (!s.discovered.includes(i) && s.contract?.target !== i) return;
     if (s.location === i) {
@@ -4525,4 +4596,539 @@ function drawRealmMagic() {
   }
   for (const focus of s.battle.realmMagic?.concentration || [])
     drawMapLabel(ctx, "BEACON", 136 + focus.x * 62, 12 + focus.y * 60, true);
+}
+
+function lockedButton(label, fn, reason) {
+  const wrap = document.createElement("div"),
+    b = button(label, fn, !!reason);
+  b.title = reason || "";
+  wrap.append(b);
+  if (reason) {
+    const p = document.createElement("small");
+    p.className = "hint";
+    p.textContent = reason;
+    wrap.append(p);
+  }
+  return wrap;
+}
+function fold(title) {
+  const d = document.createElement("details"),
+    s = document.createElement("summary");
+  s.textContent = title;
+  d.append(s);
+  return d;
+}
+function appendExpeditionCompany(panel) {
+  const f = upkeepForecast(s),
+    cost = card("Company outlook", "");
+  const p = document.createElement("p");
+  p.textContent = `Daily cost: ${f.food} rations and ${f.wages} crowns. Supplies cover ${f.foodDays} days; available crowns cover ${f.paidDays} days after wage debt. Next upkeep in ${Math.ceil(f.hoursToDawn)} game hours. Travel days last five real minutes while active; menus and encounters pause time.`;
+  cost.append(p);
+  panel.append(cost);
+  const careers = fold("Class careers · permanent progression");
+  for (const companion of livingParty(s)) {
+    const c = card(
+      `${companion.name} · ${activeCareer(companion)?.name || "Choose a career"}`,
+      "",
+    );
+    const desc = document.createElement("p");
+    desc.textContent =
+      "Level two and one training point. Choose one permanent path; Thief paths require the Thief profession to operate.";
+    c.append(desc);
+    for (const path of careersFor(companion)) {
+      const text = document.createElement("p");
+      text.textContent = `${path.name}: ${path.desc}`;
+      c.append(
+        text,
+        lockedButton(
+          `Learn ${path.name}: ${companion.name}`,
+          () => learnCareer(s, companion.id, path.id),
+          careerLock(s, companion.id, path.id),
+        ),
+      );
+    }
+    careers.append(c);
+  }
+  panel.append(careers);
+  const trails = fold("Observed trails · follow the evidence");
+  for (const t of observationTrails) {
+    const st = s.expedition.clues[t.id];
+    if (!st) continue;
+    const c = card(t.name, "");
+    const text = document.createElement("p");
+    text.textContent = `${st.stage}/3 clues understood. ${st.stage ? t.clues[st.stage - 1] : "A sign has been spotted, but its meaning is unclear."}`;
+    c.append(
+      text,
+      button(
+        `Follow ${t.name}`,
+        () => {
+          if (followObservation(s, t.id)) drawerOpen = false;
+        },
+        !!s.battle || !!s.event || s.campOpen,
+      ),
+    );
+    trails.append(c);
+  }
+  panel.append(trails);
+  const home = fold("Company home · permanent investment"),
+    h = s.expedition.home;
+  const text = document.createElement("p");
+  text.textContent = h.owned
+    ? `Wayfarer ${h.style === "farm" ? "Farm" : "Lodge"}: ${reserveLoad(s)}/${reserveCapacity(s)} stored reserves. Visit to build stations, rest, and craft.`
+    : "An abandoned property stands southeast of Echo Cavern. Purchase it for 320 crowns and ten wood; choose a lodge or farm. The wagon remains your traveling camp.";
+  home.append(
+    text,
+    button(
+      "Travel to Wayfarer Lodge",
+      () => {
+        moveTo(s, places[15].x, places[15].y);
+        drawerOpen = false;
+      },
+      !!s.battle || !!s.event || s.campOpen,
+    ),
+  );
+  panel.append(home);
+  const bonds = fold("Travel relationships");
+  const info = document.createElement("p");
+  info.textContent =
+    "Long journeys prompt conversations. Shared meals build trust; dismissal creates rivals. Protective and healing career techniques can be refused between rivals. Promised wages must be settled by the next dawn.";
+  bonds.append(info);
+  if (s.expedition.promise) {
+    const promise = document.createElement("p");
+    promise.textContent = `Outstanding promise: pay wage debt by day ${s.expedition.promise.due}.`;
+    bonds.append(promise);
+  }
+  panel.append(bonds);
+}
+function appendMissionBoard(panel) {
+  const d = fold("Tactical missions · varied battle objectives");
+  for (const m of tacticalMissions.filter((v) => v.issuer === s.location)) {
+    const c = card(m.name, "");
+    const p = document.createElement("p");
+    p.textContent = `${places[m.site].name} · ${m.reward} crowns. ${m.desc}`;
+    c.append(
+      p,
+      lockedButton(
+        `Accept mission: ${m.name}`,
+        () => acceptMission(s, m.id),
+        missionLock(s, m.id),
+      ),
+    );
+    d.append(c);
+  }
+  panel.append(d);
+  if (s.expedition.mission) {
+    const m = tacticalMissions.find((v) => v.id === s.expedition.mission);
+    panel.append(
+      card(`Active mission: ${m.name}`, `<p>${m.desc}</p>`),
+      button("Abandon tactical mission", () => abandonMission(s)),
+    );
+  }
+}
+function appendExpeditionWorld(a) {
+  if (s.battle || s.event || s.campOpen || companyLost(s)) return;
+  observeClues(s);
+  for (const clue of visibleClues(s).filter(
+    (v) => Math.hypot(v.x - s.position.x, v.y - s.position.y) <= 55,
+  ))
+    a.append(
+      lockedButton(
+        `Read ${clue.name}`,
+        () => interpretClue(s, clue.id),
+        interpretClueLock(s, clue.id),
+      ),
+    );
+  if (s.location === 15) {
+    if (s.expedition.home.owned)
+      a.append(
+        lockedButton("Enter company home", () => enterHome(s), homeLock(s)),
+      );
+    else {
+      const d = fold("Purchase Wayfarer property");
+      for (const style of ["lodge", "farm"])
+        d.append(
+          lockedButton(
+            `Buy ${style} · 320 crowns / 10 wood`,
+            () => purchaseHome(s, style),
+            homeLock(s, "buy"),
+          ),
+        );
+      a.append(d);
+    }
+  }
+  const m = tacticalMissions.find((v) => v.id === s.expedition.mission);
+  if (m && s.location === m.site)
+    a.append(
+      lockedButton(
+        `Begin mission: ${m.name}`,
+        () => startMission(s),
+        missionLock(s, m.id, "start"),
+      ),
+    );
+}
+function appendMissionCombat(a) {
+  const o = s.battle?.objective;
+  if (!o) return;
+  const d = fold(`Objective · ${missionObjective(s)}`);
+  d.open = true;
+  if (o.kind === "rescue")
+    d.append(
+      lockedButton(
+        o.rescuer === null ? "Free captive" : "Extract captive",
+        () =>
+          missionAction(s, selected, o.rescuer === null ? "free" : "extract"),
+        missionActionLock(s, selected, o.rescuer === null ? "free" : "extract"),
+      ),
+    );
+  if (o.kind === "rescue" && o.rescuer !== null && s.party[o.rescuer]?.hp <= 0)
+    d.append(
+      lockedButton(
+        "Take over captive escort",
+        () => missionAction(s, selected, "carry"),
+        missionActionLock(s, selected, "carry"),
+      ),
+    );
+  if (o.kind === "escape")
+    d.append(
+      lockedButton(
+        "Withdraw together",
+        () => missionAction(s, selected, "escape"),
+        missionActionLock(s, selected, "escape"),
+      ),
+    );
+  if (o.kind === "ritual")
+    for (let i = 0; i < 3; i++)
+      d.append(
+        lockedButton(
+          `Disrupt ritual seal ${i + 1}`,
+          () => missionAction(s, selected, "sigil", i),
+          missionActionLock(s, selected, "sigil", i),
+        ),
+      );
+  a.append(d);
+}
+function appendCareerCombat(a) {
+  const path = activeCareer(s.party[selected]);
+  if (!path) return;
+  const d = fold(`Class technique · ${path.name}`),
+    hint = document.createElement("p");
+  hint.textContent = path.desc;
+  d.append(hint);
+  const enemyPaths = [
+      "shadow",
+      "saboteur",
+      "tracker",
+      "controller",
+      "hexer",
+      "avenger",
+    ],
+    allyPaths = ["protector", "mentor"];
+  const targets = enemyPaths.includes(path.id)
+    ? s.battle.enemies
+        .filter((e) => e.hp > 0)
+        .map((e) => ({ id: e.id, name: e.name || e.kind }))
+    : allyPaths.includes(path.id)
+      ? s.battle.units
+          .filter((u) => u.id !== selected && s.party[u.id].hp > 0)
+          .map((u) => ({ id: u.id, name: s.party[u.id].name }))
+      : [{ id: null, name: "company" }];
+  for (const target of targets)
+    d.append(
+      lockedButton(
+        `Use ${path.name} on ${target.name}`,
+        () => careerAction(s, selected, target.id),
+        careerActionLock(s, selected, target.id),
+      ),
+    );
+  a.append(d);
+}
+let reserveResource = "food";
+function appendHomePanel(c) {
+  const h = s.expedition.home,
+    stores = document.createElement("p");
+  stores.textContent = `${h.style === "farm" ? "Farm" : "Lodge"} reserves ${reserveLoad(s)}/${reserveCapacity(s)}: ${Object.entries(
+    h.stores,
+  )
+    .map(([k, v]) => `${k} ${v}`)
+    .join(" · ")}`;
+  c.append(stores);
+  const reserve = fold("Store and withdraw supplies"),
+    select = document.createElement("select");
+  select.setAttribute("aria-label", "Home reserve resource");
+  for (const key of Object.keys(h.stores)) select.add(new Option(key, key));
+  select.value = reserveResource;
+  select.onchange = () => {
+    reserveResource = select.value;
+    render();
+  };
+  reserve.append(select);
+  const carried =
+    reserveResource === "food"
+      ? s
+      : tradeGoods.some((g) => g.id === reserveResource)
+        ? s.cargo
+        : s.inventory;
+  for (const amount of [1, 5])
+    for (const direction of ["deposit", "withdraw"])
+      reserve.append(
+        lockedButton(
+          `${direction === "deposit" ? "Store" : "Withdraw"} ${amount} ${reserveResource}`,
+          () => transferHome(s, reserveResource, amount, direction),
+          direction === "deposit"
+            ? carried[reserveResource] < amount
+              ? "Not enough carried supplies."
+              : reserveLoad(s) + amount > reserveCapacity(s)
+                ? "Make room in home reserves."
+                : ""
+            : h.stores[reserveResource] < amount
+              ? "Not enough supplies in home reserves."
+              : carried === s.cargo &&
+                  cargoLoad(s) + amount > companyCargoCapacity(s)
+                ? "Make room in company cargo."
+                : "",
+        ),
+      );
+  c.append(reserve);
+  c.append(
+    lockedButton(
+      "Rest at home · 12 hours",
+      () => restAtHome(s),
+      s.food + h.stores.food < Math.max(2, Math.ceil(campCost(s) / 2))
+        ? "Not enough rations in company or home stores."
+        : "",
+    ),
+    lockedButton(
+      "Harvest kitchen garden",
+      () => harvestHome(s),
+      !h.upgrades.garden
+        ? "Build a kitchen garden first."
+        : s.day - h.harvestDay < 3
+          ? `Ready on day ${h.harvestDay + 3}.`
+          : reserveLoad(s) + (h.style === "farm" ? 8 : 6) > reserveCapacity(s)
+            ? "Make room in home reserves."
+            : "",
+    ),
+  );
+  const upgrades = fold("Improve the property");
+  for (const item of homeUpgrades) {
+    const p = document.createElement("p");
+    p.textContent = item.desc;
+    upgrades.append(
+      p,
+      lockedButton(
+        `Build ${item.name} · ${item.gold} crowns / ${item.wood} wood / ${item.ore} ore`,
+        () => upgradeHome(s, item.id),
+        h.upgrades[item.id]
+          ? "Already built."
+          : s.gold < item.gold ||
+              s.inventory.wood < item.wood ||
+              s.inventory.ore < item.ore
+            ? "Gather the listed crowns and materials."
+            : "",
+      ),
+    );
+  }
+  c.append(upgrades);
+  const stations = fold("Home stations · assign operators");
+  for (const [role, label] of [
+    ["smith", "Home smith"],
+    ["medic", "Home medic"],
+  ]) {
+    const select = document.createElement("select");
+    select.setAttribute("aria-label", label);
+    select.add(new Option("Unassigned", ""));
+    for (const p of livingParty(s))
+      if (p.profession === (role === "smith" ? "Smith" : "Herbalist"))
+        select.add(new Option(p.name, p.id));
+    select.value = h.staff[role] ?? "";
+    select.onchange = () => {
+      assignHomeJob(s, role, select.value === "" ? null : Number(select.value));
+      render();
+    };
+    const p = document.createElement("p");
+    p.textContent = label;
+    stations.append(p, select);
+  }
+  for (const gear of s.gear.filter((g) => g.durability < 100))
+    stations.append(
+      lockedButton(
+        `Home repair: ${gear.name}`,
+        () => homeRepair(s, gear.id),
+        !h.upgrades.forge || !homeWorker(s, "smith")
+          ? "Build a forge and assign a conscious Smith."
+          : s.inventory.ore < 1 || s.inventory.wood < 1
+            ? "Requires one ore and one wood."
+            : "",
+      ),
+    );
+  for (const item of equipmentCatalog.filter((v) => v.tier === 2)) {
+    const quote = equipmentRecipe(s, item.id);
+    stations.append(
+      lockedButton(
+        `Home craft: ${item.name}`,
+        () => homeCraft(s, item.id),
+        !h.upgrades.forge || !homeWorker(s, "smith")
+          ? "Build a forge and assign a conscious Smith."
+          : !s.research.includes("armorer")
+            ? "Requires the Armorer discovery."
+            : s.inventory.ore < Math.max(1, quote.ore - 1) ||
+                s.inventory.wood < quote.wood
+              ? `Requires ${Math.max(1, quote.ore - 1)} ore and ${quote.wood} wood.`
+              : "",
+      ),
+    );
+  }
+  for (const p of livingParty(s).filter(isCaster))
+    stations.append(
+      lockedButton(
+        `Home magic recovery: ${p.name} · 1 aether shard`,
+        () => recoverMagicAtHome(s, p.id),
+        s.realm.shards < 1
+          ? "Find an aether shard in a hidden chamber or mage stronghold."
+          : !(p.spellSpent?.[1] || p.spellSpent?.[2])
+            ? "All spell slots are already ready."
+            : "",
+      ),
+    );
+  c.append(
+    stations,
+    button("Leave company home", () => (s.event = null)),
+  );
+}
+function drawMissionObjective() {
+  const o = s.battle.objective;
+  if (!o) return;
+  if (o.kind === "defense") {
+    drawWagon(ctx, 136 + 2 * 62, 28 + 3 * 60, false, "wheat");
+    drawMapLabel(ctx, `DEFEND ${o.wagon}/30`, 136 + 2 * 62, 3 * 60 - 4, true);
+  }
+  if (o.kind === "rescue") {
+    const carrier = s.battle.units.find((u) => u.id === o.rescuer),
+      x = carrier?.x ?? 7,
+      y = carrier?.y ?? 3;
+    person(151 + x * 62, 37 + y * 60, "#c4b48b", 0, "", 2);
+    drawMapLabel(
+      ctx,
+      carrier ? "CAPTIVE FOLLOWS" : "CAPTIVE",
+      136 + x * 62,
+      y * 60 - 3,
+      true,
+    );
+  }
+  if (o.kind === "escape" || o.kind === "rescue") {
+    const x = o.kind === "escape" ? 7 : 0;
+    ctx.fillStyle = "#d0bf6755";
+    ctx.fillRect(105 + x * 62, 0, 124, 420);
+    drawMapLabel(ctx, "EXIT", 136 + x * 62, 20, true);
+  }
+  if (o.kind === "ritual")
+    for (const [i, [x, y]] of [
+      [4, 1],
+      [6, 3],
+      [4, 5],
+    ].entries()) {
+      ctx.strokeStyle = o.sigils.includes(i) ? "#6f8c61" : "#b16c9a";
+      ctx.lineWidth = 3;
+      ctx.strokeRect(115 + x * 62, 12 + y * 60, 35, 30);
+      drawMapLabel(
+        ctx,
+        o.sigils.includes(i) ? "BROKEN" : `SEAL ${i + 1}`,
+        136 + x * 62,
+        42 + y * 60,
+        true,
+      );
+    }
+}
+function drawObservationClues() {
+  for (const clue of visibleClues(s)) {
+    const x = clue.x,
+      y = clue.y;
+    ctx.fillStyle = {
+      tracks: "#67503c",
+      smoke: "#72796a",
+      lights: "#a0b8bd",
+      road: "#b6ae87",
+    }[clue.kind];
+    if (clue.kind === "tracks")
+      for (let i = 0; i < 4; i++)
+        ctx.fillRect(x + i * 5, y + (i % 2) * 5, 3, 4);
+    if (clue.kind === "smoke")
+      for (let i = 0; i < 4; i++)
+        ctx.fillRect(x + (i % 2) * 4, y - i * 7, 5, 6);
+    if (clue.kind === "lights")
+      for (let i = 0; i < 4; i++)
+        ctx.fillRect(x + i * 5, y + (i % 2) * 5, 3, 3);
+    if (clue.kind === "road")
+      for (let i = 0; i < 4; i++)
+        ctx.fillRect(x + i * 6, y + (i % 2) * 3, 5, 6);
+    drawMapLabel(ctx, clue.name, x, y + 24, true);
+  }
+}
+
+function appendActionRequirements() {
+  const source = drawerOpen ? $("panel") : $("actions"),
+    buttons = [...source.querySelectorAll("button:disabled")];
+  if (!buttons.length) return;
+  const details = fold("Unavailable actions · requirements"),
+    seen = new Set();
+  for (const b of buttons) {
+    const label = b.textContent;
+    if (seen.has(label)) continue;
+    seen.add(label);
+    const reason = b.title || inferActionRequirement(label);
+    b.title = reason;
+    const text = document.createElement("p");
+    text.textContent = `${label}: ${reason}`;
+    details.append(text);
+    if (seen.size >= 12) break;
+  }
+  source.append(details);
+}
+function inferActionRequirement(label) {
+  if (s.battle) {
+    const unit = s.battle.units.find((u) => u.id === selected);
+    if (unit?.acted)
+      return "The selected companion has already spent their action this round.";
+    if (label.startsWith("Prepare ")) {
+      const spell = spellBook.find((v) =>
+        label.startsWith(`Prepare ${v.name} ·`),
+      );
+      if (spell && spellSlots(s.party[selected])[spell.level] < 1)
+        return `No level ${spell.level} spell slots remain. Recover at camp, at home with rare supplies, or in Emberfall.`;
+    }
+    return "Requires a living target within range and sight, enough valor, and an unused action or movement.";
+  }
+  if (label.startsWith("Sell"))
+    return "You need unassigned stock or equipment to sell.";
+  if (label.includes("Recruit") || label.startsWith("Hire"))
+    return livingParty(s).length >= 6
+      ? "The company can house six companions. Make room before recruiting."
+      : "You need enough crowns for the recruitment fee.";
+  const currencies = {
+    crowns: s.gold,
+    wood: s.inventory.wood,
+    ore: s.inventory.ore,
+    herbs: s.inventory.herbs,
+    rations: s.food,
+    knowledge: s.knowledge,
+    renown: s.renown,
+  };
+  for (const match of label.matchAll(
+    /(\d+) (crowns|wood|ore|herbs|rations|knowledge|renown)/g,
+  )) {
+    const [_, amount, key] = match;
+    if (currencies[key] < Number(amount))
+      return `Requires ${amount} ${key}; you have ${currencies[key]}.`;
+  }
+  if (label.startsWith("Learn"))
+    return "Check the listed class, level, training points, prerequisites, and permanent choices.";
+  if (label.startsWith("Build"))
+    return "This improvement is already built, or its listed materials and camp requirements are not met.";
+  if (label.includes("Rest"))
+    return "Finish the encounter and provide the listed food or crowns for rest.";
+  if (label.includes("repair") || label.includes("Repair"))
+    return "Requires damaged equipment, the listed materials, and a conscious assigned Smith where applicable.";
+  if (s.event?.kind === "dungeon")
+    return "Stand beside the relevant dungeon feature and bring the required profession or materials.";
+  return "Check the action's listed location, resources, companion requirements, and one-time completion status.";
 }

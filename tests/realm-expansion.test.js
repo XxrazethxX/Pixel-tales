@@ -73,7 +73,7 @@ test("v16 migrates old companies and sanitizes frontier metadata", () => {
   s.version = 15;
   delete s.realm;
   const r = save(s);
-  assert.equal(r.version, 16);
+  assert.equal(r.version, 17);
   assert.equal(territoryOwner(r), "wardens");
   assert.deepEqual(r.realm.journal, []);
   s.realm = {

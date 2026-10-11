@@ -17,6 +17,7 @@ const places = [
   { name: "Briarhide Camp", x: 470, y: 490, type: "ruin", scene: "camp" },
   { name: "Ashbrook Farm", x: 120, y: 510, type: "farm" },
   { name: "Echo Cavern", x: 870, y: 440, type: "mine", scene: "cave" },
+  { name: "Wayfarer Lodge", x: 1010, y: 470, type: "home", scene: "home" },
 ];
 const studies = [
   {
@@ -117,7 +118,7 @@ function researchLock(s, id) {
 }
 function fresh() {
   return {
-    version: 16,
+    version: 17,
     companyName: "The Ashen Company",
     difficulty: "standard",
     banner: "ashen",
@@ -179,6 +180,7 @@ function fresh() {
     caravanEscort: null,
     escortLedger: {},
     realm: freshRealm(),
+    expedition: freshExpedition(),
     stash: { found: false, unlocked: false, searched: [], clues: [], loot: {} },
     cargo: { grain: 0, cloth: 0, salt: 0, iron: 0 },
     markets: {},
@@ -569,6 +571,11 @@ function act(s, id, x, y) {
   return true;
 }
 function win(s) {
+  if (!battleVictoryAllowed(s)) return false;
+  if (s.battle.mission) {
+    finishMission(s);
+    return true;
+  }
   if (s.battle.realmStronghold)
     defeatFantasyStronghold(s, s.battle.realmStronghold);
   if (Number.isInteger(s.battle.realmLineage)) {
@@ -684,6 +691,9 @@ function endTurn(s) {
       u.moved = false;
       u.reacted = false;
       u.safeMove = false;
+      u.outriderUsed = false;
+      u.protectedBy = null;
+      u.riposte = false;
     }
     note(
       s,
@@ -741,6 +751,7 @@ function endTurn(s) {
       );
       if (nearby.length) targets.unshift(nearby[0]);
     }
+    coordinateTargets(s, e, targets);
     const t = targets[0];
     if (!t) break;
     const range = ["archer", "mage"].includes(e.kind) ? 4 : 1,
@@ -785,6 +796,7 @@ function endTurn(s) {
             (Math.abs(c[0] - t.x) + Math.abs(c[1] - t.y))) *
           (retreat ? -1 : 1),
       );
+      coordinateSteps(s, e, t, options, retreat);
       if (!retreat && battleTerrain(s).some((tile) => tile.blocked)) {
         const route = enemyApproach(s, e, t, range, movement);
         options =
@@ -810,7 +822,12 @@ function endTurn(s) {
     if (e.hp > 0 && dist() <= range && hasLineOfSight(s, e, t)) {
       const p = s.party[t.id];
       const power =
-        Math.max(1, (e.damage || 5) - (e.distracted > 0 ? 2 : 0)) +
+        Math.max(
+          1,
+          (e.damage || 5) -
+            (e.distracted > 0 ? 2 : 0) -
+            (e.weakened > 0 ? 2 : 0),
+        ) +
         adversaryPower(s, e) +
         (e.kind === "archer" ? 0 : flankingBonus(s, e, t, "enemies")) +
         (e.kind === "wolf" &&
@@ -858,9 +875,12 @@ function endTurn(s) {
       );
     }
     e.distracted = Math.max(0, (e.distracted || 0) - 1);
+    e.weakened = Math.max(0, (e.weakened || 0) - 1);
+    e.exposed = Math.max(0, (e.exposed || 0) - 1);
     if (e.hp > 0) markAdversaryThreat(s, e, t);
   }
-  if (b.enemies.every((e) => e.hp === 0)) {
+  if (tickMission(s)) return true;
+  if (b.enemies.every((e) => e.hp === 0) && battleVictoryAllowed(s)) {
     win(s);
     return true;
   }
@@ -897,6 +917,10 @@ function endTurn(s) {
       u.reacted = false;
       u.safeMove = false;
       u.overwatch = false;
+      u.outriderUsed = false;
+      u.protectedBy = null;
+      u.riposte = false;
+      u.pinningWatch = false;
       u.spearBrace = false;
       u.snared = Math.max(0, (u.snared || 0) - 1);
     });
@@ -909,7 +933,7 @@ function restore(raw) {
   const base = fresh();
   if (
     !raw ||
-    ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16].includes(
+    ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17].includes(
       raw.version,
     ) ||
     !Array.isArray(raw.party) ||
@@ -937,7 +961,7 @@ function restore(raw) {
   const result = {
     ...base,
     ...raw,
-    version: 16,
+    version: 17,
     inventory: { ...base.inventory, ...raw.inventory },
     explored: raw.explored || [],
     event: raw.event || null,
@@ -1755,6 +1779,7 @@ function restore(raw) {
   }
   restoreExpansionState(result, raw);
   restoreRealm(result, raw);
+  restoreExpedition(result, raw);
   updateCampaign(result);
   return result;
 }
@@ -1854,6 +1879,7 @@ function recruit(s, offerId = null) {
   };
   for (const other of s.party) delete s.bonds[bondKey(id, other.id)];
   delete s.realm.lineage[id];
+  delete s.expedition.careers[id];
   if (vacancy >= 0) s.party[id] = companion;
   else s.party.push(companion);
   s.recruitSerial++;
@@ -2366,7 +2392,11 @@ function advanceMovement(s, seconds) {
   }
   updateCampaign(s);
   updateCaravanEscort(s);
-  if (changed) checkWagonTravel(s, distanceTravelled);
+  if (changed) {
+    checkWagonTravel(s, distanceTravelled);
+    observeClues(s);
+    checkTravelConversation(s, distanceTravelled);
+  }
   return { changed, arrived };
 }
 function partyPositions(s) {
@@ -3138,19 +3168,25 @@ function attackRange(p, skill = false, s = null) {
           ? 2
           : 1) +
     (p.talent === "marksman" ? 1 : 0) +
+    (activeCareer(p)?.id === "tracker" ? 1 : 0) +
     (s && gearPerk(s, p, "reach") ? 1 : 0)
   );
 }
 function movementRange(p) {
-  return Math.max(
-    1,
-    (p.talent === "skirmisher" ? 3 : 2) - (fatiguePenalty(p) === 2 ? 1 : 0),
+  const career = activeCareer(p);
+  return (
+    (career?.id === "outrider" ? 1 : 0) +
+    Math.max(
+      1,
+      (p.talent === "skirmisher" ? 3 : 2) - (fatiguePenalty(p) === 2 ? 1 : 0),
+    )
   );
 }
 function hitEnemy(s, e, power) {
   const damage = Math.max(
       1,
       power +
+        (e.exposed > 0 ? 2 : 0) +
         (e.kind === "skeleton" &&
         s.party.some((p) => p.hp > 0 && !p.dead && p.lineagePerk === "ancestor")
           ? 2
@@ -3458,6 +3494,8 @@ function wearBattleEquipment(s, outcome = "victory") {
 }
 function retreatBattle(s) {
   if (!s.battle) return false;
+  if (s.battle.mission)
+    note(s, "Mission abandoned in battle; return to its site to retry.");
   loseEscort(s);
   damageCompanyWagon(s);
   wearBattleEquipment(s, "retreat");
@@ -3654,7 +3692,7 @@ function craftEquipment(s, templateId) {
 }
 
 // One authoritative calendar settles costs for travel, work, rest, and idle exploration.
-const DAY_SECONDS = 240;
+const DAY_SECONDS = 300;
 function livingParty(s) {
   return s.party.filter((p) => !p.dead);
 }
@@ -3730,6 +3768,7 @@ function settleDay(s, mealsProvided = false) {
     s,
     `Daily upkeep: ${mealsProvided ? "inn meals" : `${supplied} rations`} and ${paid} crowns paid. ${s.wageDebt ? `${s.wageDebt} crowns still owed.` : "Wages settled."}`,
   );
+  settleTravelPromises(s);
   for (const p of livingParty(s))
     if (
       s.wageDebt > 0 &&
@@ -4163,6 +4202,7 @@ function bondValue(s, a, b) {
   return a === b ? 0 : s.bonds[bondKey(a, b)] || 0;
 }
 function bondLabel(value) {
+  if (value < 0) return "Rivals";
   return value >= 50
     ? "Sworn companions"
     : value >= 25
@@ -4842,6 +4882,7 @@ function enemyDisengagement(s, enemy, point) {
   }
 }
 function damageCompanion(s, target, power, ranged = false) {
+  shareGuardDamage(s, target);
   const p = s.party[target.id],
     aura = s.battle.units.some(
       (u) =>
@@ -4856,6 +4897,7 @@ function damageCompanion(s, target, power, ranged = false) {
   const damage = Math.max(
     1,
     power -
+      (target.protectedThisHit ? 2 : 0) -
       (target.arcaneWard || 0) -
       (p.role === "Shieldbearer" ? 2 : 0) -
       armorPower(s, p) -
@@ -4868,6 +4910,17 @@ function damageCompanion(s, target, power, ranged = false) {
   interruptConcentration(s, target.id);
   p.hp = Math.max(0, p.hp - damage);
   p.injury = p.hp < p.max / 2;
+  if (target.riposte && p.hp > 0) {
+    const enemy = s.battle.enemies.find(
+      (e) =>
+        e.hp > 0 && Math.abs(e.x - target.x) + Math.abs(e.y - target.y) === 1,
+    );
+    if (enemy) {
+      hitEnemy(s, enemy, 4);
+      target.riposte = false;
+      note(s, `${p.name} answers with a duelist riposte.`);
+    }
+  }
   return damage;
 }
 function gearPerk(s, p, id) {
@@ -7332,6 +7385,10 @@ function triggerOverwatch(s, e) {
     ) {
       u.overwatch = false;
       hitEnemy(s, e, attackPower(s, p));
+      if (u.pinningWatch && e.hp > 0) {
+        e.root = 1;
+        u.pinningWatch = false;
+      }
       note(s, `${p.name} fires an overwatch shot.`);
     }
   }
@@ -8674,6 +8731,7 @@ function infiltrateStronghold(s, action) {
     for (const role of travelRoles)
       if (s.travelJobs[role.id] === id) delete s.travelJobs[role.id];
     delete s.realm.lineage[id];
+    delete s.expedition.careers[id];
     s.party[id] = {
       ...fresh().party[3],
       id,
@@ -9313,6 +9371,18 @@ function learnSpellSchool(s, id, schoolId) {
 function enemyArmor(s, e) {
   return (
     (e.armor || 0) +
+    (s.battle?.layoutId !== "legacy" &&
+    ["mage", "archer", "raider"].includes(e.kind) &&
+    s.battle.enemies.some(
+      (v) =>
+        v !== e &&
+        v.hp > 0 &&
+        v.kind === "brute" &&
+        v.guard &&
+        Math.abs(v.x - e.x) + Math.abs(v.y - e.y) <= 1,
+    )
+      ? 1
+      : 0) +
     (e.kind === "skeleton" &&
     s.battle?.enemies.some(
       (v) =>
@@ -9392,6 +9462,7 @@ function enemySpecialTurn(s, e) {
     )
   )
     return true;
+  if (coordinatedSpecialTurn(s, e)) return true;
   if (e.kind === "mage" && e.silenced > 0) {
     e.silenced--;
     e.casting = null;
@@ -10683,6 +10754,1428 @@ function recoverShardMagic(s, id) {
   return true;
 }
 
+function freshExpedition() {
+  return {
+    mission: null,
+    missionLedger: {},
+    clues: {},
+    careers: {},
+    rivalries: {},
+    conversationDay: 0,
+    conversation: null,
+    travelDistance: 0,
+    promise: null,
+    home: {
+      owned: false,
+      style: null,
+      upgrades: {},
+      stores: {
+        food: 0,
+        ore: 0,
+        wood: 0,
+        herbs: 0,
+        medicine: 0,
+        grain: 0,
+        cloth: 0,
+        salt: 0,
+        iron: 0,
+      },
+      staff: {},
+      harvestDay: 0,
+    },
+  };
+}
+const tacticalMissions = [
+  {
+    id: "wagon-watch",
+    name: "Hold the supply wagon",
+    issuer: 0,
+    site: 12,
+    kind: "defense",
+    reward: 90,
+    desc: "Defend a thirty-health wagon through four enemy rounds. Killing its attackers also secures the cargo.",
+  },
+  {
+    id: "captive",
+    name: "Bring the captive home",
+    issuer: 3,
+    site: 2,
+    kind: "rescue",
+    reward: 100,
+    desc: "Free the captive near tile 8,4, then bring their rescuer back to the western edge. Killing guards alone does not complete the rescue.",
+  },
+  {
+    id: "withdrawal",
+    name: "Survive the encirclement",
+    issuer: 0,
+    site: 5,
+    kind: "escape",
+    reward: 85,
+    desc: "An overwhelming force blocks the road. Bring every conscious companion to the eastern edge and withdraw together.",
+  },
+  {
+    id: "ritual",
+    name: "Silence the three seals",
+    issuer: 6,
+    site: 11,
+    kind: "ritual",
+    reward: 120,
+    desc: "Disrupt three marked ritual seals before six enemy rounds elapse. Each seal requires an adjacent companion's action.",
+  },
+];
+function missionLock(s, id, action = "accept") {
+  const m = tacticalMissions.find((v) => v.id === id);
+  if (!m || s.battle || s.event || s.campOpen || companyLost(s))
+    return "Finish the current activity.";
+  if (s.expedition.missionLedger[id]) return "Already completed.";
+  if (action === "accept")
+    return s.expedition.mission
+      ? "Finish or abandon the active mission."
+      : s.location !== m.issuer || townAccessLock(s)
+        ? "Visit the issuing village's board."
+        : "";
+  return s.expedition.mission !== id
+    ? "Accept this mission at its village board."
+    : s.location !== m.site
+      ? `Reach ${places[m.site].name}.`
+      : "";
+}
+function acceptMission(s, id) {
+  if (missionLock(s, id)) return false;
+  s.expedition.mission = id;
+  const m = tacticalMissions.find((v) => v.id === id);
+  if (!s.discovered.includes(m.site)) s.discovered.push(m.site);
+  note(s, `Accepted ${m.name}: ${m.desc}`);
+  return true;
+}
+function abandonMission(s) {
+  if (!s.expedition.mission || s.battle || s.event) return false;
+  s.expedition.mission = null;
+  note(s, "The tactical mission was abandoned without payment.");
+  return true;
+}
+function startMission(s) {
+  const m = tacticalMissions.find((v) => v.id === s.expedition.mission);
+  if (!m || missionLock(s, m.id, "start")) return false;
+  const old = s.contract;
+  s.contract = { target: m.site, tier: 2, reward: m.reward };
+  const ok = startBattle(s);
+  s.contract = old;
+  if (!ok) return false;
+  const b = s.battle;
+  b.kind = "patrol";
+  b.mission = m.id;
+  b.objective = {
+    kind: m.kind,
+    rounds: 0,
+    wagon: 30,
+    rescuer: null,
+    sigils: [],
+    prisoner: { x: 7, y: 3 },
+  };
+  if (m.kind === "escape")
+    for (const e of b.enemies) {
+      e.hp = e.max = 42;
+      e.damage = 4;
+    }
+  if (m.kind === "ritual") {
+    Object.assign(b.enemies[0], {
+      kind: "mage",
+      name: "Ritual keeper",
+      mana: 2,
+      casting: null,
+    });
+    b.objective.limit = 6;
+  }
+  note(s, `${m.name}: ${m.desc}`);
+  return true;
+}
+function missionObjective(s) {
+  const o = s.battle?.objective;
+  if (!o) return "";
+  if (o.kind === "defense")
+    return `Protect wagon: ${o.wagon}/30 health · ${o.rounds}/4 rounds held.`;
+  if (o.kind === "rescue")
+    return o.rescuer === null
+      ? "Free the captive at tile 8,4, then escort them west."
+      : `Bring ${s.party[o.rescuer]?.name} and the captive to columns 1–2.`;
+  if (o.kind === "escape")
+    return "Reach columns 8–9 with every conscious companion; use Withdraw together.";
+  return `Disrupt ritual seals: ${o.sigils.length}/3 · ${Math.max(0, 6 - o.rounds)} enemy rounds remain.`;
+}
+function battleVictoryAllowed(s) {
+  const b = s.battle,
+    o = b?.objective;
+  if (!b) return false;
+  if (!o) return true;
+  if (!b.units.some((u) => s.party[u.id].hp > 0)) return false;
+  if (o.kind === "defense")
+    return o.wagon > 0 && (o.rounds >= 4 || b.enemies.every((e) => e.hp === 0));
+  if (o.kind === "rescue")
+    return (
+      Number.isInteger(o.rescuer) &&
+      b.units.some(
+        (u) => u.id === o.rescuer && s.party[u.id].hp > 0 && u.x <= 1,
+      )
+    );
+  if (o.kind === "escape")
+    return b.units.filter((u) => s.party[u.id].hp > 0).every((u) => u.x >= 7);
+  return o.sigils.length === 3;
+}
+function missionActionLock(s, id, action, index = 0) {
+  const b = s.battle,
+    u = b?.units.find((u) => u.id === id),
+    o = b?.objective;
+  if (!o || !u || s.party[id].hp <= 0) return "Select a conscious companion.";
+  if (action === "extract" || action === "escape")
+    return battleVictoryAllowed(s)
+      ? ""
+      : "Bring the company or captive to the marked exit first.";
+  if (u.acted) return "This companion's action is spent.";
+  if (action === "free")
+    return o.kind !== "rescue" || o.rescuer !== null
+      ? "No captive to free."
+      : Math.abs(u.x - 7) + Math.abs(u.y - 3) > 1
+        ? "Stand beside the captive."
+        : "";
+  if (action === "carry") {
+    const carrier = b.units.find((v) => v.id === o.rescuer);
+    return o.kind !== "rescue" || !carrier || s.party[carrier.id].hp > 0
+      ? "The rescuer is still able to escort the captive."
+      : Math.abs(u.x - carrier.x) + Math.abs(u.y - carrier.y) > 1
+        ? "Stand beside the fallen rescuer."
+        : "";
+  }
+  if (action === "sigil") {
+    const at = [
+      [4, 1],
+      [6, 3],
+      [4, 5],
+    ][index];
+    return o.kind !== "ritual" || !at || o.sigils.includes(index)
+      ? "Seal already disrupted or unavailable."
+      : Math.abs(u.x - at[0]) + Math.abs(u.y - at[1]) > 1
+        ? "Stand beside that seal."
+        : "";
+  }
+  return "Unknown objective action.";
+}
+function missionAction(s, id, action, index = 0) {
+  if (missionActionLock(s, id, action, index)) return false;
+  const b = s.battle,
+    u = b.units.find((u) => u.id === id),
+    o = b.objective;
+  if (action === "free" || action === "carry") {
+    o.rescuer = id;
+    u.acted = true;
+    note(
+      s,
+      `${s.party[id].name} frees the captive. Return to the western edge together.`,
+    );
+  }
+  if (action === "sigil") {
+    o.sigils.push(index);
+    u.acted = true;
+    note(s, `${s.party[id].name} breaks ritual seal ${index + 1}.`);
+  }
+  if (battleVictoryAllowed(s)) finishMission(s);
+  return true;
+}
+function tickMission(s) {
+  const b = s.battle,
+    o = b?.objective;
+  if (!o) return false;
+  o.rounds++;
+  if (o.kind === "defense")
+    for (const e of b.enemies.filter(
+      (e) => e.hp > 0 && Math.abs(e.x - 2) + Math.abs(e.y - 3) <= 1,
+    ))
+      o.wagon = Math.max(0, o.wagon - 4);
+  if (
+    o.wagon <= 0 ||
+    (o.kind === "ritual" && o.rounds >= 6 && o.sigils.length < 3)
+  ) {
+    retreatBattle(s);
+    note(
+      s,
+      "The objective was lost. Return to the mission site to retry; no reward granted.",
+    );
+    return true;
+  }
+  if (battleVictoryAllowed(s)) {
+    finishMission(s);
+    return true;
+  }
+  return false;
+}
+function finishMission(s) {
+  const b = s.battle,
+    m = tacticalMissions.find((v) => v.id === b?.mission);
+  if (!m || s.expedition.missionLedger[m.id]) return false;
+  wearBattleEquipment(s);
+  s.gold += m.reward;
+  s.renown += 3;
+  s.knowledge += 2;
+  s.expedition.missionLedger[m.id] = s.day;
+  s.expedition.mission = null;
+  for (const p of livingParty(s)) {
+    p.xp += 20;
+    while (p.xp >= p.level * 30) {
+      p.xp -= p.level * 30;
+      p.level++;
+      p.points++;
+    }
+    changeResolve(p, 3);
+  }
+  growPartyBonds(s, 4, true);
+  s.battle = null;
+  note(
+    s,
+    `${m.name} completed: ${m.reward} crowns, three renown, and two knowledge. The objective was secured.`,
+  );
+  return true;
+}
+const careerPaths = [
+  {
+    id: "shadow",
+    role: "Thief",
+    name: "Shadow",
+    desc: "Backstab distracted or engaged enemies for extra damage.",
+  },
+  {
+    id: "saboteur",
+    role: "Thief",
+    name: "Saboteur",
+    desc: "Disable an adjacent enemy's attacks and movement.",
+  },
+  {
+    id: "tracker",
+    role: "Archer",
+    name: "Tracker",
+    desc: "One extra bow range; mark quarry to improve company damage.",
+  },
+  {
+    id: "sentinel",
+    role: "Archer",
+    name: "Sentinel",
+    desc: "Set pinning overwatch that roots approaching enemies.",
+  },
+  {
+    id: "duelist",
+    role: "Swordswoman",
+    name: "Duelist",
+    desc: "Brace for a damaging riposte against an adjacent attacker.",
+  },
+  {
+    id: "vanguard",
+    role: "Swordswoman",
+    name: "Vanguard",
+    desc: "Sweep every adjacent enemy for one action and two valor.",
+  },
+  {
+    id: "protector",
+    role: "Shieldbearer",
+    name: "Protector",
+    desc: "Take two damage to reduce hits against a nearby chosen ally.",
+  },
+  {
+    id: "captain",
+    role: "Shieldbearer",
+    name: "Captain",
+    desc: "Rally adjacent allies: healing and extra valor.",
+  },
+  {
+    id: "controller",
+    role: "Spearman",
+    name: "Controller",
+    desc: "Root an enemy within spear reach.",
+  },
+  {
+    id: "outrider",
+    role: "Spearman",
+    name: "Outrider",
+    desc: "One extra movement; disengage without valor once per round.",
+  },
+  {
+    id: "channeler",
+    role: "Wizard",
+    name: "Channeler",
+    desc: "Recover one level-one slot once per battle for two valor.",
+  },
+  {
+    id: "hexer",
+    role: "Wizard",
+    name: "Hexer",
+    desc: "Distract and stun a nearby enemy for two valor.",
+  },
+  {
+    id: "mentor",
+    role: "Cleric",
+    name: "Mentor",
+    desc: "Treat an adjacent ally for four health and one herb.",
+  },
+  {
+    id: "avenger",
+    role: "Cleric",
+    name: "Avenger",
+    desc: "Strike within three tiles, with greater damage against undead.",
+  },
+];
+function careersFor(p) {
+  return careerPaths.filter(
+    (v) =>
+      v.role === p?.role || (v.role === "Thief" && p?.profession === "Thief"),
+  );
+}
+function activeCareer(p) {
+  return careersFor(p).find((v) => v.id === p?.career) || null;
+}
+function careerLock(s, id, path) {
+  const p = s.party[id];
+  if (!p || p.dead || p.hp <= 0 || s.battle || s.event)
+    return "Finish the current activity with a conscious companion.";
+  return !careersFor(p).some((v) => v.id === path)
+    ? "This class or profession cannot learn that path."
+    : p.career
+      ? "Career choices are permanent."
+      : p.level < 2
+        ? "Requires level two."
+        : p.points < 1
+          ? "Requires one training point."
+          : "";
+}
+function learnCareer(s, id, path) {
+  if (careerLock(s, id, path)) return false;
+  const p = s.party[id];
+  p.points--;
+  p.career = path;
+  s.expedition.careers[id] = path;
+  note(
+    s,
+    `${p.name} chooses the ${careerPaths.find((v) => v.id === path).name} career. This choice is permanent; Thief abilities require the Thief profession.`,
+  );
+  return true;
+}
+function careerActionLock(s, id, targetId = null) {
+  const b = s.battle,
+    u = b?.units.find((v) => v.id === id),
+    p = s.party[id],
+    path = activeCareer(p);
+  if (!u || !path || p.hp <= 0 || p.dead)
+    return "Requires a trained, conscious specialist.";
+  if (u.acted) return "This companion's action is spent.";
+  const enemy = b.enemies.find((e) => e.id === targetId && e.hp > 0),
+    ally = b.units.find((v) => v.id === targetId && s.party[v.id].hp > 0),
+    dist = (v) => Math.abs(v.x - u.x) + Math.abs(v.y - u.y);
+  if (
+    ["vanguard", "channeler", "hexer", "avenger"].includes(path.id) &&
+    b.valor < 2
+  )
+    return "Requires two valor.";
+  if (
+    [
+      "shadow",
+      "saboteur",
+      "tracker",
+      "controller",
+      "hexer",
+      "avenger",
+    ].includes(path.id)
+  ) {
+    if (!enemy) return "Choose a living enemy.";
+    const range = {
+      shadow: 1,
+      saboteur: 1,
+      tracker: 5,
+      controller: 2,
+      hexer: 3,
+      avenger: 3,
+    }[path.id];
+    if (dist(enemy) > range || !hasLineOfSight(s, u, enemy))
+      return "Enemy out of range or sight.";
+    if (
+      path.id === "shadow" &&
+      !enemy.distracted &&
+      !b.units.some(
+        (v) =>
+          v.id !== id &&
+          s.party[v.id].hp > 0 &&
+          Math.abs(v.x - enemy.x) + Math.abs(v.y - enemy.y) === 1,
+      )
+    )
+      return "Backstab requires a distracted enemy or another companion engaging them.";
+  }
+  if (["protector", "mentor"].includes(path.id)) {
+    if (!ally || ally.id === id || dist(ally) > 1)
+      return "Choose an adjacent conscious ally.";
+    if (bondValue(s, id, ally.id) < 0)
+      return "This companion refuses to protect or treat a rival. Repair their relationship first.";
+    if (
+      path.id === "mentor" &&
+      (s.inventory.herbs < 1 || s.party[ally.id].hp >= s.party[ally.id].max)
+    )
+      return "Requires an herb and a wounded ally.";
+  }
+  if (path.id === "outrider" && u.outriderUsed)
+    return "Once per company round.";
+  if (path.id === "channeler" && (u.channelUsed || !p.spellSpent?.[1]))
+    return "Recover one spent level-one slot once per battle.";
+  if (
+    path.id === "vanguard" &&
+    !b.enemies.some((e) => e.hp > 0 && dist(e) === 1)
+  )
+    return "Stand beside an enemy to sweep.";
+  return "";
+}
+function careerAction(s, id, targetId = null) {
+  if (careerActionLock(s, id, targetId)) return false;
+  const b = s.battle,
+    u = b.units.find((v) => v.id === id),
+    p = s.party[id],
+    path = activeCareer(p),
+    e = b.enemies.find((e) => e.id === targetId),
+    ally = b.units.find((v) => v.id === targetId);
+  if (["vanguard", "channeler", "hexer", "avenger"].includes(path.id))
+    b.valor -= 2;
+  u.acted = true;
+  if (path.id === "shadow") hitEnemy(s, e, attackPower(s, p) + 4);
+  if (path.id === "saboteur") {
+    e.weakened = 2;
+    e.root = 1;
+  }
+  if (path.id === "tracker") e.exposed = 2;
+  if (path.id === "sentinel") {
+    u.overwatch = true;
+    u.pinningWatch = true;
+  }
+  if (path.id === "duelist") {
+    u.guard = true;
+    u.riposte = true;
+  }
+  if (path.id === "vanguard")
+    for (const enemy of b.enemies.filter(
+      (e) => e.hp > 0 && Math.abs(e.x - u.x) + Math.abs(e.y - u.y) === 1,
+    ))
+      hitEnemy(s, enemy, Math.max(1, attackPower(s, p) - 1));
+  if (path.id === "protector") {
+    ally.protectedBy = id;
+    u.guard = true;
+  }
+  if (path.id === "captain") {
+    for (const v of b.units)
+      if (Math.abs(v.x - u.x) + Math.abs(v.y - u.y) <= 1)
+        s.party[v.id].hp = Math.min(s.party[v.id].max, s.party[v.id].hp + 3);
+    b.valor = Math.min(5, b.valor + 1);
+  }
+  if (path.id === "controller") {
+    hitEnemy(s, e, 4);
+    e.root = 2;
+  }
+  if (path.id === "outrider") {
+    u.safeMove = true;
+    u.acted = false;
+    u.outriderUsed = true;
+  }
+  if (path.id === "channeler") {
+    p.spellSpent[1]--;
+    u.channelUsed = true;
+  }
+  if (path.id === "hexer") {
+    e.distracted = 2;
+    e.stun = 1;
+  }
+  if (path.id === "mentor") {
+    s.inventory.herbs--;
+    s.party[ally.id].hp = Math.min(
+      s.party[ally.id].max,
+      s.party[ally.id].hp + 4,
+    );
+  }
+  if (path.id === "avenger")
+    hitEnemy(s, e, 5 + (e.kind === "skeleton" ? 3 : 0));
+  note(s, `${p.name} uses ${path.name}'s battle technique.`);
+  if (b.enemies.every((e) => e.hp === 0)) win(s);
+  return true;
+}
+function shareGuardDamage(s, target) {
+  target.protectedThisHit = false;
+  const protector = s.battle.units.find(
+    (u) =>
+      u.id === target.protectedBy &&
+      s.party[u.id].hp > 2 &&
+      u.guard &&
+      Math.abs(u.x - target.x) + Math.abs(u.y - target.y) <= 1,
+  );
+  if (protector && bondValue(s, target.id, protector.id) >= 0) {
+    s.party[protector.id].hp -= 2;
+    target.protectedThisHit = true;
+    note(
+      s,
+      `${s.party[protector.id].name} shares the blow aimed at ${s.party[target.id].name}.`,
+    );
+  }
+}
+function coordinateTargets(s, e, targets) {
+  if (s.battle.layoutId === "legacy" && !s.battle.mission) return;
+  const score = (u) =>
+    Math.abs(u.x - e.x) +
+    Math.abs(u.y - e.y) +
+    (u.guard ? 3 : 0) +
+    terrainCell(s, u.x, u.y).cover +
+    (e.kind === "wolf"
+      ? (s.party[u.id].hp / s.party[u.id].max) * 4 +
+        s.battle.units.filter(
+          (v) =>
+            v.id !== u.id &&
+            s.party[v.id].hp > 0 &&
+            Math.abs(v.x - u.x) + Math.abs(v.y - u.y) <= 1,
+        ).length *
+          2
+      : 0);
+  targets.sort((a, b) => score(a) - score(b));
+}
+function coordinateSteps(s, e, target, options, retreat) {
+  if (retreat || (s.battle.layoutId === "legacy" && !s.battle.mission)) return;
+  const score = ([x, y]) =>
+    Math.abs(x - target.x) +
+    Math.abs(y - target.y) +
+    (target.guard && x === target.x ? 2 : 0) -
+    (["mage", "archer"].includes(e.kind) ? terrainCell(s, x, y).cover : 0) -
+    s.battle.enemies.filter(
+      (v) =>
+        v !== e &&
+        v.hp > 0 &&
+        Math.abs(v.x - target.x) + Math.abs(v.y - target.y) === 1 &&
+        Math.abs(x - target.x) + Math.abs(y - target.y) === 1,
+    ).length;
+  options.sort((a, b) => score(a) - score(b));
+}
+function coordinatedSpecialTurn(s, e) {
+  if (e.kind === "brute") {
+    e.guard = false;
+    if (
+      s.battle.layoutId !== "legacy" &&
+      !s.battle.units.some(
+        (u) =>
+          s.party[u.id].hp > 0 &&
+          Math.abs(u.x - e.x) + Math.abs(u.y - e.y) <= 2,
+      ) &&
+      s.battle.enemies.some(
+        (v) =>
+          v !== e &&
+          v.hp > 0 &&
+          ["mage", "archer"].includes(v.kind) &&
+          Math.abs(v.x - e.x) + Math.abs(v.y - e.y) <= 1,
+      )
+    ) {
+      e.guard = true;
+      note(s, "A shield-bearing bandit holds the line around its ranged ally.");
+      return true;
+    }
+  }
+  if ((s.battle.layoutId === "legacy" && !s.battle.mission) || e.root || e.stun)
+    return false;
+  if (
+    e.kind === "mage" &&
+    !e.casting &&
+    s.battle.units.some(
+      (u) =>
+        s.party[u.id].hp > 0 && Math.abs(u.x - e.x) + Math.abs(u.y - e.y) <= 2,
+    )
+  ) {
+    const options = [
+      [e.x + 1, e.y],
+      [e.x - 1, e.y],
+      [e.x, e.y + 1],
+      [e.x, e.y - 1],
+    ].filter(
+      ([x, y]) =>
+        x >= 0 &&
+        x < 9 &&
+        y >= 0 &&
+        y < 7 &&
+        !terrainCell(s, x, y).blocked &&
+        !s.battle.units.some(
+          (u) => s.party[u.id].hp > 0 && u.x === x && u.y === y,
+        ) &&
+        !s.battle.enemies.some(
+          (v) => v !== e && v.hp > 0 && v.x === x && v.y === y,
+        ),
+    );
+    options.sort(
+      (a, b) =>
+        Math.min(
+          ...s.battle.units
+            .filter((u) => s.party[u.id].hp > 0)
+            .map((u) => Math.abs(b[0] - u.x) + Math.abs(b[1] - u.y)),
+        ) -
+        Math.min(
+          ...s.battle.units
+            .filter((u) => s.party[u.id].hp > 0)
+            .map((u) => Math.abs(a[0] - u.x) + Math.abs(a[1] - u.y)),
+        ),
+    );
+    if (options[0]) {
+      enemyDisengagement(s, e, options[0]);
+      if (e.hp > 0) [e.x, e.y] = options[0];
+      note(
+        s,
+        "The spellcaster retreats from the company rather than spending a slot at close quarters.",
+      );
+      return true;
+    }
+  }
+  if (
+    e.kind === "goblin" &&
+    !e.trapper &&
+    !e.stolenFood &&
+    s.battle.traps?.some((t) => !t.used) &&
+    e.hp > e.max * 0.4
+  ) {
+    const trap = s.battle.traps.find((t) => !t.used);
+    if (
+      Math.abs(e.x - trap.x) + Math.abs(e.y - trap.y) <= 2 &&
+      s.battle.units.some(
+        (u) =>
+          s.party[u.id].hp > 0 &&
+          Math.abs(u.x - e.x) + Math.abs(u.y - e.y) <= 2,
+      )
+    ) {
+      e.guard = true;
+      note(
+        s,
+        "A goblin waits behind its snare, trying to lure the company onto the trapped approach.",
+      );
+      return true;
+    }
+  }
+  return false;
+}
+const observationTrails = [
+  {
+    id: "tracks",
+    name: "Clawed footprints",
+    kind: "tracks",
+    target: 14,
+    points: [
+      { x: 625, y: 335 },
+      { x: 720, y: 365 },
+      { x: 805, y: 420 },
+    ],
+    clues: [
+      "Small clawed feet drag sacks eastward.",
+      "Dropped grain mixes with tracks turning southeast.",
+      "The tracks disappear into Echo Cavern: a goblin den.",
+    ],
+    reward: "ore",
+  },
+  {
+    id: "smoke",
+    name: "Smoke through the trees",
+    kind: "smoke",
+    target: 12,
+    points: [
+      { x: 310, y: 390 },
+      { x: 380, y: 435 },
+      { x: 445, y: 480 },
+    ],
+    clues: [
+      "A thin column rises beyond the eastern trees.",
+      "Fresh axe cuts and bootprints lead toward a camp.",
+      "Cooking smoke reveals Briarhide's supply tents.",
+    ],
+    reward: "wood",
+  },
+  {
+    id: "lights",
+    name: "Lights among the roots",
+    kind: "lights",
+    target: 7,
+    points: [
+      { x: 770, y: 155 },
+      { x: 850, y: 180 },
+      { x: 925, y: 205 },
+    ],
+    clues: [
+      "Pale lights blink along a line of old standing stones.",
+      "Roots carry a pulse toward the eastern grove.",
+      "The light gathers at Whispering Grove's ancient sanctuary.",
+    ],
+    reward: "herbs",
+  },
+  {
+    id: "road",
+    name: "The buried royal road",
+    kind: "road",
+    target: 11,
+    points: [
+      { x: 1130, y: 650 },
+      { x: 1220, y: 690 },
+      { x: 1335, y: 735 },
+    ],
+    clues: [
+      "Broken paving leads southeast beneath the grass.",
+      "A weathered crown points toward the fallen keep.",
+      "The royal road ends at Broken Crown.",
+    ],
+    reward: "ore",
+  },
+];
+function visibleClues(s) {
+  return observationTrails.flatMap((t) => {
+    const state = s.expedition.clues[t.id] || { stage: 0, seen: false };
+    if (state.stage >= 3) return [];
+    const p = t.points[state.stage];
+    return state.seen ||
+      Math.hypot(s.position.x - p.x, s.position.y - p.y) < 100
+      ? [{ ...p, id: t.id, name: t.name, kind: t.kind, stage: state.stage }]
+      : [];
+  });
+}
+function observeClues(s) {
+  for (const t of observationTrails) {
+    const st = s.expedition.clues[t.id] || { stage: 0, seen: false },
+      p = t.points[st.stage];
+    if (p && Math.hypot(s.position.x - p.x, s.position.y - p.y) < 100) {
+      st.seen = true;
+      s.expedition.clues[t.id] = st;
+    }
+  }
+}
+function interpretClueLock(s, id) {
+  const t = observationTrails.find((t) => t.id === id),
+    st = s.expedition.clues[id] || { stage: 0 },
+    p = t?.points[st.stage];
+  if (!p || s.battle || s.event || s.campOpen || companyLost(s))
+    return "Finish the current activity or choose an unfinished trail.";
+  return !companyScout(s)
+    ? "Requires a conscious Archer or Thief."
+    : Math.hypot(s.position.x - p.x, s.position.y - p.y) > 55
+      ? "Approach within 55 pixels to read the clue."
+      : "";
+}
+function interpretClue(s, id) {
+  if (interpretClueLock(s, id)) return false;
+  const t = observationTrails.find((t) => t.id === id),
+    st = s.expedition.clues[id] || { stage: 0, seen: true };
+  note(s, `${t.name}: ${t.clues[st.stage]}`);
+  st.stage++;
+  st.seen = false;
+  s.expedition.clues[id] = st;
+  practice(s, companyScout(s), 1);
+  if (st.stage === 3) {
+    if (!s.discovered.includes(t.target)) s.discovered.push(t.target);
+    s.knowledge += 2;
+    s.inventory[t.reward] += 2;
+    note(
+      s,
+      `Trail understood: ${places[t.target].name}. Two knowledge and two ${t.reward} recovered.`,
+    );
+  }
+  return true;
+}
+function followObservation(s, id) {
+  const t = observationTrails.find((t) => t.id === id),
+    st = s.expedition.clues[id];
+  if (!t || !st || s.battle || s.event || s.campOpen) return false;
+  const p = t.points[st.stage] || places[t.target];
+  return moveTo(s, p.x, p.y);
+}
+function beginTravelConversation(s) {
+  const party = livingParty(s).filter((p) => p.hp > 0);
+  if (
+    party.length < 2 ||
+    s.battle ||
+    s.event ||
+    s.campOpen ||
+    s.expedition.conversationDay === s.day
+  )
+    return false;
+  const first = party.find((p) => hasTrait(p, "mercenary")) || party[0],
+    second = party.find((p) => p.id !== first.id);
+  const kind =
+    s.wageDebt > 0
+      ? "wages"
+      : s.hungerDays > 0
+        ? "hunger"
+        : bondValue(s, first.id, second.id) < 0
+          ? "rivalry"
+          : bondValue(s, first.id, second.id) >= 25
+            ? "friendship"
+            : "conversation";
+  s.expedition.conversationDay = s.day;
+  s.expedition.conversation = { kind, ids: [first.id, second.id] };
+  s.destination = null;
+  s.event = {
+    kind: "travel-conversation",
+    title: `${first.name} and ${second.name} on the road`,
+    text: {
+      wages:
+        "Unpaid wages strain their trust. Settle the debt, promise payment tomorrow, or refuse.",
+      hunger: "Hunger divides the party over its dwindling supplies.",
+      rivalry:
+        "An old disagreement becomes an argument. A shared meal can help repair their rivalry.",
+      friendship: "Trusted companions offer to share the burden of the road.",
+      conversation:
+        "The companions discuss their doubts, their hopes, and their place in the company.",
+    }[kind],
+  };
+  return true;
+}
+function checkTravelConversation(s, distance) {
+  s.expedition.travelDistance += Math.max(0, distance);
+  if (s.expedition.travelDistance < 900) return false;
+  if (beginTravelConversation(s)) {
+    s.expedition.travelDistance = 0;
+    return true;
+  }
+  return false;
+}
+function conversationLock(s, choice) {
+  const c = s.expedition.conversation;
+  if (s.event?.kind !== "travel-conversation" || !c)
+    return "No travel conversation.";
+  if (choice === "meal") return s.food < 2 ? "Requires two rations." : "";
+  if (choice === "pay")
+    return c.kind !== "wages" || s.gold < s.wageDebt
+      ? "Requires the full unpaid wage debt."
+      : "";
+  if (choice === "promise")
+    return c.kind !== "wages" ? "Only available for unpaid wages." : "";
+  if (choice === "listen") return "";
+  if (choice === "dismiss") return "";
+  return "Unknown response.";
+}
+function respondConversation(s, choice) {
+  if (conversationLock(s, choice)) return false;
+  const c = s.expedition.conversation,
+    [a, b] = c.ids,
+    key = bondKey(a, b),
+    party = c.ids.map((id) => s.party[id]);
+  if (choice === "meal") {
+    s.food -= 2;
+    s.bonds[key] = Math.min(100, (s.bonds[key] || 0) + 8);
+    for (const p of party) changeResolve(p, 6);
+    note(s, "Sharing supplies repairs trust and reassures both companions.");
+  }
+  if (choice === "listen") {
+    s.bonds[key] = Math.min(100, (s.bonds[key] || 0) + 3);
+    for (const p of party) {
+      changeResolve(p, 2);
+      p.fatigue = Math.max(0, p.fatigue - 5);
+    }
+    note(s, "Listening eases their fatigue and strengthens their friendship.");
+  }
+  if (choice === "pay") {
+    s.gold -= s.wageDebt;
+    s.wageDebt = 0;
+    for (const p of party) changeResolve(p, 6);
+    note(
+      s,
+      "Overdue wages settled. The companions remember that you kept your word.",
+    );
+  }
+  if (choice === "promise") {
+    s.expedition.promise = { due: s.day + 1, ids: c.ids };
+    note(
+      s,
+      "Promised to settle wages by the next dawn. A broken promise will damage trust.",
+    );
+  }
+  if (choice === "dismiss") {
+    s.bonds[key] = Math.max(-100, (s.bonds[key] || 0) - 6);
+    for (const p of party) changeResolve(p, -8);
+    note(s, "Dismissing the companions' concerns creates resentment.");
+  }
+  if (s.bonds[key] < 0) s.expedition.rivalries[key] = true;
+  s.expedition.conversation = null;
+  s.event = null;
+  return true;
+}
+function settleTravelPromises(s) {
+  const promise = s.expedition.promise;
+  if (!promise || s.day < promise.due) return;
+  const kept = s.wageDebt === 0;
+  for (const id of promise.ids)
+    if (s.party[id] && !s.party[id].dead)
+      changeResolve(s.party[id], kept ? 5 : -12);
+  const key = bondKey(...promise.ids);
+  s.bonds[key] = Math.max(
+    -100,
+    Math.min(100, (s.bonds[key] || 0) + (kept ? 4 : -8)),
+  );
+  note(
+    s,
+    kept
+      ? "Kept the promised wage payment. Trust improves."
+      : "The promised wage payment was missed. Resolve and trust fall.",
+  );
+  if (s.bonds[key] < 0) s.expedition.rivalries[key] = true;
+  s.expedition.promise = null;
+}
+const homeUpgrades = [
+  {
+    id: "storage",
+    name: "Storehouse",
+    gold: 60,
+    wood: 8,
+    ore: 2,
+    desc: "Increase reserve capacity from thirty to sixty units.",
+  },
+  {
+    id: "beds",
+    name: "Proper beds",
+    gold: 65,
+    wood: 8,
+    ore: 0,
+    desc: "Rest restores more health and removes more fatigue.",
+  },
+  {
+    id: "infirmary",
+    name: "Treatment room",
+    gold: 80,
+    wood: 5,
+    ore: 2,
+    desc: "An assigned Herbalist uses medicine to cure injuries during home rest.",
+  },
+  {
+    id: "forge",
+    name: "Permanent forge",
+    gold: 90,
+    wood: 6,
+    ore: 6,
+    desc: "An assigned Smith repairs equipment and crafts fine gear more efficiently.",
+  },
+  {
+    id: "garden",
+    name: "Kitchen garden",
+    gold: 50,
+    wood: 6,
+    ore: 0,
+    desc: "Harvest six stored rations every three days; farms harvest eight.",
+  },
+];
+function homeLock(s, action = "enter") {
+  if (s.battle || s.event || s.campOpen || s.destination || companyLost(s))
+    return "Finish the current activity and stop walking.";
+  if (s.location !== 15) return "Travel to Wayfarer Lodge.";
+  if (action === "buy")
+    return s.expedition.home.owned
+      ? "Already owned."
+      : s.gold < 320 || s.inventory.wood < 10
+        ? "Requires 320 crowns and ten wood."
+        : "";
+  return s.expedition.home.owned
+    ? ""
+    : "Purchase the abandoned property first.";
+}
+function purchaseHome(s, style = "lodge") {
+  if (!["lodge", "farm"].includes(style) || homeLock(s, "buy")) return false;
+  s.gold -= 320;
+  s.inventory.wood -= 10;
+  s.expedition.home.owned = true;
+  s.expedition.home.style = style;
+  s.expedition.home.harvestDay = s.day;
+  note(
+    s,
+    `The company purchased Wayfarer ${style === "farm" ? "Farm" : "Lodge"}. This is a permanent home; the wagon remains your traveling camp.`,
+  );
+  return true;
+}
+function enterHome(s) {
+  if (homeLock(s)) return false;
+  s.event = {
+    kind: "home",
+    title: "The company home",
+    text: "Store supplies, assign station workers, improve the property, and recover here.",
+  };
+  return true;
+}
+function homeWorker(s, role) {
+  const id = s.expedition.home.staff[role],
+    p = s.party[id];
+  return p &&
+    !p.dead &&
+    p.hp > 0 &&
+    (role === "smith" ? p.profession === "Smith" : p.profession === "Herbalist")
+    ? p
+    : null;
+}
+function assignHomeJob(s, role, id) {
+  if (s.event?.kind !== "home" || !["smith", "medic"].includes(role))
+    return false;
+  if (id === null) {
+    delete s.expedition.home.staff[role];
+    return true;
+  }
+  const p = s.party[id];
+  if (
+    !p ||
+    p.dead ||
+    p.hp <= 0 ||
+    p.profession !== (role === "smith" ? "Smith" : "Herbalist")
+  )
+    return false;
+  s.expedition.home.staff[role] = id;
+  return true;
+}
+function upgradeHome(s, id) {
+  const item = homeUpgrades.find((v) => v.id === id),
+    h = s.expedition.home;
+  if (
+    s.event?.kind !== "home" ||
+    !h.owned ||
+    !item ||
+    h.upgrades[id] ||
+    s.gold < item.gold ||
+    s.inventory.wood < item.wood ||
+    s.inventory.ore < item.ore
+  )
+    return false;
+  s.gold -= item.gold;
+  s.inventory.wood -= item.wood;
+  s.inventory.ore -= item.ore;
+  h.upgrades[id] = 1;
+  note(s, `${item.name} built at the company home.`);
+  return true;
+}
+const reserveKeys = [
+  "food",
+  "ore",
+  "wood",
+  "herbs",
+  "medicine",
+  "grain",
+  "cloth",
+  "salt",
+  "iron",
+];
+function reserveCapacity(s) {
+  return s.expedition.home.upgrades.storage ? 60 : 30;
+}
+function reserveLoad(s) {
+  return Object.values(s.expedition.home.stores).reduce((a, b) => a + b, 0);
+}
+function transferHome(s, key, amount, direction = "deposit") {
+  if (
+    s.event?.kind !== "home" ||
+    !reserveKeys.includes(key) ||
+    !Number.isInteger(amount) ||
+    amount < 1 ||
+    amount > 60 ||
+    !["deposit", "withdraw"].includes(direction)
+  )
+    return false;
+  const stores = s.expedition.home.stores,
+    source =
+      key === "food"
+        ? s
+        : tradeGoods.some((g) => g.id === key)
+          ? s.cargo
+          : s.inventory;
+  if (direction === "deposit") {
+    if (source[key] < amount || reserveLoad(s) + amount > reserveCapacity(s))
+      return false;
+    source[key] -= amount;
+    stores[key] += amount;
+  } else {
+    if (
+      stores[key] < amount ||
+      (source === s.cargo && cargoLoad(s) + amount > companyCargoCapacity(s))
+    )
+      return false;
+    stores[key] -= amount;
+    source[key] += amount;
+  }
+  return true;
+}
+function restAtHome(s) {
+  const h = s.expedition.home,
+    cost = Math.max(2, Math.ceil(campCost(s) / 2));
+  if (
+    s.event?.kind !== "home" ||
+    !h.owned ||
+    s.food + h.stores.food < cost ||
+    companyLost(s)
+  )
+    return false;
+  const stored = Math.min(h.stores.food, cost);
+  h.stores.food -= stored;
+  s.food -= cost - stored;
+  const medic = h.upgrades.infirmary && homeWorker(s, "medic"),
+    treatment = medic && s.inventory.medicine > 0;
+  if (treatment) {
+    s.inventory.medicine--;
+    practice(s, medic, 1);
+  }
+  spendHours(s, 12, { resting: true, mealsProvided: true });
+  for (const p of livingParty(s)) {
+    p.hp = Math.min(
+      p.max,
+      p.hp + 12 + (h.upgrades.beds ? 8 : 0) + (treatment ? 8 : 0),
+    );
+    p.fatigue = Math.max(0, p.fatigue - (h.upgrades.beds ? 60 : 40));
+    if (treatment) p.injury = false;
+    changeResolve(p, 3);
+  }
+  restRelationships(s);
+  note(
+    s,
+    `Rested twelve hours at home for ${cost} rations; daily wages still apply. ${treatment ? "The assigned medic treated injuries with one medicine." : "Beds and shelter restore health and fatigue."}`,
+  );
+  return true;
+}
+function harvestHome(s) {
+  const h = s.expedition.home,
+    amount = h.style === "farm" ? 8 : 6;
+  if (
+    s.event?.kind !== "home" ||
+    !h.upgrades.garden ||
+    s.day - h.harvestDay < 3 ||
+    reserveLoad(s) + amount > reserveCapacity(s)
+  )
+    return false;
+  h.harvestDay = s.day;
+  h.stores.food += amount;
+  note(
+    s,
+    `The home garden yields ${amount} stored rations. Another harvest will be ready in three days.`,
+  );
+  return true;
+}
+function homeRepair(s, id) {
+  const h = s.expedition.home,
+    smith = homeWorker(s, "smith"),
+    item = gearItem(s, id);
+  if (
+    s.event?.kind !== "home" ||
+    !h.upgrades.forge ||
+    !smith ||
+    !item ||
+    item.durability === 100 ||
+    s.inventory.ore < 1 ||
+    s.inventory.wood < 1
+  )
+    return false;
+  s.inventory.ore--;
+  s.inventory.wood--;
+  s.gear.find((g) => g.id === id).durability = 100;
+  practice(s, smith, 1);
+  spendHours(s, 2);
+  note(
+    s,
+    `${smith.name} repairs ${item.name} in the home forge for one ore and one wood.`,
+  );
+  return true;
+}
+function homeCraft(s, template) {
+  const h = s.expedition.home,
+    smith = homeWorker(s, "smith"),
+    plan = equipmentRecipe(s, template);
+  if (
+    s.event?.kind !== "home" ||
+    !h.upgrades.forge ||
+    !smith ||
+    !plan ||
+    !s.research.includes("armorer") ||
+    s.inventory.ore < Math.max(1, plan.ore - 1) ||
+    s.inventory.wood < plan.wood
+  )
+    return false;
+  s.inventory.ore -= Math.max(1, plan.ore - 1);
+  s.inventory.wood -= plan.wood;
+  grantEquipment(s, template);
+  practice(s, smith, 1);
+  spendHours(s, 2);
+  note(s, `${smith.name} crafts ${plan.item.name} at the permanent forge.`);
+  return true;
+}
+function upkeepForecast(s) {
+  const food = campCost(s),
+    wages = dailyWages(s);
+  return {
+    food,
+    wages,
+    foodDays: Math.floor(s.food / food),
+    paidDays: Math.floor(Math.max(0, s.gold - s.wageDebt) / Math.max(1, wages)),
+    hoursToDawn: 24 - s.timeOfDay,
+  };
+}
+function restoreExpedition(s, raw) {
+  const r = raw.expedition || {},
+    e = freshExpedition(),
+    count = (v, max = 10000) =>
+      Number.isInteger(v) ? Math.max(0, Math.min(max, v)) : 0;
+  for (const m of tacticalMissions)
+    if (
+      Number.isInteger(r.missionLedger?.[m.id]) &&
+      r.missionLedger[m.id] > 0 &&
+      r.missionLedger[m.id] <= s.day
+    )
+      e.missionLedger[m.id] = r.missionLedger[m.id];
+  e.mission = tacticalMissions.some(
+    (m) => m.id === r.mission && !e.missionLedger[m.id],
+  )
+    ? r.mission
+    : null;
+  for (const t of observationTrails) {
+    const old = r.clues?.[t.id];
+    if (old)
+      e.clues[t.id] = { stage: count(old.stage, 3), seen: old.seen === true };
+  }
+  for (const p of s.party) {
+    const id = r.careers?.[p.id];
+    p.career = p.level >= 2 && careerPaths.some((v) => v.id === id) ? id : null;
+    if (p.career) e.careers[p.id] = p.career;
+  }
+  e.conversationDay = Math.min(s.day, count(r.conversationDay));
+  e.travelDistance = count(r.travelDistance, 900);
+  const validIds = (ids) =>
+    Array.isArray(ids) &&
+    ids.length === 2 &&
+    ids[0] !== ids[1] &&
+    ids.every((id) => Number.isInteger(id) && s.party[id] && !s.party[id].dead);
+  if (
+    r.promise &&
+    validIds(r.promise.ids) &&
+    Number.isInteger(r.promise.due) &&
+    r.promise.due >= s.day &&
+    r.promise.due <= s.day + 1
+  )
+    e.promise = { ids: r.promise.ids, due: r.promise.due };
+  if (
+    r.conversation &&
+    validIds(r.conversation.ids) &&
+    ["wages", "hunger", "rivalry", "friendship", "conversation"].includes(
+      r.conversation.kind,
+    ) &&
+    raw.event?.kind === "travel-conversation" &&
+    !s.battle
+  ) {
+    e.conversation = { ids: r.conversation.ids, kind: r.conversation.kind };
+    s.event = {
+      kind: "travel-conversation",
+      title: `${s.party[e.conversation.ids[0]].name} and ${s.party[e.conversation.ids[1]].name} on the road`,
+      text: "Your companions await your response. Sharing a meal or listening builds trust; promises must be kept.",
+    };
+  } else if (s.event?.kind === "travel-conversation") s.event = null;
+  const h = r.home || {};
+  e.home.owned = h.owned === true;
+  e.home.style =
+    e.home.owned && ["lodge", "farm"].includes(h.style)
+      ? h.style
+      : e.home.owned
+        ? "lodge"
+        : null;
+  if (e.home.owned) {
+    for (const upgrade of homeUpgrades)
+      if (h.upgrades?.[upgrade.id] === 1) e.home.upgrades[upgrade.id] = 1;
+    let remaining = e.home.upgrades.storage ? 60 : 30;
+    for (const key of reserveKeys) {
+      const amount = Math.min(remaining, count(h.stores?.[key], 60));
+      e.home.stores[key] = amount;
+      remaining -= amount;
+    }
+    e.home.harvestDay = Math.min(s.day, count(h.harvestDay));
+    for (const role of ["smith", "medic"]) {
+      const id = h.staff?.[role],
+        p = s.party[id];
+      if (
+        Number.isInteger(id) &&
+        p &&
+        !p.dead &&
+        p.profession === (role === "smith" ? "Smith" : "Herbalist")
+      )
+        e.home.staff[role] = id;
+    }
+  }
+  for (let a = 0; a < s.party.length; a++)
+    for (let b = a + 1; b < s.party.length; b++) {
+      const key = bondKey(a, b),
+        v = raw.bonds?.[key];
+      if (
+        r.rivalries?.[key] === true &&
+        !s.party[a].dead &&
+        !s.party[b].dead &&
+        Number.isFinite(v) &&
+        v < 0
+      ) {
+        e.rivalries[key] = true;
+        s.bonds[key] = Math.max(-100, Math.floor(v));
+      }
+    }
+  s.expedition = e;
+  if (s.event?.kind === "home")
+    s.event =
+      e.home.owned && s.location === 15 && !s.battle
+        ? {
+            kind: "home",
+            title: "The company home",
+            text: "Your property and its stored supplies are preserved.",
+          }
+        : null;
+  if (s.battle) {
+    const m = tacticalMissions.find(
+        (v) => v.id === raw.battle.mission && e.mission === v.id,
+      ),
+      o = raw.battle.objective;
+    s.battle.mission = m?.id || null;
+    if (m && o)
+      s.battle.objective = {
+        kind: m.kind,
+        rounds: count(o.rounds, 6),
+        wagon: count(o.wagon, 30),
+        rescuer:
+          Number.isInteger(o.rescuer) && s.party[o.rescuer] ? o.rescuer : null,
+        sigils: [
+          ...new Set(
+            (Array.isArray(o.sigils) ? o.sigils : []).filter((v) =>
+              [0, 1, 2].includes(v),
+            ),
+          ),
+        ],
+        prisoner: { x: 7, y: 3 },
+        limit: 6,
+      };
+    else delete s.battle.objective;
+    for (const enemy of s.battle.enemies) {
+      enemy.weakened = count(enemy.weakened, 2);
+      enemy.exposed = count(enemy.exposed, 2);
+    }
+    for (const u of s.battle.units) {
+      u.channelUsed = u.channelUsed === true;
+      u.pinningWatch = u.pinningWatch === true;
+      u.riposte = u.riposte === true;
+      u.outriderUsed = u.outriderUsed === true;
+      u.protectedBy =
+        Number.isInteger(u.protectedBy) && s.party[u.protectedBy]
+          ? u.protectedBy
+          : null;
+    }
+  }
+}
+
+function recoverMagicAtHome(s, id) {
+  const p = s.party[id];
+  if (
+    s.event?.kind !== "home" ||
+    !s.expedition.home.owned ||
+    !p ||
+    p.dead ||
+    p.hp <= 0 ||
+    !isCaster(p) ||
+    s.realm.shards < 1 ||
+    !(p.spellSpent?.[1] || p.spellSpent?.[2])
+  )
+    return false;
+  s.realm.shards--;
+  if (p.spellSpent[2] > 0) p.spellSpent[2]--;
+  else p.spellSpent[1] = Math.max(0, p.spellSpent[1] - 2);
+  spendHours(s, 1);
+  note(s, `${p.name} spends an aether shard restoring magic at home.`);
+  return true;
+}
+
 // Original, hand-built pixel artwork. All coordinates are logical pixels.
 const artPalette = {
   meadow: "#a3a775",
@@ -10845,6 +12338,10 @@ function drawLandmark(c, p, index = 0) {
     pixel(c, x + 41, y - 6, 2, 17, "#6f5d3d");
     pixel(c, x + 43, y - 6, 8, 6, "#b79552");
     pixel(c, x + 44, y - 5, 5, 1, "#e1cc8f");
+  } else if (p.type === "home") {
+    steppedOval(c, x - 38, y - 25, 80, 65, "#a39f71");
+    house(c, x - 15, y - 8, "#7d7259", true);
+    fence(c, x - 32, y + 35, 65);
   } else if (p.type === "farm") {
     house(c, x - 22, y - 8, "#8e7250");
     fence(c, x - 34, y + 30, 68);
@@ -12179,6 +13676,55 @@ function drawFantasyEnemy(c, kind, x, y) {
   c.restore();
 }
 
+function drawCompanyHome(c, s) {
+  const h = s.expedition.home;
+  pixel(c, 0, 0, 768, 432, "#8d9b72");
+  steppedOval(c, 120, 90, 510, 300, "#b2ac7b");
+  house(c, 300, 135, h.style === "farm" ? "#8e6d4c" : "#6d7271", true);
+  house(c, 440, 145, "#8d7655");
+  fence(c, 175, 100, 390);
+  fence(c, 175, 370, 390);
+  for (let i = 0; i < 6; i++) pixel(c, 220 + i * 45, 260, 30, 12, "#877452");
+  if (h.upgrades.garden)
+    for (let i = 0; i < 6; i++) {
+      pixel(c, 220 + i * 45, 252, 5, 15, "#57714a");
+      pixel(c, 223 + i * 45, 250, 8, 5, "#7d995a");
+    }
+  if (h.upgrades.storage) {
+    pixel(c, 450, 235, 50, 40, "#886944");
+    pixel(c, 454, 244, 42, 3, "#c4aa77");
+    pixel(c, 473, 237, 4, 35, "#c4aa77");
+  }
+  if (h.upgrades.forge) {
+    pixel(c, 340, 245, 35, 28, "#666851");
+    pixel(c, 345, 250, 24, 15, "#a86e3e");
+    pixel(c, 352, 253, 10, 9, "#d2a867");
+  }
+  if (h.upgrades.infirmary) {
+    pixel(c, 265, 195, 35, 16, "#c6b78b");
+    pixel(c, 275, 192, 5, 18, "#f0ddad");
+    pixel(c, 269, 198, 17, 5, "#f0ddad");
+  }
+  s.party
+    .filter((p) => !p.dead)
+    .forEach((p, i) =>
+      drawCharacter(
+        c,
+        245 + i * 35,
+        335,
+        p.coat || partyCoats[i],
+        0,
+        p.role,
+        p.id,
+        p,
+      ),
+    );
+  c.fillStyle = "#4c4e39";
+  c.font = "bold 14px monospace";
+  c.textAlign = "center";
+  c.fillText(`WAYFARER ${h.style === "farm" ? "FARM" : "LODGE"}`, 384, 55);
+}
+
 let gameActive = false;
 let hasSessionCompany = false;
 let menuSettings = { largeText: false, reduceMotion: false, slowDays: false };
@@ -12306,11 +13852,16 @@ function objective() {
   if (s.battle) {
     const p = s.party[selected],
       u = s.battle.units.find((u) => u.id === selected);
+    if (missionObjective(s)) return missionObjective(s);
     if (spellMode)
       return `Spell prepared: ${spellBook.find((v) => v.id === spellMode)?.name}. Select an outlined target or use Spell targets below. Slots persist between battles.`;
     if (abilityMode)
       return `${skillFor(p).name} armed: click an outlined enemy within ${attackRange(p, true, s)} tiles. ${skillFor(p).desc} Costs ${skillFor(p).cost} valor.`;
     return `${s.battle.openingAmbush ? "AMBUSH · Free opening turn · " : ""}${battlefield(s).name} · Round ${s.battle.turn} · Valor ${s.battle.valor}/5 · ${p.name}: ${u?.moved ? "movement used" : `move up to ${movementRange(p)} tiles`}, ${u?.acted ? "action used" : "attack or brace"}. ${resolveLabel(p)} · ${fatigueLabel(p)} · Fatigue ${Math.round(p.fatigue || 0)}/100. ${bondSupport(s, p) ? "Trusted support +1 attack. " : ""}${battlefield(s).text} Rubble blocks 2 ranged damage; bushes block 1 and cost 2 movement; trees and deadfall block movement and sight; Melee flanking +2. Disengage before leaving melee reach.${s.battle.wildlife ? " Wolves rush wounded targets and gain pack damage." : ""}${s.battle.bossId ? ` ${namedAdversaries.find((boss) => boss.id === s.battle.bossId).name}: ${bossThreat(s) ? "FIRE INCOMING: move off marked tiles or stun Maela." : "Hover the named enemy for its special mechanic."}` : ""}`;
+  }
+  if (s.expedition.mission) {
+    const m = tacticalMissions.find((v) => v.id === s.expedition.mission);
+    return `${m.name}: travel to ${places[m.site].name}. ${m.desc}`;
   }
   if (s.contract)
     return `Active: ${s.contract.name}. ${s.location === s.contract.target ? "Use the gold button below to complete your objective." : `Travel to ${places[s.contract.target].name} by clicking any point on the map.`}`;
@@ -12566,6 +14117,7 @@ function render() {
   const panel = $("panel");
   panel.replaceChildren();
   if (tab === "Company") {
+    appendExpeditionCompany(panel);
     appendRealmCompany(panel);
     appendTravelJobs(panel);
     appendWagonPanel(panel);
@@ -13269,6 +14821,7 @@ function render() {
     panel.append(chapter);
   }
   if (tab === "Contracts") {
+    appendMissionBoard(panel);
     if (s.caravanEscort) appendEscortPanel(panel);
     for (const route of caravanEscortOffers(s)) {
       const p = s.patrols.find((p) => p.id === route.patrolId);
@@ -13977,7 +15530,24 @@ function render() {
     const raided =
       s.event.kind === "caravan-raid" &&
       s.patrols.find((p) => p.id === s.event.patrolId);
-    if (s.event.kind === "wagon-travel") {
+    if (s.event.kind === "home") {
+      appendHomePanel(c);
+    } else if (s.event.kind === "travel-conversation") {
+      for (const [choice, label] of [
+        ["meal", "Share a meal · 2 rations"],
+        ["listen", "Listen and share the burden"],
+        ["pay", "Settle overdue wages"],
+        ["promise", "Promise payment by dawn"],
+        ["dismiss", "Dismiss their concerns"],
+      ])
+        c.append(
+          lockedButton(
+            label,
+            () => respondConversation(s, choice),
+            conversationLock(s, choice),
+          ),
+        );
+    } else if (s.event.kind === "wagon-travel") {
       for (const [choice, label] of [
         ["duty", "Use assigned travel specialist"],
         ["materials", "Secure wagon · 2 wood / 1 hour"],
@@ -14379,6 +15949,8 @@ function render() {
       ),
       button("Retreat · lose 15 crowns", () => retreatBattle(s)),
     );
+    appendMissionCombat(a);
+    appendCareerCombat(a);
     const actor = s.party[selected],
       unit = s.battle.units.find((u) => u.id === selected),
       skill = skillFor(actor);
@@ -14778,6 +16350,7 @@ function render() {
     $("map-label").textContent =
       `${places[s.location]?.name || terrainAt(s.position).toUpperCase()} · ${Math.round(s.position.x)}, ${Math.round(s.position.y)}`;
   }
+  appendExpeditionWorld(a);
   appendRealmWorldActions(a);
   const rumorJournal = $("rumor-journal");
   rumorJournal.replaceChildren();
@@ -14817,6 +16390,7 @@ function render() {
   }
   updateClockUI();
   renderHelp();
+  appendActionRequirements();
   positionObjective();
   draw();
 }
@@ -14872,7 +16446,7 @@ function draw() {
     view.x = 325 - w / view.scale / 2;
     view.y = 225 - Math.max(160, h - 180) / view.scale / 2;
   }
-  if (["site", "dungeon", "farm"].includes(s.event?.kind)) {
+  if (["site", "dungeon", "farm", "home"].includes(s.event?.kind)) {
     view.scale = Math.min(w / 768, Math.max(160, h - 160) / 432);
     view.x = (768 - w / view.scale) / 2;
     view.y = (432 - Math.max(160, h - 160) / view.scale) / 2;
@@ -14886,6 +16460,7 @@ function draw() {
     );
     if (s.event.kind === "dungeon") drawDungeonInterior(ctx, s);
     else if (s.event.kind === "farm") drawFarmInterior(ctx, s);
+    else if (s.event.kind === "home") drawCompanyHome(ctx, s);
     else drawSiteInterior(ctx, s);
     return;
   }
@@ -14914,6 +16489,7 @@ function draw() {
   if (s.battle) {
     drawBattlefield(ctx, s);
     drawRealmMagic();
+    drawMissionObjective();
     const threat = bossThreat(s);
     if (threat)
       for (const tile of threat.tiles) {
@@ -15115,6 +16691,7 @@ function draw() {
   }
   ctx.drawImage(worldArtwork(), 0, 0);
   ctx.drawImage(fogArtwork(s.charted), 0, 0);
+  drawObservationClues();
   places.forEach((p, i) => {
     if (!s.discovered.includes(i) && s.contract?.target !== i) return;
     if (s.location === i) {
@@ -16430,6 +18007,541 @@ function drawRealmMagic() {
   }
   for (const focus of s.battle.realmMagic?.concentration || [])
     drawMapLabel(ctx, "BEACON", 136 + focus.x * 62, 12 + focus.y * 60, true);
+}
+
+function lockedButton(label, fn, reason) {
+  const wrap = document.createElement("div"),
+    b = button(label, fn, !!reason);
+  b.title = reason || "";
+  wrap.append(b);
+  if (reason) {
+    const p = document.createElement("small");
+    p.className = "hint";
+    p.textContent = reason;
+    wrap.append(p);
+  }
+  return wrap;
+}
+function fold(title) {
+  const d = document.createElement("details"),
+    s = document.createElement("summary");
+  s.textContent = title;
+  d.append(s);
+  return d;
+}
+function appendExpeditionCompany(panel) {
+  const f = upkeepForecast(s),
+    cost = card("Company outlook", "");
+  const p = document.createElement("p");
+  p.textContent = `Daily cost: ${f.food} rations and ${f.wages} crowns. Supplies cover ${f.foodDays} days; available crowns cover ${f.paidDays} days after wage debt. Next upkeep in ${Math.ceil(f.hoursToDawn)} game hours. Travel days last five real minutes while active; menus and encounters pause time.`;
+  cost.append(p);
+  panel.append(cost);
+  const careers = fold("Class careers · permanent progression");
+  for (const companion of livingParty(s)) {
+    const c = card(
+      `${companion.name} · ${activeCareer(companion)?.name || "Choose a career"}`,
+      "",
+    );
+    const desc = document.createElement("p");
+    desc.textContent =
+      "Level two and one training point. Choose one permanent path; Thief paths require the Thief profession to operate.";
+    c.append(desc);
+    for (const path of careersFor(companion)) {
+      const text = document.createElement("p");
+      text.textContent = `${path.name}: ${path.desc}`;
+      c.append(
+        text,
+        lockedButton(
+          `Learn ${path.name}: ${companion.name}`,
+          () => learnCareer(s, companion.id, path.id),
+          careerLock(s, companion.id, path.id),
+        ),
+      );
+    }
+    careers.append(c);
+  }
+  panel.append(careers);
+  const trails = fold("Observed trails · follow the evidence");
+  for (const t of observationTrails) {
+    const st = s.expedition.clues[t.id];
+    if (!st) continue;
+    const c = card(t.name, "");
+    const text = document.createElement("p");
+    text.textContent = `${st.stage}/3 clues understood. ${st.stage ? t.clues[st.stage - 1] : "A sign has been spotted, but its meaning is unclear."}`;
+    c.append(
+      text,
+      button(
+        `Follow ${t.name}`,
+        () => {
+          if (followObservation(s, t.id)) drawerOpen = false;
+        },
+        !!s.battle || !!s.event || s.campOpen,
+      ),
+    );
+    trails.append(c);
+  }
+  panel.append(trails);
+  const home = fold("Company home · permanent investment"),
+    h = s.expedition.home;
+  const text = document.createElement("p");
+  text.textContent = h.owned
+    ? `Wayfarer ${h.style === "farm" ? "Farm" : "Lodge"}: ${reserveLoad(s)}/${reserveCapacity(s)} stored reserves. Visit to build stations, rest, and craft.`
+    : "An abandoned property stands southeast of Echo Cavern. Purchase it for 320 crowns and ten wood; choose a lodge or farm. The wagon remains your traveling camp.";
+  home.append(
+    text,
+    button(
+      "Travel to Wayfarer Lodge",
+      () => {
+        moveTo(s, places[15].x, places[15].y);
+        drawerOpen = false;
+      },
+      !!s.battle || !!s.event || s.campOpen,
+    ),
+  );
+  panel.append(home);
+  const bonds = fold("Travel relationships");
+  const info = document.createElement("p");
+  info.textContent =
+    "Long journeys prompt conversations. Shared meals build trust; dismissal creates rivals. Protective and healing career techniques can be refused between rivals. Promised wages must be settled by the next dawn.";
+  bonds.append(info);
+  if (s.expedition.promise) {
+    const promise = document.createElement("p");
+    promise.textContent = `Outstanding promise: pay wage debt by day ${s.expedition.promise.due}.`;
+    bonds.append(promise);
+  }
+  panel.append(bonds);
+}
+function appendMissionBoard(panel) {
+  const d = fold("Tactical missions · varied battle objectives");
+  for (const m of tacticalMissions.filter((v) => v.issuer === s.location)) {
+    const c = card(m.name, "");
+    const p = document.createElement("p");
+    p.textContent = `${places[m.site].name} · ${m.reward} crowns. ${m.desc}`;
+    c.append(
+      p,
+      lockedButton(
+        `Accept mission: ${m.name}`,
+        () => acceptMission(s, m.id),
+        missionLock(s, m.id),
+      ),
+    );
+    d.append(c);
+  }
+  panel.append(d);
+  if (s.expedition.mission) {
+    const m = tacticalMissions.find((v) => v.id === s.expedition.mission);
+    panel.append(
+      card(`Active mission: ${m.name}`, `<p>${m.desc}</p>`),
+      button("Abandon tactical mission", () => abandonMission(s)),
+    );
+  }
+}
+function appendExpeditionWorld(a) {
+  if (s.battle || s.event || s.campOpen || companyLost(s)) return;
+  observeClues(s);
+  for (const clue of visibleClues(s).filter(
+    (v) => Math.hypot(v.x - s.position.x, v.y - s.position.y) <= 55,
+  ))
+    a.append(
+      lockedButton(
+        `Read ${clue.name}`,
+        () => interpretClue(s, clue.id),
+        interpretClueLock(s, clue.id),
+      ),
+    );
+  if (s.location === 15) {
+    if (s.expedition.home.owned)
+      a.append(
+        lockedButton("Enter company home", () => enterHome(s), homeLock(s)),
+      );
+    else {
+      const d = fold("Purchase Wayfarer property");
+      for (const style of ["lodge", "farm"])
+        d.append(
+          lockedButton(
+            `Buy ${style} · 320 crowns / 10 wood`,
+            () => purchaseHome(s, style),
+            homeLock(s, "buy"),
+          ),
+        );
+      a.append(d);
+    }
+  }
+  const m = tacticalMissions.find((v) => v.id === s.expedition.mission);
+  if (m && s.location === m.site)
+    a.append(
+      lockedButton(
+        `Begin mission: ${m.name}`,
+        () => startMission(s),
+        missionLock(s, m.id, "start"),
+      ),
+    );
+}
+function appendMissionCombat(a) {
+  const o = s.battle?.objective;
+  if (!o) return;
+  const d = fold(`Objective · ${missionObjective(s)}`);
+  d.open = true;
+  if (o.kind === "rescue")
+    d.append(
+      lockedButton(
+        o.rescuer === null ? "Free captive" : "Extract captive",
+        () =>
+          missionAction(s, selected, o.rescuer === null ? "free" : "extract"),
+        missionActionLock(s, selected, o.rescuer === null ? "free" : "extract"),
+      ),
+    );
+  if (o.kind === "rescue" && o.rescuer !== null && s.party[o.rescuer]?.hp <= 0)
+    d.append(
+      lockedButton(
+        "Take over captive escort",
+        () => missionAction(s, selected, "carry"),
+        missionActionLock(s, selected, "carry"),
+      ),
+    );
+  if (o.kind === "escape")
+    d.append(
+      lockedButton(
+        "Withdraw together",
+        () => missionAction(s, selected, "escape"),
+        missionActionLock(s, selected, "escape"),
+      ),
+    );
+  if (o.kind === "ritual")
+    for (let i = 0; i < 3; i++)
+      d.append(
+        lockedButton(
+          `Disrupt ritual seal ${i + 1}`,
+          () => missionAction(s, selected, "sigil", i),
+          missionActionLock(s, selected, "sigil", i),
+        ),
+      );
+  a.append(d);
+}
+function appendCareerCombat(a) {
+  const path = activeCareer(s.party[selected]);
+  if (!path) return;
+  const d = fold(`Class technique · ${path.name}`),
+    hint = document.createElement("p");
+  hint.textContent = path.desc;
+  d.append(hint);
+  const enemyPaths = [
+      "shadow",
+      "saboteur",
+      "tracker",
+      "controller",
+      "hexer",
+      "avenger",
+    ],
+    allyPaths = ["protector", "mentor"];
+  const targets = enemyPaths.includes(path.id)
+    ? s.battle.enemies
+        .filter((e) => e.hp > 0)
+        .map((e) => ({ id: e.id, name: e.name || e.kind }))
+    : allyPaths.includes(path.id)
+      ? s.battle.units
+          .filter((u) => u.id !== selected && s.party[u.id].hp > 0)
+          .map((u) => ({ id: u.id, name: s.party[u.id].name }))
+      : [{ id: null, name: "company" }];
+  for (const target of targets)
+    d.append(
+      lockedButton(
+        `Use ${path.name} on ${target.name}`,
+        () => careerAction(s, selected, target.id),
+        careerActionLock(s, selected, target.id),
+      ),
+    );
+  a.append(d);
+}
+let reserveResource = "food";
+function appendHomePanel(c) {
+  const h = s.expedition.home,
+    stores = document.createElement("p");
+  stores.textContent = `${h.style === "farm" ? "Farm" : "Lodge"} reserves ${reserveLoad(s)}/${reserveCapacity(s)}: ${Object.entries(
+    h.stores,
+  )
+    .map(([k, v]) => `${k} ${v}`)
+    .join(" · ")}`;
+  c.append(stores);
+  const reserve = fold("Store and withdraw supplies"),
+    select = document.createElement("select");
+  select.setAttribute("aria-label", "Home reserve resource");
+  for (const key of Object.keys(h.stores)) select.add(new Option(key, key));
+  select.value = reserveResource;
+  select.onchange = () => {
+    reserveResource = select.value;
+    render();
+  };
+  reserve.append(select);
+  const carried =
+    reserveResource === "food"
+      ? s
+      : tradeGoods.some((g) => g.id === reserveResource)
+        ? s.cargo
+        : s.inventory;
+  for (const amount of [1, 5])
+    for (const direction of ["deposit", "withdraw"])
+      reserve.append(
+        lockedButton(
+          `${direction === "deposit" ? "Store" : "Withdraw"} ${amount} ${reserveResource}`,
+          () => transferHome(s, reserveResource, amount, direction),
+          direction === "deposit"
+            ? carried[reserveResource] < amount
+              ? "Not enough carried supplies."
+              : reserveLoad(s) + amount > reserveCapacity(s)
+                ? "Make room in home reserves."
+                : ""
+            : h.stores[reserveResource] < amount
+              ? "Not enough supplies in home reserves."
+              : carried === s.cargo &&
+                  cargoLoad(s) + amount > companyCargoCapacity(s)
+                ? "Make room in company cargo."
+                : "",
+        ),
+      );
+  c.append(reserve);
+  c.append(
+    lockedButton(
+      "Rest at home · 12 hours",
+      () => restAtHome(s),
+      s.food + h.stores.food < Math.max(2, Math.ceil(campCost(s) / 2))
+        ? "Not enough rations in company or home stores."
+        : "",
+    ),
+    lockedButton(
+      "Harvest kitchen garden",
+      () => harvestHome(s),
+      !h.upgrades.garden
+        ? "Build a kitchen garden first."
+        : s.day - h.harvestDay < 3
+          ? `Ready on day ${h.harvestDay + 3}.`
+          : reserveLoad(s) + (h.style === "farm" ? 8 : 6) > reserveCapacity(s)
+            ? "Make room in home reserves."
+            : "",
+    ),
+  );
+  const upgrades = fold("Improve the property");
+  for (const item of homeUpgrades) {
+    const p = document.createElement("p");
+    p.textContent = item.desc;
+    upgrades.append(
+      p,
+      lockedButton(
+        `Build ${item.name} · ${item.gold} crowns / ${item.wood} wood / ${item.ore} ore`,
+        () => upgradeHome(s, item.id),
+        h.upgrades[item.id]
+          ? "Already built."
+          : s.gold < item.gold ||
+              s.inventory.wood < item.wood ||
+              s.inventory.ore < item.ore
+            ? "Gather the listed crowns and materials."
+            : "",
+      ),
+    );
+  }
+  c.append(upgrades);
+  const stations = fold("Home stations · assign operators");
+  for (const [role, label] of [
+    ["smith", "Home smith"],
+    ["medic", "Home medic"],
+  ]) {
+    const select = document.createElement("select");
+    select.setAttribute("aria-label", label);
+    select.add(new Option("Unassigned", ""));
+    for (const p of livingParty(s))
+      if (p.profession === (role === "smith" ? "Smith" : "Herbalist"))
+        select.add(new Option(p.name, p.id));
+    select.value = h.staff[role] ?? "";
+    select.onchange = () => {
+      assignHomeJob(s, role, select.value === "" ? null : Number(select.value));
+      render();
+    };
+    const p = document.createElement("p");
+    p.textContent = label;
+    stations.append(p, select);
+  }
+  for (const gear of s.gear.filter((g) => g.durability < 100))
+    stations.append(
+      lockedButton(
+        `Home repair: ${gear.name}`,
+        () => homeRepair(s, gear.id),
+        !h.upgrades.forge || !homeWorker(s, "smith")
+          ? "Build a forge and assign a conscious Smith."
+          : s.inventory.ore < 1 || s.inventory.wood < 1
+            ? "Requires one ore and one wood."
+            : "",
+      ),
+    );
+  for (const item of equipmentCatalog.filter((v) => v.tier === 2)) {
+    const quote = equipmentRecipe(s, item.id);
+    stations.append(
+      lockedButton(
+        `Home craft: ${item.name}`,
+        () => homeCraft(s, item.id),
+        !h.upgrades.forge || !homeWorker(s, "smith")
+          ? "Build a forge and assign a conscious Smith."
+          : !s.research.includes("armorer")
+            ? "Requires the Armorer discovery."
+            : s.inventory.ore < Math.max(1, quote.ore - 1) ||
+                s.inventory.wood < quote.wood
+              ? `Requires ${Math.max(1, quote.ore - 1)} ore and ${quote.wood} wood.`
+              : "",
+      ),
+    );
+  }
+  for (const p of livingParty(s).filter(isCaster))
+    stations.append(
+      lockedButton(
+        `Home magic recovery: ${p.name} · 1 aether shard`,
+        () => recoverMagicAtHome(s, p.id),
+        s.realm.shards < 1
+          ? "Find an aether shard in a hidden chamber or mage stronghold."
+          : !(p.spellSpent?.[1] || p.spellSpent?.[2])
+            ? "All spell slots are already ready."
+            : "",
+      ),
+    );
+  c.append(
+    stations,
+    button("Leave company home", () => (s.event = null)),
+  );
+}
+function drawMissionObjective() {
+  const o = s.battle.objective;
+  if (!o) return;
+  if (o.kind === "defense") {
+    drawWagon(ctx, 136 + 2 * 62, 28 + 3 * 60, false, "wheat");
+    drawMapLabel(ctx, `DEFEND ${o.wagon}/30`, 136 + 2 * 62, 3 * 60 - 4, true);
+  }
+  if (o.kind === "rescue") {
+    const carrier = s.battle.units.find((u) => u.id === o.rescuer),
+      x = carrier?.x ?? 7,
+      y = carrier?.y ?? 3;
+    person(151 + x * 62, 37 + y * 60, "#c4b48b", 0, "", 2);
+    drawMapLabel(
+      ctx,
+      carrier ? "CAPTIVE FOLLOWS" : "CAPTIVE",
+      136 + x * 62,
+      y * 60 - 3,
+      true,
+    );
+  }
+  if (o.kind === "escape" || o.kind === "rescue") {
+    const x = o.kind === "escape" ? 7 : 0;
+    ctx.fillStyle = "#d0bf6755";
+    ctx.fillRect(105 + x * 62, 0, 124, 420);
+    drawMapLabel(ctx, "EXIT", 136 + x * 62, 20, true);
+  }
+  if (o.kind === "ritual")
+    for (const [i, [x, y]] of [
+      [4, 1],
+      [6, 3],
+      [4, 5],
+    ].entries()) {
+      ctx.strokeStyle = o.sigils.includes(i) ? "#6f8c61" : "#b16c9a";
+      ctx.lineWidth = 3;
+      ctx.strokeRect(115 + x * 62, 12 + y * 60, 35, 30);
+      drawMapLabel(
+        ctx,
+        o.sigils.includes(i) ? "BROKEN" : `SEAL ${i + 1}`,
+        136 + x * 62,
+        42 + y * 60,
+        true,
+      );
+    }
+}
+function drawObservationClues() {
+  for (const clue of visibleClues(s)) {
+    const x = clue.x,
+      y = clue.y;
+    ctx.fillStyle = {
+      tracks: "#67503c",
+      smoke: "#72796a",
+      lights: "#a0b8bd",
+      road: "#b6ae87",
+    }[clue.kind];
+    if (clue.kind === "tracks")
+      for (let i = 0; i < 4; i++)
+        ctx.fillRect(x + i * 5, y + (i % 2) * 5, 3, 4);
+    if (clue.kind === "smoke")
+      for (let i = 0; i < 4; i++)
+        ctx.fillRect(x + (i % 2) * 4, y - i * 7, 5, 6);
+    if (clue.kind === "lights")
+      for (let i = 0; i < 4; i++)
+        ctx.fillRect(x + i * 5, y + (i % 2) * 5, 3, 3);
+    if (clue.kind === "road")
+      for (let i = 0; i < 4; i++)
+        ctx.fillRect(x + i * 6, y + (i % 2) * 3, 5, 6);
+    drawMapLabel(ctx, clue.name, x, y + 24, true);
+  }
+}
+
+function appendActionRequirements() {
+  const source = drawerOpen ? $("panel") : $("actions"),
+    buttons = [...source.querySelectorAll("button:disabled")];
+  if (!buttons.length) return;
+  const details = fold("Unavailable actions · requirements"),
+    seen = new Set();
+  for (const b of buttons) {
+    const label = b.textContent;
+    if (seen.has(label)) continue;
+    seen.add(label);
+    const reason = b.title || inferActionRequirement(label);
+    b.title = reason;
+    const text = document.createElement("p");
+    text.textContent = `${label}: ${reason}`;
+    details.append(text);
+    if (seen.size >= 12) break;
+  }
+  source.append(details);
+}
+function inferActionRequirement(label) {
+  if (s.battle) {
+    const unit = s.battle.units.find((u) => u.id === selected);
+    if (unit?.acted)
+      return "The selected companion has already spent their action this round.";
+    if (label.startsWith("Prepare ")) {
+      const spell = spellBook.find((v) =>
+        label.startsWith(`Prepare ${v.name} ·`),
+      );
+      if (spell && spellSlots(s.party[selected])[spell.level] < 1)
+        return `No level ${spell.level} spell slots remain. Recover at camp, at home with rare supplies, or in Emberfall.`;
+    }
+    return "Requires a living target within range and sight, enough valor, and an unused action or movement.";
+  }
+  if (label.startsWith("Sell"))
+    return "You need unassigned stock or equipment to sell.";
+  if (label.includes("Recruit") || label.startsWith("Hire"))
+    return livingParty(s).length >= 6
+      ? "The company can house six companions. Make room before recruiting."
+      : "You need enough crowns for the recruitment fee.";
+  const currencies = {
+    crowns: s.gold,
+    wood: s.inventory.wood,
+    ore: s.inventory.ore,
+    herbs: s.inventory.herbs,
+    rations: s.food,
+    knowledge: s.knowledge,
+    renown: s.renown,
+  };
+  for (const match of label.matchAll(
+    /(\d+) (crowns|wood|ore|herbs|rations|knowledge|renown)/g,
+  )) {
+    const [_, amount, key] = match;
+    if (currencies[key] < Number(amount))
+      return `Requires ${amount} ${key}; you have ${currencies[key]}.`;
+  }
+  if (label.startsWith("Learn"))
+    return "Check the listed class, level, training points, prerequisites, and permanent choices.";
+  if (label.startsWith("Build"))
+    return "This improvement is already built, or its listed materials and camp requirements are not met.";
+  if (label.includes("Rest"))
+    return "Finish the encounter and provide the listed food or crowns for rest.";
+  if (label.includes("repair") || label.includes("Repair"))
+    return "Requires damaged equipment, the listed materials, and a conscious assigned Smith where applicable.";
+  if (s.event?.kind === "dungeon")
+    return "Stand beside the relevant dungeon feature and bring the required profession or materials.";
+  return "Check the action's listed location, resources, companion requirements, and one-time completion status.";
 }
 
 })();

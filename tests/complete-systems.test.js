@@ -503,7 +503,7 @@ test("old saves migrate without losing gear, and malformed economy or story data
   delete s.stories;
   s.gold = 99;
   const migrated = restore(s);
-  assert.equal(migrated.version, 16);
+  assert.equal(migrated.version, 17);
   assert.equal(migrated.gold, 99);
   assert.equal(cargoLoad(migrated), 0);
   s.cargo = { grain: 999, cloth: 999, salt: -1, iron: NaN };

@@ -28,7 +28,7 @@ Open the server on port 3000. If that port is already in use, reuse the existing
 
 ## Title menu and founding a company
 
-The game opens on a title menu. **Continue** resumes the autosave; it is disabled when there is no readable company. **New Company** opens a creator without touching your current save. **Load** manages three manual save slots. **Settings** offers larger interface text, reduced motion, and eight-minute exploration days instead of four. Timed actions retain their stated durations. Title and creation menus pause the game.
+The game opens on a title menu. **Continue** resumes the autosave; it is disabled when there is no readable company. **New Company** opens a creator without touching your current save. **Load** manages three manual save slots. **Settings** offers larger interface text, reduced motion, and ten-minute exploration days instead of five. Timed actions retain their stated durations. Title and creation menus pause the game.
 
 Name the company, choose one of four banners, and customize all four founders: name, class, profession, and personality trait. You can repeat classes. Portraits and stat previews update as you choose; the creator shows the resulting daily food and wage costs. Banner colors carry into founder portraits, map sprites, camp, and combat. Trait tradeoffs apply to actual gameplay: mercenaries gain attack and demand higher wages, while hearty founders start with 32 health and consume extra food.
 
@@ -59,7 +59,7 @@ Roaming wolf packs now use actual wolf sprites on the map as well as in tactical
 
 The map fills the game screen. **Click or tap any ground** to set your own destination; the party walks there with animated companions following the route you actually took. Click again to redirect, use **Stop walking** to halt, or hold **WASD / arrow keys** to steer. There are no preset travel paths. Optional journal travel controls set a destination that you can redirect freely. The camera follows the company on narrow screens, keeping sprite proportions intact.
 
-Towns and other sites offer actions only when you are within 64 world pixels of villages or 54 pixels of other sites. Arriving at a village stops the party and opens its places menu: visit the market for supplies, the blacksmith to buy and equip weapons or armor, the tavern to recruit companions, or the contract board for paid work. Available contracts appear only at village boards; your accepted objective remains visible during exploration. Management menus are overlays opened from the bottom toolbar; opening one pauses walking. Close the panel to return to exploration. You can forage and pitch camp anywhere. A full day takes **four minutes of active exploration**, independent of walking distance. Shallows slow travel. Menus, pitched camps, battles, encounters, and hidden browser tabs pause the exploration clock. Foraging and fieldwork advance six in-game hours; construction takes two hours. Saves retain your exact position and time, and reload safely stopped.
+Towns and other sites offer actions only when you are within 64 world pixels of villages or 54 pixels of other sites. Arriving at a village stops the party and opens its places menu: visit the market for supplies, the blacksmith to buy and equip weapons or armor, the tavern to recruit companions, or the contract board for paid work. Available contracts appear only at village boards; your accepted objective remains visible during exploration. Management menus are overlays opened from the bottom toolbar; opening one pauses walking. Close the panel to return to exploration. You can forage and pitch camp anywhere. A full day takes **five minutes of active exploration**, independent of walking distance. Shallows slow travel. Menus, pitched camps, battles, encounters, and hidden browser tabs pause the exploration clock. Foraging and fieldwork advance six in-game hours; construction takes two hours. Saves retain your exact position and time, and reload safely stopped.
 
 ## The living borderlands
 
@@ -605,4 +605,31 @@ Aether shards are finite loot from side chambers and the cleared Outcast spire. 
 npm test
 npm run build
 GAME_URL=http://127.0.0.1:3002/ PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/realm-expansion-smoke.mjs
+```
+
+
+## Expedition systems (v0.30)
+
+**Four tactical objectives.** Village contract boards now offer separate, one-time tactical missions: defend a supply wagon for four rounds, free and extract a captive, withdraw the conscious company across the battlefield, or break three ritual seals before the sixth enemy round. Killing the guards does not automatically finish an extraction or ritual. A conscious companion can take over a fallen rescuer's escort. Failed or abandoned battles do not pay rewards; an accepted mission remains available for another attempt. Objectives, progress, and interaction requirements appear in battle.
+
+**Permanent class careers.** At level two, spend one training point to choose a career in Company management. Each class has two paths: Swordswoman Duelist/Vanguard, Shieldbearer Protector/Captain, Spearman Controller/Outrider, Archer Tracker/Sentinel, Wizard Channeler/Hexer, and Cleric Mentor/Avenger. The Thief profession additionally offers Shadow/Saboteur. Techniques include counterattacks, shared protection, sweeping strikes, rooted approaches, marked targets, pinning overwatch, limited slot recovery, and support magic. Thief techniques require the profession to remain equipped. Choices persist across saves.
+
+**Follow evidence through the world.** Footprints, smoke, lights, and buried road fragments form four trails, each with three separate observations. An Archer or Thief must approach and interpret each clue. Following the trail reveals its destination and grants a small, finite discovery reward; seeing the first clue does not reveal the entire route. Travel remains freely directed.
+
+**Cooperating enemies.** Bandit shields protect nearby ranged fighters while guarding; attackers seek flanks and exposed targets. Goblins can wait behind snares, wolves favor isolated injured companions, and threatened casters retreat before committing another spell slot. Terrain, cover, movement obstacles, and existing enemy spell telegraphs remain relevant.
+
+**Travel relationships.** Long journeys can pause for companion conversations, limited to once per day. Share food, listen, dismiss concerns, settle overdue wages, or promise payment by dawn. Meals and understanding build bonds; broken promises and dismissal can create persistent rivalries. Rivals refuse certain protective and healing techniques. Hunger, debt, fatigue, existing personal stories, and departure risks continue to affect the company.
+
+**A permanent company home.** Visit Wayfarer Lodge and purchase a lodge or farm for 320 crowns and ten timber. Store supplies separately from traveling inventory. Build a storehouse, beds, treatment room, forge, and kitchen garden. A stationed Smith enables discounted crafting and equipment repairs; an Herbalist makes the treatment room effective. Rest consumes food and twelve hours, so wages still fall due. Gardens provide a bounded harvest every three days. One finite aether shard can restore a spent level-two slot or up to two level-one slots at home. The company wagon remains its separate traveling camp.
+
+**Balance and readable requirements.** An exploration day now lasts five active minutes, or ten with slower days enabled. The Company outlook shows daily ration and wage costs, supply coverage, and time until dawn. New actions display specific requirements; a collapsible unavailable-actions list makes disabled controls understandable on touchscreens. Additional management sections are folded to keep the map usable. Save version seventeen migrates older companies and validates mission, career, relationship, observation, and property state.
+
+[Wagon defense](docs/screenshots/wagon-objective-mobile.png) · [Class careers](docs/screenshots/class-careers-mobile.png) · [Observation trails](docs/screenshots/observation-trail-mobile.png) · [Company home](docs/screenshots/company-home-mobile.png)
+
+Validation: 386 automated tests, a dedicated desktop/mobile expedition smoke test, and regression browser checks for company creation, campaign systems, the frontier, and the realm expansion.
+
+```sh
+npm test
+npm run build
+GAME_URL=http://127.0.0.1:3002/ PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/expedition-systems-smoke.mjs
 ```

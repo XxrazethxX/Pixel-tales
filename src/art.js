@@ -172,6 +172,10 @@ export function drawLandmark(c, p, index = 0) {
     pixel(c, x + 41, y - 6, 2, 17, "#6f5d3d");
     pixel(c, x + 43, y - 6, 8, 6, "#b79552");
     pixel(c, x + 44, y - 5, 5, 1, "#e1cc8f");
+  } else if (p.type === "home") {
+    steppedOval(c, x - 38, y - 25, 80, 65, "#a39f71");
+    house(c, x - 15, y - 8, "#7d7259", true);
+    fence(c, x - 32, y + 35, 65);
   } else if (p.type === "farm") {
     house(c, x - 22, y - 8, "#8e7250");
     fence(c, x - 34, y + 30, 68);
@@ -1504,4 +1508,53 @@ export function drawFantasyEnemy(c, kind, x, y) {
     pixel(c, x + 13, y - 19, 4, 4, "#e5cbe9");
   }
   c.restore();
+}
+
+export function drawCompanyHome(c, s) {
+  const h = s.expedition.home;
+  pixel(c, 0, 0, 768, 432, "#8d9b72");
+  steppedOval(c, 120, 90, 510, 300, "#b2ac7b");
+  house(c, 300, 135, h.style === "farm" ? "#8e6d4c" : "#6d7271", true);
+  house(c, 440, 145, "#8d7655");
+  fence(c, 175, 100, 390);
+  fence(c, 175, 370, 390);
+  for (let i = 0; i < 6; i++) pixel(c, 220 + i * 45, 260, 30, 12, "#877452");
+  if (h.upgrades.garden)
+    for (let i = 0; i < 6; i++) {
+      pixel(c, 220 + i * 45, 252, 5, 15, "#57714a");
+      pixel(c, 223 + i * 45, 250, 8, 5, "#7d995a");
+    }
+  if (h.upgrades.storage) {
+    pixel(c, 450, 235, 50, 40, "#886944");
+    pixel(c, 454, 244, 42, 3, "#c4aa77");
+    pixel(c, 473, 237, 4, 35, "#c4aa77");
+  }
+  if (h.upgrades.forge) {
+    pixel(c, 340, 245, 35, 28, "#666851");
+    pixel(c, 345, 250, 24, 15, "#a86e3e");
+    pixel(c, 352, 253, 10, 9, "#d2a867");
+  }
+  if (h.upgrades.infirmary) {
+    pixel(c, 265, 195, 35, 16, "#c6b78b");
+    pixel(c, 275, 192, 5, 18, "#f0ddad");
+    pixel(c, 269, 198, 17, 5, "#f0ddad");
+  }
+  s.party
+    .filter((p) => !p.dead)
+    .forEach((p, i) =>
+      drawCharacter(
+        c,
+        245 + i * 35,
+        335,
+        p.coat || partyCoats[i],
+        0,
+        p.role,
+        p.id,
+        p,
+      ),
+    );
+  c.fillStyle = "#4c4e39";
+  c.font = "bold 14px monospace";
+  c.textAlign = "center";
+  c.fillText(`WAYFARER ${h.style === "farm" ? "FARM" : "LODGE"}`, 384, 55);
 }
