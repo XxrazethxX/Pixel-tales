@@ -56,6 +56,62 @@ studies.push(
     desc: "Requires Watchful eyes. Reveal all landmark locations; terrain must still be explored.",
   },
 );
+studies.push(
+  {
+    id: "preservation",
+    name: "Food preservation",
+    cost: 6,
+    requires: "rations",
+    minRenown: 10,
+    desc: "Requires Trailcraft and 10 renown. Reduce daily ration use by one more, to a minimum of one.",
+  },
+  {
+    id: "endurance",
+    name: "Marching discipline",
+    cost: 7,
+    requires: "medicine",
+    minRenown: 10,
+    desc: "Requires Field medicine and 10 renown. Awake fatigue builds 25% more slowly, including tireless companions.",
+  },
+  {
+    id: "paymaster",
+    name: "Company charter",
+    cost: 6,
+    requires: "barter",
+    minRenown: 10,
+    desc: "Requires A fair bargain and 10 renown. Reduce the total daily wage bill by 20%, rounded up. Existing debts remain owed.",
+  },
+  {
+    id: "maintenance",
+    name: "Campaign maintenance",
+    cost: 8,
+    requires: "armorer",
+    minRenown: 20,
+    desc: "Requires Armorer’s craft and 20 renown. All equipped gear loses five fewer durability points after victory, retreat, or defeat.",
+  },
+  {
+    id: "drills",
+    name: "Tactical drills",
+    cost: 8,
+    requires: "steel",
+    minRenown: 20,
+    desc: "Requires Tempered steel and 20 renown. Start every battle with one additional valor, up to the usual maximum of five.",
+  },
+);
+function researchLock(s, id) {
+  const r = studies.find((r) => r.id === id);
+  if (!r) return "Unknown discovery.";
+  if (s.research.includes(id)) return "Already discovered.";
+  if (s.battle || s.event || companyLost(s))
+    return "Finish the current encounter before researching.";
+  if (r.requires && !s.research.includes(r.requires))
+    return `Requires ${studies.find((study) => study.id === r.requires)?.name || r.requires}.`;
+  if (s.renown < (r.minRenown || 0))
+    return `Requires ${r.minRenown} renown; company has ${s.renown}.`;
+  if (s.knowledge < r.cost)
+    return `Requires ${r.cost} knowledge; company has ${s.knowledge}.`;
+  return null;
+}
 function fresh() {
   return {
     version: 11,
@@ -210,15 +266,7 @@ function camp(s) {
 }
 function research(s, id) {
   const r = studies.find((r) => r.id === id);
-  if (
-    !r ||
-    s.research.includes(id) ||
-    s.knowledge < r.cost ||
-    (r.requires && !s.research.includes(r.requires)) ||
-    s.battle ||
-    s.event
-  )
-    return false;
+  if (researchLock(s, id)) return false;
   s.knowledge -= r.cost;
   s.research.push(id);
   if (id === "cartography") s.discovered = places.map((p, i) => i);
@@ -274,7 +322,13 @@ function startBattle(s, patrolId = null) {
     caravanRaid: patrol?.kind === "merchant",
     wildlife: patrol?.kind === "wolves",
     turn: 1,
-    valor: Math.min(5, 3 + (s.campUpgrades.watchpost || 0) + s.preparedValor),
+    valor: Math.min(
+      5,
+      3 +
+        (s.campUpgrades.watchpost || 0) +
+        s.preparedValor +
+        (s.research.includes("drills") ? 1 : 0),
+    ),
     units: s.party
       .filter((p) => p.hp > 0)
       .map((p, i) => ({
@@ -2057,6 +2111,7 @@ function campCost(s) {
           livingParty(s).filter((p) => hasTrait(p, "hearty")).length -
           Math.min(2, professionBonus(s, "Cook")) -
           (s.research.includes("rations") ? 1 : 0) -
+          (s.research.includes("preservation") ? 1 : 0) -
           (s.campUpgrades.cookpot || 0) -
           (s.campOpen && campWorker(s, "cook") ? 1 : 0),
       )
@@ -2621,7 +2676,11 @@ function wearBattleEquipment(s, outcome = "victory") {
             : slot === "weapon"
               ? 15
               : 10;
-      item.durability = Math.max(0, before.durability - loss);
+      item.durability = Math.max(
+        0,
+        before.durability -
+          Math.max(0, loss - (s.research.includes("maintenance") ? 5 : 0)),
+      );
       const after = gearItem(s, item.id);
       if (equipmentCondition(before) !== equipmentCondition(after))
         note(
@@ -2829,7 +2888,10 @@ function companyLost(s) {
   return livingParty(s).length === 0;
 }
 function dailyWages(s) {
-  return livingParty(s).reduce((total, p) => total + companionWages(p), 0);
+  return Math.ceil(
+    livingParty(s).reduce((total, p) => total + companionWages(p), 0) *
+      (s.research.includes("paymaster") ? 0.8 : 1),
+  );
 }
 function starvationDamage(s) {
   return Math.min(8, 2 + s.hungerDays);
@@ -2907,7 +2969,10 @@ function spendHours(s, hours, options = {}) {
       for (const p of livingParty(s))
         p.fatigue = Math.min(
           100,
-          (p.fatigue || 0) + amount * (hasTrait(p, "tireless") ? 1.5 : 2),
+          (p.fatigue || 0) +
+            amount *
+              (hasTrait(p, "tireless") ? 1.5 : 2) *
+              (s.research.includes("endurance") ? 0.75 : 1),
         );
     s.timeOfDay += amount;
     remaining -= amount;
@@ -7016,15 +7081,17 @@ function render() {
           r.name,
           `<p>${r.desc}</p><span class="badge">${r.cost} knowledge</span>`,
         );
+      const locked = researchLock(s, r.id);
+      if (!done && locked) {
+        const hint = document.createElement("p");
+        hint.textContent = locked;
+        el.append(hint);
+      }
       el.append(
         button(
           done ? "Discovered" : "Research",
           () => research(s, r.id),
-          done ||
-            s.knowledge < r.cost ||
-            (r.requires && !s.research.includes(r.requires)) ||
-            !!s.battle ||
-            !!s.event,
+          !!locked,
         ),
       );
       panel.append(el);

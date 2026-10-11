@@ -33,6 +33,7 @@ import {
   terrainAt,
   camp,
   research,
+  researchLock,
   startBattle,
   act,
   endTurn,
@@ -953,15 +954,17 @@ function render() {
           r.name,
           `<p>${r.desc}</p><span class="badge">${r.cost} knowledge</span>`,
         );
+      const locked = researchLock(s, r.id);
+      if (!done && locked) {
+        const hint = document.createElement("p");
+        hint.textContent = locked;
+        el.append(hint);
+      }
       el.append(
         button(
           done ? "Discovered" : "Research",
           () => research(s, r.id),
-          done ||
-            s.knowledge < r.cost ||
-            (r.requires && !s.research.includes(r.requires)) ||
-            !!s.battle ||
-            !!s.event,
+          !!locked,
         ),
       );
       panel.append(el);

@@ -277,6 +277,20 @@ Regional stories are accepted **only at village contract boards**, using the sam
 
 The **Caravan League**, **Border Wardens**, and **Grove Freefolk** remember these choices. Reputation ranges from −30 to +30. At ten League reputation purchases are cheaper; at −10 they become more expensive. Ten Warden reputation unlocks fine equipment without the renown requirement. Ten Freefolk reputation adds two rations to foraging. Ordinary deliveries, bandit victories, wolf hunts, and relieved shortages also build relevant standings. Company shows the current standing, benefits, and accepted or completed stories without offering new contracts outside villages.
 
+## Advanced company research
+
+The Research menu now extends the early discoveries into five permanent company upgrades. It shows why a discovery is locked, including its prerequisite, renown requirement, or missing knowledge. Research cannot be purchased during battles or roadside encounters.
+
+| Discovery | Prerequisite | Renown | Knowledge | Benefit |
+| --- | --- | --- | --- | --- |
+| Food preservation | Trailcraft | 10 | 6 | One fewer daily ration, with a minimum of one |
+| Marching discipline | Field medicine | 10 | 7 | Awake fatigue builds 25% more slowly; stacks with Tireless |
+| Company charter | A fair bargain | 10 | 6 | Daily total wages reduced by 20%, rounded up; existing debt stays owed |
+| Campaign maintenance | Armorer’s craft | 20 | 8 | Five fewer durability points lost after victory, retreat, or defeat |
+| Tactical drills | Tempered steel | 20 | 8 | One extra starting valor; stacks with camp preparation up to five |
+
+Discoveries persist in existing saves and cannot be purchased twice. Food savings stack with camp cooks, cooking pots, and profession bonuses. Maintenance protects equipped gear without repairing damage it already has.
+
 ## Named adversary bounties
 
 Visit a village contract board to accept its named bounty. Bounties share the active contract slot with ordinary and story contracts; Company shows your progress without offering contracts elsewhere.
@@ -332,6 +346,7 @@ PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node
 PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/trail-encounters-smoke.mjs
 PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/battle-layouts-smoke.mjs
 PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/bounties-smoke.mjs
+PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/advanced-research-smoke.mjs
 ```
 
 It uses `/usr/bin/chromium` by default; override `CHROMIUM_PATH` or `GAME_URL` as needed. Desktop and mobile screenshots are written under `/tmp`. The village smoke test checks regional offers, renown locks and unlocks, resale, inn recovery, save persistence, and dangerous encounters. The equipment smoke test covers purchases, class restrictions, assignment and transfer, resale, research and crafting, combat restrictions, reloads, mobile layout, and new-company reset.
@@ -355,3 +370,5 @@ The battlefield smoke test covers contextual layouts, blocked movement, sight-re
 Further development includes expanded regional stories and Android packaging.
 
 The bounty smoke test checks village acceptance, named challenges, victory and completion persistence, wolf pack composition, saved fire warnings, escaping and interrupting volleys, mobile layout, and abandonment.
+
+The advanced-research smoke test checks prerequisite and renown locks, knowledge costs, one-time purchases, saved discoveries, and mobile research controls.
