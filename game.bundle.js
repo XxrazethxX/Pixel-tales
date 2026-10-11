@@ -144,6 +144,7 @@ function fresh() {
     recruitSerial: 0,
     hiredRecruits: [],
     lessonLedger: {},
+    rumors: {},
     cargo: { grain: 0, cloth: 0, salt: 0, iron: 0 },
     markets: {},
     reputation: { guild: 0, wardens: 0, freefolk: 0 },
@@ -783,6 +784,27 @@ function restore(raw) {
       ...(result.location >= 0 ? [result.location] : []),
     ]),
   ].filter((i) => Number.isInteger(i) && places[i]);
+  result.rumors = {};
+  for (const rumor of tavernRumors) {
+    const saved = raw.rumors?.[rumor.id];
+    if (
+      !saved ||
+      !Number.isInteger(saved.heardDay) ||
+      saved.heardDay < 1 ||
+      saved.heardDay > result.day
+    )
+      continue;
+    result.rumors[rumor.id] = { heardDay: saved.heardDay };
+    if (
+      Number.isInteger(saved.resolvedDay) &&
+      saved.resolvedDay >= saved.heardDay &&
+      saved.resolvedDay <= result.day &&
+      result.explored.includes(rumor.target)
+    )
+      result.rumors[rumor.id].resolvedDay = saved.resolvedDay;
+    if (!result.discovered.includes(rumor.target))
+      result.discovered.push(rumor.target);
+  }
   result.charted = Array.isArray(raw.charted)
     ? raw.charted.filter(
         (i) =>
@@ -1444,6 +1466,7 @@ function explore(s) {
     s,
     `Explored ${places[s.location].name}. Discovered knowledge and gathered crafting materials.`,
   );
+  resolveRumors(s);
   return true;
 }
 function forage(s) {
@@ -5302,6 +5325,120 @@ function takeLesson(s, id) {
   return true;
 }
 
+const tavernRumors = [
+  {
+    id: "hidden-compartment",
+    issuer: 0,
+    target: 10,
+    name: "A smuggler’s second cache",
+    renown: 0,
+    desc: "A retired smuggler remembers a second compartment beneath the southern stash. Explore Forgotten Stash to search it.",
+    reward: { gold: 20, knowledge: 1 },
+  },
+  {
+    id: "iron-seam",
+    issuer: 0,
+    target: 4,
+    name: "The overlooked iron seam",
+    renown: 0,
+    desc: "A miner points out a rich seam behind Iron Hollow’s old workings. Explore Iron Hollow for extra ore.",
+    reward: { ore: 4, knowledge: 1 },
+  },
+  {
+    id: "chapel-herbs",
+    issuer: 3,
+    target: 8,
+    name: "The drowned herb garden",
+    renown: 0,
+    desc: "A ferryman recalls medicinal plants growing around Sunken Chapel. Explore its grounds to recover them.",
+    reward: { herbs: 4, knowledge: 2 },
+  },
+  {
+    id: "watchtower-ledger",
+    issuer: 3,
+    target: 5,
+    name: "The missing patrol ledger",
+    renown: 5,
+    desc: "An old scout left a patrol ledger and pay chest at the Watchtower. Explore the tower to recover them.",
+    reward: { gold: 25, knowledge: 2 },
+  },
+  {
+    id: "grove-supplies",
+    issuer: 6,
+    target: 7,
+    name: "The herbalist’s shelter",
+    renown: 5,
+    desc: "A traveller describes an abandoned shelter in Whispering Grove. Explore the grove for herbs and seasoned timber.",
+    reward: { herbs: 5, wood: 3, knowledge: 2 },
+  },
+  {
+    id: "quarry-records",
+    issuer: 6,
+    target: 9,
+    name: "The quarry survey",
+    renown: 10,
+    desc: "A prospector hid survey notes near Redstone Quarry’s best deposits. Explore the quarry to recover ore and knowledge.",
+    reward: { ore: 6, knowledge: 2 },
+  },
+];
+function rumorLock(s, id) {
+  const rumor = tavernRumors.find((r) => r.id === id);
+  if (!rumor) return "Unknown rumor.";
+  if (s.rumors?.[id]) return "Already heard. See the journal.";
+  if (s.explored.includes(rumor.target))
+    return "You have already explored this location.";
+  if (
+    s.battle ||
+    s.event ||
+    s.campOpen ||
+    s.destination ||
+    companyLost(s) ||
+    s.location !== rumor.issuer
+  )
+    return "Visit this rumor’s village tavern.";
+  if (s.renown < rumor.renown) return `Requires ${rumor.renown} renown.`;
+  if (s.gold < 8) return "Requires 8 crowns.";
+  return null;
+}
+function hearRumor(s, id) {
+  if (rumorLock(s, id)) return false;
+  const rumor = tavernRumors.find((r) => r.id === id);
+  s.gold -= 8;
+  s.rumors ||= {};
+  s.rumors[id] = { heardDay: s.day };
+  if (!s.discovered.includes(rumor.target)) s.discovered.push(rumor.target);
+  spendHours(s, 1);
+  note(
+    s,
+    `Heard ${rumor.name}: ${rumor.desc} Landmark marked; nearby terrain remains unexplored.`,
+  );
+  return true;
+}
+function resolveRumors(s) {
+  for (const rumor of tavernRumors) {
+    const record = s.rumors?.[rumor.id];
+    if (
+      !record ||
+      record.resolvedDay ||
+      rumor.target !== s.location ||
+      !s.explored.includes(rumor.target)
+    )
+      continue;
+    record.resolvedDay = s.day;
+    for (const [resource, amount] of Object.entries(rumor.reward)) {
+      if (resource === "gold" || resource === "knowledge")
+        s[resource] += amount;
+      else s.inventory[resource] += amount;
+    }
+    note(
+      s,
+      `Rumor confirmed: ${rumor.name}. Recovered ${Object.entries(rumor.reward)
+        .map(([r, n]) => `${n} ${r === "gold" ? "crowns" : r}`)
+        .join(", ")}.`,
+    );
+  }
+}
+
 // Original, hand-built pixel artwork. All coordinates are logical pixels.
 const artPalette = {
   meadow: "#a3a775",
@@ -7437,6 +7574,35 @@ function render() {
       }
     }
     if (tab === "Tavern") {
+      panel.append(
+        card(
+          "Local rumors",
+          "<p>Buy a round and listen for exploration leads: 8 crowns and one hour. A rumor marks a landmark without revealing nearby terrain. Explore it for a one-time find; your active contract stays available. Heard rumors are kept in the Journal.</p>",
+        ),
+      );
+      for (const rumor of tavernRumors.filter((r) => r.issuer === s.location)) {
+        const locked = rumorLock(s, rumor.id),
+          c = card(
+            rumor.name,
+            `<p>${rumor.desc}</p><p>Find: ${Object.entries(rumor.reward)
+              .map(([r, n]) => `${n} ${r === "gold" ? "crowns" : r}`)
+              .join(" · ")}</p>`,
+          );
+        if (locked) {
+          const hint = document.createElement("p");
+          hint.textContent = locked;
+          c.append(hint);
+        }
+        c.append(
+          button(
+            `Hear rumor: ${rumor.name}`,
+            () => hearRumor(s, rumor.id),
+            !!locked,
+          ),
+        );
+        panel.append(c);
+      }
+
       const inn = card(
         "Companions seeking work",
         `<p>Capacity: ${livingParty(s).length}/6. Review traits and daily costs before hiring. New companions begin with no bonds; Specialist recruits leave the hiring board once hired.</p>`,
@@ -7869,6 +8035,30 @@ function render() {
     $("map-label").textContent =
       `${places[s.location]?.name || terrainAt(s.position).toUpperCase()} · ${Math.round(s.position.x)}, ${Math.round(s.position.y)}`;
   }
+  const rumorJournal = $("rumor-journal");
+  rumorJournal.replaceChildren();
+  for (const rumor of tavernRumors.filter((r) => s.rumors[r.id])) {
+    const record = s.rumors[rumor.id],
+      c = card(
+        rumor.name,
+        `<p>${rumor.desc}</p><p>${record.resolvedDay ? `Confirmed on day ${record.resolvedDay}` : `Heard on day ${record.heardDay} · Explore ${places[rumor.target].name}`}</p>`,
+      );
+    if (!record.resolvedDay)
+      c.append(
+        button(
+          `Walk to ${places[rumor.target].name}`,
+          () => {
+            moveTo(s, places[rumor.target].x, places[rumor.target].y);
+            drawerOpen = false;
+          },
+          !!s.battle || !!s.event || !!s.campOpen || companyLost(s),
+        ),
+      );
+    rumorJournal.append(c);
+  }
+  if (!rumorJournal.children.length)
+    rumorJournal.textContent =
+      "No rumors heard yet. Visit a village tavern for exploration leads.";
   $("log").replaceChildren(
     ...s.log.slice(0, 6).map((t) => {
       const p = document.createElement("p");
@@ -8088,6 +8278,13 @@ function draw() {
     if (!s.discovered.includes(i) && s.contract?.target !== i) return;
     drawLandmark(ctx, p, i);
     drawMapLabel(ctx, p.name, p.x, p.y + (p.type === "town" ? 58 : 39));
+    if (
+      tavernRumors.some(
+        (r) => r.target === i && s.rumors[r.id] && !s.rumors[r.id].resolvedDay,
+      ) &&
+      s.contract?.target !== i
+    )
+      drawMapLabel(ctx, "RUMOR", p.x, p.y - (p.type === "town" ? 53 : 37));
     if (s.contract?.target === i) {
       drawMapLabel(
         ctx,

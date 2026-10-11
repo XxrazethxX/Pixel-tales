@@ -277,6 +277,14 @@ Regional stories are accepted **only at village contract boards**, using the sam
 
 The **Caravan League**, **Border Wardens**, and **Grove Freefolk** remember these choices. Reputation ranges from −30 to +30. At ten League reputation purchases are cheaper; at −10 they become more expensive. Ten Warden reputation unlocks fine equipment without the renown requirement. Ten Freefolk reputation adds two rations to foraging. Ordinary deliveries, bandit victories, wolf hunts, and relieved shortages also build relevant standings. Company shows the current standing, benefits, and accepted or completed stories without offering new contracts outside villages.
 
+## Tavern rumors and exploration leads
+
+Visit **The Crooked Lantern** to buy a round and hear local rumors. Each costs **eight crowns and one hour**. Greyhaven offers leads to Forgotten Stash and Iron Hollow; Saltbridge points toward Sunken Chapel and the Watchtower; Emberfall shares leads for Whispering Grove and Redstone Quarry. The Watchtower and grove rumors require five renown, and the quarry rumor requires ten.
+
+Rumors mark landmark locations while leaving nearby terrain unexplored. They coexist with your active contract and with each other. Open **Journal → Exploration leads** to review what you heard or walk toward its landmark. Travel still uses the open map and can be redirected or stopped.
+
+Use **Explore** at the rumored site to recover its extra one-time find: crowns, materials, or knowledge in addition to normal exploration rewards. The journal then records the day it was confirmed. Heard leads and completed finds survive reloads; rumors cannot be purchased twice. Taverns do not sell leads for sites you have already explored. Listening across midnight still incurs normal food and wage costs.
+
 ## Village training halls
 
 Choose **Visit Training hall** in a village arrival menu to buy profession lessons. Greyhaven teaches **Cook and Smith**, Saltbridge teaches **Cook and Herbalist**, and Emberfall teaches **Smith and Miner**. Assign a companion’s profession in Company before visiting a suitable tutor.
@@ -358,6 +366,7 @@ PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node
 PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/bounties-smoke.mjs
 PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/advanced-research-smoke.mjs
 PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/training-halls-smoke.mjs
+PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/tavern-rumors-smoke.mjs
 ```
 
 It uses `/usr/bin/chromium` by default; override `CHROMIUM_PATH` or `GAME_URL` as needed. Desktop and mobile screenshots are written under `/tmp`. The village smoke test checks regional offers, renown locks and unlocks, resale, inn recovery, save persistence, and dangerous encounters. The equipment smoke test covers purchases, class restrictions, assignment and transfer, resale, research and crafting, combat restrictions, reloads, mobile layout, and new-company reset.
@@ -385,3 +394,5 @@ The bounty smoke test checks village acceptance, named challenges, victory and c
 The advanced-research smoke test checks prerequisite and renown locks, knowledge costs, one-time purchases, saved discoveries, and mobile research controls.
 
 The training-hall smoke test checks regional tutors, lesson costs and practice, daily locks, persistence, village navigation, mobile controls, and wilderness restrictions.
+
+The tavern-rumor smoke test checks local leads, landmark discovery without terrain reveal, unchanged active contracts, journal travel, one-time finds, reloads, renown locks, and mobile controls.

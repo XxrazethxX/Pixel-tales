@@ -11,6 +11,9 @@ import {
   lessonQuote,
   lessonLock,
   takeLesson,
+  tavernRumors,
+  rumorLock,
+  hearRumor,
   talentsFor,
   learnTalent,
   skillFor,
@@ -1238,6 +1241,35 @@ function render() {
       }
     }
     if (tab === "Tavern") {
+      panel.append(
+        card(
+          "Local rumors",
+          "<p>Buy a round and listen for exploration leads: 8 crowns and one hour. A rumor marks a landmark without revealing nearby terrain. Explore it for a one-time find; your active contract stays available. Heard rumors are kept in the Journal.</p>",
+        ),
+      );
+      for (const rumor of tavernRumors.filter((r) => r.issuer === s.location)) {
+        const locked = rumorLock(s, rumor.id),
+          c = card(
+            rumor.name,
+            `<p>${rumor.desc}</p><p>Find: ${Object.entries(rumor.reward)
+              .map(([r, n]) => `${n} ${r === "gold" ? "crowns" : r}`)
+              .join(" · ")}</p>`,
+          );
+        if (locked) {
+          const hint = document.createElement("p");
+          hint.textContent = locked;
+          c.append(hint);
+        }
+        c.append(
+          button(
+            `Hear rumor: ${rumor.name}`,
+            () => hearRumor(s, rumor.id),
+            !!locked,
+          ),
+        );
+        panel.append(c);
+      }
+
       const inn = card(
         "Companions seeking work",
         `<p>Capacity: ${livingParty(s).length}/6. Review traits and daily costs before hiring. New companions begin with no bonds; Specialist recruits leave the hiring board once hired.</p>`,
@@ -1670,6 +1702,30 @@ function render() {
     $("map-label").textContent =
       `${places[s.location]?.name || terrainAt(s.position).toUpperCase()} · ${Math.round(s.position.x)}, ${Math.round(s.position.y)}`;
   }
+  const rumorJournal = $("rumor-journal");
+  rumorJournal.replaceChildren();
+  for (const rumor of tavernRumors.filter((r) => s.rumors[r.id])) {
+    const record = s.rumors[rumor.id],
+      c = card(
+        rumor.name,
+        `<p>${rumor.desc}</p><p>${record.resolvedDay ? `Confirmed on day ${record.resolvedDay}` : `Heard on day ${record.heardDay} · Explore ${places[rumor.target].name}`}</p>`,
+      );
+    if (!record.resolvedDay)
+      c.append(
+        button(
+          `Walk to ${places[rumor.target].name}`,
+          () => {
+            moveTo(s, places[rumor.target].x, places[rumor.target].y);
+            drawerOpen = false;
+          },
+          !!s.battle || !!s.event || !!s.campOpen || companyLost(s),
+        ),
+      );
+    rumorJournal.append(c);
+  }
+  if (!rumorJournal.children.length)
+    rumorJournal.textContent =
+      "No rumors heard yet. Visit a village tavern for exploration leads.";
   $("log").replaceChildren(
     ...s.log.slice(0, 6).map((t) => {
       const p = document.createElement("p");
@@ -1889,6 +1945,13 @@ function draw() {
     if (!s.discovered.includes(i) && s.contract?.target !== i) return;
     drawLandmark(ctx, p, i);
     drawMapLabel(ctx, p.name, p.x, p.y + (p.type === "town" ? 58 : 39));
+    if (
+      tavernRumors.some(
+        (r) => r.target === i && s.rumors[r.id] && !s.rumors[r.id].resolvedDay,
+      ) &&
+      s.contract?.target !== i
+    )
+      drawMapLabel(ctx, "RUMOR", p.x, p.y - (p.type === "town" ? 53 : 37));
     if (s.contract?.target === i) {
       drawMapLabel(
         ctx,
