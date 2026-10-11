@@ -14,6 +14,9 @@ const places = [
   { name: "Redstone Quarry", x: 1250, y: 110, type: "mine" },
   { name: "Forgotten Stash", x: 350, y: 620, type: "cache" },
   { name: "Broken Crown", x: 1385, y: 755, type: "ruin" },
+  { name: "Briarhide Camp", x: 470, y: 490, type: "ruin", scene: "camp" },
+  { name: "Ashbrook Farm", x: 120, y: 510, type: "farm" },
+  { name: "Echo Cavern", x: 870, y: 440, type: "mine", scene: "cave" },
 ];
 const studies = [
   {
@@ -114,8 +117,9 @@ function researchLock(s, id) {
 }
 function fresh() {
   return {
-    version: 11,
+    version: 12,
     companyName: "The Ashen Company",
+    difficulty: "standard",
     banner: "ashen",
     origin: "wanderers",
     inventory: { ore: 0, wood: 0, herbs: 0, medicine: 1, pelts: 0 },
@@ -149,6 +153,8 @@ function fresh() {
     lessonLedger: {},
     rumors: {},
     siteProgress: {},
+    forageLedger: {},
+    helpSeen: {},
     crime: { wanted: 0, stolen: false },
     campFurniture: {},
     ambushReady: false,
@@ -416,6 +422,29 @@ function startBattle(s, patrolId = null) {
   }
   deployBattle(s, patrol);
   if (!patrol) deployAdversary(s);
+  if (s.difficulty !== "standard")
+    for (const e of s.battle.enemies) {
+      e.hp = e.max = Math.max(
+        1,
+        Math.round(
+          e.hp *
+            (s.difficulty === "forgiving"
+              ? 0.8
+              : s.difficulty === "veteran"
+                ? 1.2
+                : 1),
+        ),
+      );
+      e.damage = Math.max(
+        1,
+        e.damage +
+          (s.difficulty === "forgiving"
+            ? -1
+            : s.difficulty === "veteran"
+              ? 1
+              : 0),
+      );
+    }
   if (s.ambushReady) {
     s.battle.valor = Math.min(5, s.battle.valor + 1);
     s.battle.enemies[0].stun = 1;
@@ -490,13 +519,16 @@ function win(s) {
   const difficulty = wildlife
     ? { tier: 1, knowledge: 1, xp: 20, salvage: 0, renown: 2 }
     : contractDifficulty(patrolFight ? null : s.contract);
-  const reward = patrolFight
+  const baseReward = patrolFight
     ? wildlife
       ? 0
       : raid
         ? 60
         : 40
     : s.contract.reward;
+  const reward = Math.ceil(
+    baseReward * (s.difficulty === "veteran" ? 1.15 : 1),
+  );
   if (wildlife) {
     s.food += 6;
     s.inventory.pelts += 2;
@@ -742,7 +774,7 @@ function restore(raw) {
   const base = fresh();
   if (
     !raw ||
-    ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].includes(raw.version) ||
+    ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].includes(raw.version) ||
     !Array.isArray(raw.party) ||
     raw.party.length < 1 ||
     raw.party.length > 6 ||
@@ -768,7 +800,7 @@ function restore(raw) {
   const result = {
     ...base,
     ...raw,
-    version: 11,
+    version: 12,
     inventory: { ...base.inventory, ...raw.inventory },
     explored: raw.explored || [],
     event: raw.event || null,
@@ -783,11 +815,36 @@ function restore(raw) {
     Object.entries(raw.siteProgress || {}).filter(
       ([k, v]) =>
         v === true &&
-        /^(cart|secret|shore|guard|vault)-\d+$|^(hazard|deposit)-\d+-[135]$/.test(
+        /^(cart|secret|shore|guard|vault|farm-clue|farm-cellar|farm-well)-\d+$|^(hazard|deposit)-\d+-[135]$/.test(
           k,
         ),
     ),
   );
+  result.forageLedger = Object.fromEntries(
+    Object.entries(raw.forageLedger || {}).filter(
+      ([key, count]) =>
+        /^\d+-\d+$/.test(key) &&
+        Number.isInteger(count) &&
+        count > 0 &&
+        count <= 24,
+    ),
+  );
+  result.helpSeen = Object.fromEntries(
+    Object.entries(raw.helpSeen || {}).filter(
+      ([key, value]) =>
+        ["travel", "battle", "camp", "dungeon", "farm"].includes(key) &&
+        value === true,
+    ),
+  );
+  if (result.event?.kind === "farm")
+    result.event =
+      result.event.site === 13 && raw.location === 13
+        ? {
+            kind: "farm",
+            site: 13,
+            message: safeCompanyName(result.event.message, "", 180),
+          }
+        : null;
   result.crime = {
     wanted: Number.isInteger(raw.crime?.wanted)
       ? Math.max(0, Math.min(10, raw.crime.wanted))
@@ -805,6 +862,11 @@ function restore(raw) {
       .map((f) => [f.id, raw.campFurniture[f.id]]),
   );
   result.ambushReady = raw.ambushReady === true;
+  result.difficulty = ["forgiving", "standard", "veteran"].includes(
+    raw.difficulty,
+  )
+    ? raw.difficulty
+    : "standard";
   if (result.event?.kind === "dungeon") {
     const e = result.event;
     result.event =
@@ -1617,7 +1679,13 @@ function awardExploration(s) {
 }
 function forage(s) {
   if (s.battle || s.event || companyLost(s)) return false;
-  s.food += forageAmount(s);
+  const amount = forageAmount(s),
+    key = `${s.day}-${s.location}`;
+  s.food += amount;
+  s.forageLedger ||= {};
+  s.forageLedger[key] = Math.min(24, (s.forageLedger[key] || 0) + 1);
+  for (const old of Object.keys(s.forageLedger))
+    if (Number(old.split("-")[0]) < s.day - 1) delete s.forageLedger[old];
   const herbalist = professional(s, "Herbalist");
   if (herbalist) {
     s.inventory.herbs += 1 + professionRank(herbalist);
@@ -1625,7 +1693,10 @@ function forage(s) {
   }
   spendHours(s, 6);
   s.morale = Math.max(0, s.morale - 3);
-  note(s, `Gathered ${forageAmount(s)} rations in six hours.`);
+  note(
+    s,
+    `Gathered ${amount} rations in six hours. Repeated gathering here today yields less.`,
+  );
   return true;
 }
 function resolveEvent(s, choice) {
@@ -2293,7 +2364,7 @@ function assignProfession(s, id, name) {
 }
 function campCost(s) {
   const count = livingParty(s).length;
-  return count
+  const base = count
     ? Math.max(
         1,
         count +
@@ -2304,6 +2375,19 @@ function campCost(s) {
           (s.campUpgrades.cookpot || 0) -
           (s.campOpen && campWorker(s, "cook") ? 1 : 0),
       ) + weatherInfo(s).food
+    : 0;
+  return count
+    ? Math.max(
+        1,
+        Math.ceil(
+          base *
+            (s.difficulty === "forgiving"
+              ? 0.8
+              : s.difficulty === "veteran"
+                ? 1.25
+                : 1),
+        ),
+      )
     : 0;
 }
 function healAmount(s) {
@@ -3079,7 +3163,12 @@ function companyLost(s) {
 function dailyWages(s) {
   return Math.ceil(
     livingParty(s).reduce((total, p) => total + companionWages(p), 0) *
-      (s.research.includes("paymaster") ? 0.8 : 1),
+      (s.research.includes("paymaster") ? 0.8 : 1) *
+      (s.difficulty === "forgiving"
+        ? 0.75
+        : s.difficulty === "veteran"
+          ? 1.25
+          : 1),
   );
 }
 function starvationDamage(s) {
@@ -3857,6 +3946,7 @@ function battlefield(s) {
 function chooseBattleLayout(s, patrol) {
   const place = places[s.location],
     biome = terrainAt(s.position);
+  if (!patrol && place?.scene === "camp") return "forest-grove";
   if (patrol?.kind === "merchant") return "road";
   if (patrol?.kind === "wolves") return "forest-edge";
   if (!patrol && place?.type === "ruin")
@@ -4547,7 +4637,22 @@ function lootCaravanCargo(s, p) {
   }
 }
 function forageAmount(s) {
-  return 6 + (s.reputation.freefolk >= 10 ? 2 : 0);
+  const type = places[s.location]?.type || terrainAt(s.position);
+  const base =
+    type === "forest"
+      ? 8
+      : type === "farm"
+        ? 10
+        : type === "mine" || type === "highlands"
+          ? 3
+          : type === "ruin"
+            ? 4
+            : 6;
+  const gathered = s.forageLedger?.[`${s.day}-${s.location}`] || 0;
+  return (
+    Math.max(2, base - Math.min(4, gathered * 2)) +
+    (s.reputation.freefolk >= 10 ? 2 : 0)
+  );
 }
 
 const regionalStories = [
@@ -5708,6 +5813,11 @@ function createCompany(options) {
   s.companyName = safeCompanyName(options.name);
   s.banner = options.banner;
   s.origin = origin.id;
+  s.difficulty = ["forgiving", "standard", "veteran"].includes(
+    options.difficulty,
+  )
+    ? options.difficulty
+    : "standard";
   s.gold = origin.gold;
   s.food = origin.food;
   s.renown = origin.renown || 0;
@@ -6147,33 +6257,174 @@ function enterDungeon(s) {
   };
   return true;
 }
+function dungeonLayout(site) {
+  const layouts = {
+    2: {
+      name: "Burial chambers",
+      walls: [
+        [2, 1],
+        [2, 2],
+        [2, 3],
+        [6, 4],
+        [6, 1],
+        [6, 2],
+      ],
+      secret: [4, 1],
+      trap: [3, 3],
+      collapse: [5, 3],
+      guard: [7, 5],
+      vault: [8, 5],
+      reward: 55,
+      clue: "Fresh air leaks through the northern burial wall.",
+    },
+    4: {
+      name: "Timbered galleries",
+      walls: [
+        [2, 1],
+        [2, 2],
+        [2, 3],
+        [6, 4],
+      ],
+      secret: [4, 1],
+      trap: [3, 3],
+      collapse: [5, 3],
+      guard: [7, 5],
+      vault: [8, 5],
+      reward: 50,
+      clue: "Scratched stone hints at a hidden door near the northern center.",
+    },
+    5: {
+      name: "Garrison corridors",
+      walls: [
+        [1, 1],
+        [1, 2],
+        [3, 2],
+        [3, 3],
+        [5, 4],
+      ],
+      secret: [6, 1],
+      trap: [3, 1],
+      collapse: [5, 3],
+      guard: [7, 5],
+      vault: [8, 5],
+      reward: 60,
+      clue: "A loose banner conceals a door in the northeast wall.",
+    },
+    8: {
+      name: "Flooded cloister",
+      walls: [
+        [2, 2],
+        [3, 2],
+        [4, 2],
+        [6, 3],
+        [6, 4],
+      ],
+      secret: [4, 1],
+      trap: [3, 4],
+      collapse: [5, 3],
+      guard: [7, 5],
+      vault: [8, 5],
+      reward: 65,
+      clue: "The northern altar sounds hollow when struck.",
+    },
+    9: {
+      name: "Quarry switchbacks",
+      walls: [
+        [2, 1],
+        [2, 2],
+        [4, 3],
+        [4, 4],
+        [6, 1],
+      ],
+      secret: [4, 1],
+      trap: [3, 3],
+      collapse: [5, 4],
+      guard: [7, 5],
+      vault: [8, 5],
+      reward: 60,
+      clue: "A boarded survey tunnel lies near the northern center.",
+    },
+    11: {
+      name: "Royal labyrinth",
+      walls: [
+        [1, 2],
+        [2, 2],
+        [3, 2],
+        [5, 1],
+        [5, 2],
+        [6, 4],
+        [7, 4],
+      ],
+      secret: [4, 1],
+      trap: [3, 3],
+      collapse: [5, 3],
+      guard: [7, 5],
+      vault: [8, 5],
+      reward: 90,
+      clue: "The crown carved into the northern wall hides a mechanism.",
+    },
+    12: {
+      name: "Bandit stockade",
+      walls: [
+        [2, 1],
+        [2, 2],
+        [4, 3],
+        [5, 3],
+        [6, 3],
+      ],
+      secret: [6, 1],
+      trap: [3, 3],
+      collapse: [5, 4],
+      guard: [7, 5],
+      vault: [8, 5],
+      reward: 70,
+      clue: "A torn canvas screens a cache in the northeast corner.",
+    },
+    14: {
+      name: "Crystal cave",
+      walls: [
+        [2, 1],
+        [2, 2],
+        [3, 2],
+        [6, 2],
+        [6, 3],
+      ],
+      secret: [4, 1],
+      trap: [3, 3],
+      collapse: [5, 3],
+      guard: [7, 5],
+      vault: [8, 5],
+      reward: 65,
+      clue: "The northern crystal wall resonates with a hollow echo.",
+    },
+  };
+  return layouts[site] || layouts[4];
+}
 function dungeonWalls(s) {
+  const layout = dungeonLayout(s.event.site);
   return [
-    [2, 1],
-    [2, 2],
-    [2, 3],
-    [6, 4],
-    ...(!s.siteProgress[`secret-${s.event.site}`] ? [[4, 1]] : []),
+    ...layout.walls,
+    ...(!s.siteProgress[`secret-${s.event.site}`] ? [layout.secret] : []),
   ];
 }
 function dungeonAction(s, action, x, y) {
   const e = s.event;
   if (e?.kind !== "dungeon") return false;
+  const layout = dungeonLayout(e.site);
   if (action === "leave") {
     s.event = null;
     return true;
   }
   if (action === "inspect") {
     if (
-      Math.abs(e.x - 4) + Math.abs(e.y - 1) <= 1 &&
+      Math.abs(e.x - layout.secret[0]) + Math.abs(e.y - layout.secret[1]) <=
+        1 &&
       !s.siteProgress[`secret-${e.site}`]
     ) {
       s.siteProgress[`secret-${e.site}`] = true;
       s.inventory.herbs += 4;
       e.message = "A secret passage! Four herbs recovered.";
-    } else
-      e.message =
-        "Scratched stone hints at a hidden door near the northern center.";
+    } else e.message = layout.clue;
     return true;
   }
   if (action === "shore") {
@@ -6202,7 +6453,7 @@ function dungeonAction(s, action, x, y) {
   }
   if (action === "disarm") {
     if (
-      Math.abs(e.x - 3) + Math.abs(e.y - 3) > 1 ||
+      Math.abs(e.x - layout.trap[0]) + Math.abs(e.y - layout.trap[1]) > 1 ||
       s.inventory.wood < 1 ||
       s.siteProgress[`hazard-${e.site}-3`]
     )
@@ -6222,9 +6473,9 @@ function dungeonAction(s, action, x, y) {
     )
       return false;
     s.siteProgress[`vault-${e.site}`] = true;
-    s.gold += 50;
+    s.gold += layout.reward;
     s.knowledge += 2;
-    e.message = "Recovered 50 crowns and two knowledge from the guarded vault.";
+    e.message = `Recovered ${layout.reward} crowns and two knowledge from the guarded vault.`;
     return true;
   }
   if (
@@ -6243,15 +6494,17 @@ function dungeonAction(s, action, x, y) {
   e.y = y;
   e.message = "";
   if (
-    (x === 3 && y === 3) ||
-    (x === 5 && y === 3 && !s.siteProgress[`shore-${e.site}`])
+    (x === layout.trap[0] && y === layout.trap[1]) ||
+    (x === layout.collapse[0] &&
+      y === layout.collapse[1] &&
+      !s.siteProgress[`shore-${e.site}`])
   ) {
-    const key = `hazard-${e.site}-${x}`;
+    const key = `hazard-${e.site}-${x === layout.trap[0] && y === layout.trap[1] ? 3 : 5}`;
     if (!s.siteProgress[key]) {
       s.siteProgress[key] = true;
       for (const p of livingParty(s)) p.hp = Math.max(1, p.hp - 3);
       e.message =
-        x === 3
+        x === layout.trap[0] && y === layout.trap[1]
           ? "A dart trap deals 3 damage to each companion."
           : "A cave-in deals 3 damage. Reinforce the passage next time.";
     }
@@ -6303,6 +6556,180 @@ function departCompanion(s, p) {
     `${p.name} leaves alive after losing faith in the company. Their equipment stays in stores.`,
   );
 }
+
+function enterFarm(s) {
+  if (
+    s.location !== 13 ||
+    s.battle ||
+    s.event ||
+    s.campOpen ||
+    s.destination ||
+    companyLost(s)
+  )
+    return false;
+  s.event = {
+    kind: "farm",
+    site: 13,
+    message:
+      "The farmhouse is deserted. Muddy bootprints lead east, and a ledger lies beside a locked cellar. Explore for supplies and clues.",
+  };
+  return true;
+}
+function farmAction(s, action) {
+  if (s.event?.kind !== "farm") return false;
+  if (action === "leave") {
+    s.event = null;
+    return true;
+  }
+  const key = `farm-${action}-13`;
+  if (!["clue", "cellar", "well"].includes(action) || s.siteProgress[key])
+    return false;
+  if (action === "cellar" && !s.siteProgress["farm-clue-13"]) {
+    s.event.message =
+      "Three carved symbols lock the cellar. Find the farmer's ledger first.";
+    return false;
+  }
+  s.siteProgress[key] = true;
+  if (action === "clue") {
+    s.event.message =
+      "Ledger: seed, rain, harvest. The cellar combination is solved. Raiders carried supplies to Briarhide Camp; a charcoal map marks Echo Cavern beyond it.";
+    for (const site of [12, 14])
+      if (!s.discovered.includes(site)) s.discovered.push(site);
+    s.knowledge++;
+  } else if (action === "cellar") {
+    s.food += 12;
+    s.inventory.wood += 3;
+    s.event.message =
+      "The cellar opens: twelve preserved rations and three wood recovered.";
+  } else {
+    s.inventory.herbs += 3;
+    s.event.message =
+      "Medicinal herbs grow beside the old well. Three herbs recovered.";
+  }
+  spendHours(s, 1);
+  note(s, `Ashbrook Farm: ${s.event.message}`);
+  return true;
+}
+function supplyForecast(s) {
+  const food = campCost(s),
+    wages = dailyWages(s);
+  return {
+    food,
+    wages,
+    foodDays: food ? Math.floor(s.food / food) : 0,
+    wageDays: wages ? Math.floor(Math.max(0, s.gold - s.wageDebt) / wages) : 0,
+    nextMeal: Math.max(0, 24 - s.timeOfDay),
+  };
+}
+function combatPreview(s, id, x, y, skillMode = false) {
+  if (
+    !Number.isInteger(x) ||
+    !Number.isInteger(y) ||
+    x < 0 ||
+    x > 8 ||
+    y < 0 ||
+    y > 6
+  )
+    return { allowed: false, reason: "Outside the battlefield." };
+  const b = s.battle,
+    u = b?.units.find((u) => u.id === id),
+    p = s.party[id];
+  if (!u || !p || p.hp <= 0)
+    return { allowed: false, reason: "Select a conscious companion." };
+  const tile = terrainCell(s, x, y),
+    enemy = b.enemies.find((e) => e.hp > 0 && e.x === x && e.y === y);
+  if (enemy) {
+    const skill = skillMode ? skillFor(p) : null;
+    let reason = u.acted
+      ? "Action already spent."
+      : skillMode && (!skill || u.cooldown > 0 || b.valor < skill.cost)
+        ? "Ability unavailable: check valor and cooldown."
+        : Math.abs(x - u.x) + Math.abs(y - u.y) > attackRange(p, skillMode, s)
+          ? "Out of range."
+          : !hasLineOfSight(s, u, enemy)
+            ? "Sight blocked."
+            : "";
+    const flank = p.role === "Archer" ? 0 : flankingBonus(s, u, enemy);
+    const cover =
+      !skill?.piercing && Math.abs(x - u.x) + Math.abs(y - u.y) > 1
+        ? tile.cover
+        : 0;
+    const armor = skill?.piercing
+      ? 0
+      : Math.max(0, (enemy.armor || 0) - (skill?.sunder ? 2 : 0));
+    const damage = Math.max(
+      1,
+      attackPower(s, p) + (skill?.bonus || 0) + flank - cover - armor,
+    );
+    return {
+      allowed: !reason,
+      reason,
+      damage,
+      flank,
+      cover,
+      armor,
+      kind: "attack",
+      text:
+        reason ||
+        `${skill?.name || "Attack"}: ${damage} damage · armor −${armor} · cover −${cover} · flank +${flank}${skill?.area ? " · area attack" : ""}`,
+    };
+  }
+  const path =
+    !u.moved && (!u.acted || u.safeMove) && !skillMode
+      ? battlePath(s, u, x, y)
+      : null;
+  let reactions = 0,
+    previous = u,
+    reacted = new Set();
+  for (const point of path || []) {
+    for (const e of b.enemies)
+      if (
+        !u.safeMove &&
+        e.hp > 0 &&
+        e.kind !== "archer" &&
+        !e.stun &&
+        !e.reacted &&
+        !reacted.has(e) &&
+        Math.abs(e.x - previous.x) + Math.abs(e.y - previous.y) === 1 &&
+        Math.abs(e.x - point.x) + Math.abs(e.y - point.y) > 1
+      ) {
+        reactions++;
+        reacted.add(e);
+      }
+    previous = point;
+  }
+  const fire = b.threat?.tiles?.some((t) => t.x === x && t.y === y) || false;
+  return {
+    allowed: !!path?.length,
+    kind: "move",
+    reactions,
+    text: path?.length
+      ? `Move · ${tile.kind} · cost ${tile.cost}${reactions ? ` · WARNING: ${reactions} disengagement attack(s)` : " · no disengagement attacks"}${fire ? " · WARNING: marked hazard" : ""}`
+      : "Movement unavailable or route blocked.",
+  };
+}
+const fieldGuide = {
+  travel: [
+    "Keep the company supplied",
+    "Click anywhere on the map to walk freely. Villages contain markets, recruitment and contracts. Forage takes six hours; rich forests and farms yield more food. Repeated gathering at one location gives less until the next day. Food and wages are paid at midnight; hunger causes lasting wounds and death.",
+  ],
+  battle: [
+    "Read the battlefield",
+    "Select a companion, then click a highlighted destination or enemy. You can move and act once per round. Hover tiles for expected damage, cover and flanking; leaving melee range risks a reaction attack. Disengage trades your action for safe movement. Red warnings mark enemy hazards. End turn lets enemies act.",
+  ],
+  camp: [
+    "Make camp work",
+    "Assign companions to camp jobs. Matching professions operate upgrades, cook meals, forge supplies and treat wounds. Build furniture for extra benefits. Rest uses time and pays daily food and wages; check the forecast before resting.",
+  ],
+  dungeon: [
+    "Explore carefully",
+    "Grid buttons move one square. Inspect near suspicious walls to uncover secrets. Disarm darts from a neighboring tile or reinforce unstable passages. Ore needs a Miner. Defeat sentries before taking the vault; treasure is collected once.",
+  ],
+  farm: [
+    "Follow the clues",
+    "Search the farm's ledger before opening the cellar. Clues mark new destinations without revealing the surrounding terrain. Supplies and discoveries can only be collected once.",
+  ],
+};
 
 // Original, hand-built pixel artwork. All coordinates are logical pixels.
 const artPalette = {
@@ -6466,6 +6893,32 @@ function drawLandmark(c, p, index = 0) {
     pixel(c, x + 41, y - 6, 2, 17, "#6f5d3d");
     pixel(c, x + 43, y - 6, 8, 6, "#b79552");
     pixel(c, x + 44, y - 5, 5, 1, "#e1cc8f");
+  } else if (p.type === "farm") {
+    house(c, x - 22, y - 8, "#8e7250");
+    fence(c, x - 34, y + 30, 68);
+    for (let i = 0; i < 5; i++) {
+      pixel(c, x - 28 + i * 12, y + 14, 3, 12, "#a99953");
+      pixel(c, x - 31 + i * 12, y + 17, 9, 3, "#cbb270");
+    }
+    pixel(c, x + 23, y - 10, 13, 14, "#7d8069");
+    pixel(c, x + 25, y - 8, 9, 5, "#343e36");
+  } else if (p.scene === "cave") {
+    for (let i = 0; i < 5; i++)
+      rock(c, x - 24 + i * 11, y - 8 - (i % 2) * 8, 2);
+    pixel(c, x - 13, y - 9, 27, 24, "#303f3c");
+    for (const dx of [-20, 20]) {
+      pixel(c, x + dx, y + 8, 4, 17, "#75a8af");
+      pixel(c, x + dx + 1, y + 5, 2, 14, "#afd0c6");
+    }
+  } else if (p.scene === "camp") {
+    for (const dx of [-20, 16]) {
+      pixel(c, x + dx, y - 9, 22, 24, "#97684b");
+      pixel(c, x + dx + 3, y - 14, 16, 5, "#b68f67");
+      pixel(c, x + dx + 8, y + 1, 7, 14, "#444936");
+    }
+    fence(c, x - 35, y + 22, 72);
+    pixel(c, x - 4, y + 9, 8, 8, "#dba458");
+    pixel(c, x - 2, y + 6, 4, 8, "#b96e40");
   } else if (p.type === "ruin") {
     steppedOval(c, x - 25, y - 8, 56, 37, "#89906a");
     for (const dx of [-19, 15]) {
@@ -7494,16 +7947,51 @@ function drawSiteInterior(c, s) {
   drawMapLabel(c, places[e.site].name, 384, 22);
 }
 function drawDungeonInterior(c, s) {
+  const layout = dungeonLayout(s.event.site),
+    flooded = s.event.site === 8,
+    cave = s.event.site === 14,
+    camp = s.event.site === 12;
   pixel(c, 0, 0, 768, 432, "#393e35");
   for (let y = 0; y < 7; y++)
     for (let x = 0; x < 9; x++) {
       const wall = dungeonWalls(s).some(([a, b]) => a === x && b === y);
-      pixel(c, 105 + x * 62, y * 60, 58, 56, wall ? "#555947" : "#92856b");
-      if ([1, 5].includes(x) && y === 1)
+      pixel(
+        c,
+        105 + x * 62,
+        y * 60,
+        58,
+        56,
+        wall
+          ? cave
+            ? "#5c7180"
+            : camp
+              ? "#715b41"
+              : "#555947"
+          : flooded
+            ? "#71908a"
+            : cave
+              ? "#859497"
+              : camp
+                ? "#a39465"
+                : "#92856b",
+      );
+      if (
+        [1, 5].includes(x) &&
+        y === 1 &&
+        places[s.event.site].type === "mine" &&
+        !s.siteProgress[`deposit-${s.event.site}-${x}`]
+      )
         pixel(c, 125 + x * 62, 15 + y * 60, 14, 14, "#c2bca9");
       if (x === 8 && y === 5)
         pixel(c, 120 + x * 62, 15 + y * 60, 25, 17, "#b89960");
-      if ((x === 3 || x === 5) && y === 3)
+      if (
+        (x === layout.trap[0] &&
+          y === layout.trap[1] &&
+          !s.siteProgress[`hazard-${s.event.site}-3`]) ||
+        (x === layout.collapse[0] &&
+          y === layout.collapse[1] &&
+          !s.siteProgress[`shore-${s.event.site}`])
+      )
         pixel(c, 130 + x * 62, 23 + y * 60, 8, 8, "#633e31");
     }
   const p = s.party.find((p) => !p.dead);
@@ -7517,6 +8005,29 @@ function drawDungeonInterior(c, s) {
     p.id,
     p,
   );
+}
+
+function drawFarmInterior(c, s) {
+  pixel(c, 0, 0, 768, 432, "#8e986b");
+  pixel(c, 90, 48, 300, 275, "#7a674f");
+  pixel(c, 103, 60, 274, 250, "#baa17a");
+  for (let y = 70; y < 300; y += 18) pixel(c, 105, y, 270, 1, "#a78d69");
+  pixel(c, 115, 80, 85, 35, "#715938");
+  pixel(c, 141, 84, 25, 19, "#ddcda5");
+  pixel(c, 260, 160, 65, 90, "#574d3b");
+  for (let i = 0; i < 5; i++) pixel(c, 267, 168 + i * 15, 50, 3, "#987d51");
+  pixel(c, 510, 120, 54, 48, "#7b7b65");
+  pixel(c, 519, 129, 35, 19, "#3f4d44");
+  for (let x = 455; x < 690; x += 27)
+    for (let y = 230; y < 355; y += 22) {
+      pixel(c, x, y, 4, 14, "#a59651");
+      pixel(c, x - 4, y + 4, 12, 3, "#ceb66f");
+    }
+  drawMapLabel(c, "Ledger", 157, 132);
+  drawMapLabel(c, "Cellar", 293, 269);
+  drawMapLabel(c, "Old well", 537, 187);
+  const p = s.party.find((p) => !p.dead);
+  drawCharacter(c, 410, 350, p.coat || partyCoats[0], 0, p.role, p.id, p);
 }
 
 let gameActive = false;
@@ -7655,7 +8166,117 @@ function objective() {
     ? "Walking · click or tap anywhere to change direction. Companions follow your route."
     : "Click or tap anywhere to walk. Visit towns for contracts and trade, or venture into the wilderness.";
 }
+let battleVisual = null,
+  visualSnapshot = new Map(),
+  combatEffects = [],
+  combatMotion = new Map();
+function captureCombatFeedback() {
+  if (battleVisual !== s.battle) {
+    battleVisual = s.battle;
+    visualSnapshot = new Map();
+    combatMotion.clear();
+    combatEffects = [];
+  }
+  if (!s.battle) return;
+  const now = performance.now(),
+    next = new Map();
+  const entities = [
+    ...s.battle.units.map((u) => ({
+      ...u,
+      key: `party-${u.id}`,
+      hp: s.party[u.id].hp,
+    })),
+    ...s.battle.enemies.map((e, i) => ({ ...e, key: `enemy-${i}` })),
+  ];
+  for (const e of entities) {
+    const old = visualSnapshot.get(e.key);
+    if (old && (old.x !== e.x || old.y !== e.y) && !menuSettings.reduceMotion)
+      combatMotion.set(e.key, { from: old, to: e, start: now });
+    if (old && old.hp !== e.hp)
+      combatEffects.push({ x: e.x, y: e.y, amount: e.hp - old.hp, start: now });
+    next.set(e.key, { x: e.x, y: e.y, hp: e.hp });
+  }
+  visualSnapshot = next;
+}
+function combatPosition(key, entity) {
+  const motion = combatMotion.get(key);
+  if (!motion || menuSettings.reduceMotion) return entity;
+  const t = Math.min(1, (performance.now() - motion.start) / 320),
+    ease = t * t * (3 - 2 * t);
+  if (t === 1) combatMotion.delete(key);
+  return {
+    x: motion.from.x + (motion.to.x - motion.from.x) * ease,
+    y: motion.from.y + (motion.to.y - motion.from.y) * ease,
+  };
+}
+function drawCombatEffects() {
+  const now = performance.now();
+  combatEffects = combatEffects.filter((e) => now - e.start < 950);
+  for (const e of combatEffects) {
+    const t = (now - e.start) / 950,
+      x = 136 + e.x * 62,
+      y = 28 + e.y * 60;
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, (1 - t) * 2);
+    ctx.fillStyle = e.amount < 0 ? "#b34f3e" : "#426742";
+    ctx.strokeStyle = "#f8e8bd";
+    ctx.lineWidth = 2;
+    ctx.font = "bold 15px monospace";
+    ctx.textAlign = "center";
+    const label = `${e.amount > 0 ? "+" : ""}${e.amount}`;
+    ctx.strokeText(label, x, y - 12 - (menuSettings.reduceMotion ? 0 : t * 22));
+    ctx.fillText(label, x, y - 12 - (menuSettings.reduceMotion ? 0 : t * 22));
+    if (e.amount < 0 && t < 0.25 && !menuSettings.reduceMotion) {
+      ctx.strokeStyle = "#e9d390";
+      ctx.beginPath();
+      ctx.moveTo(x - 11, y - 9);
+      ctx.lineTo(x + 11, y + 9);
+      ctx.moveTo(x + 11, y - 9);
+      ctx.lineTo(x - 11, y + 9);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+}
+function helpContext() {
+  return s.battle
+    ? "battle"
+    : s.event?.kind === "dungeon"
+      ? "dungeon"
+      : s.event?.kind === "farm"
+        ? "farm"
+        : s.campOpen
+          ? "camp"
+          : "travel";
+}
+function renderHelp() {
+  let el = $("field-tip");
+  if (!el) {
+    el = document.createElement("details");
+    el.id = "field-tip";
+    $("actions").append(el);
+  }
+  el.replaceChildren();
+  const context = helpContext(),
+    [title, text] = fieldGuide[context];
+  const summary = document.createElement("summary");
+  summary.textContent = `Help · ${title}`;
+  const p = document.createElement("p");
+  p.textContent = text;
+  el.append(
+    summary,
+    p,
+    button("Got it", () => {
+      s.helpSeen[context] = true;
+    }),
+  );
+  el.open = false;
+  el.ontoggle = () => {
+    if (el.open) s.helpSeen[context] = true;
+  };
+}
 function render() {
+  captureCombatFeedback();
   document.querySelector(".brand small").textContent =
     s.companyName.toUpperCase();
   document.querySelector(".brand-mark").textContent =
@@ -7703,7 +8324,7 @@ function render() {
 
   document.body.classList.toggle(
     "in-site",
-    ["site", "dungeon"].includes(s.event?.kind),
+    ["site", "dungeon", "farm"].includes(s.event?.kind),
   );
   document.body.classList.toggle("drawer-open", drawerOpen);
   document.body.classList.toggle("encounter", !!s.event);
@@ -7785,6 +8406,26 @@ function render() {
   const panel = $("panel");
   panel.replaceChildren();
   if (tab === "Company") {
+    const guide = document.createElement("details");
+    const guideTitle = document.createElement("summary");
+    guideTitle.textContent = "Field guide · travel, combat and survival";
+    guide.append(guideTitle);
+    guide.open = !s.helpSeen.travel;
+    for (const [title, text] of Object.values(fieldGuide))
+      guide.append(card(title, `<p>${text}</p>`));
+    guide.append(
+      button("Dismiss introduction", () => {
+        s.helpSeen.travel = true;
+      }),
+    );
+    panel.append(guide);
+    const forecast = supplyForecast(s);
+    panel.append(
+      card(
+        "Supply forecast",
+        `<p>${s.difficulty[0].toUpperCase() + s.difficulty.slice(1)} campaign. Next meal in ${forecast.nextMeal.toFixed(1)} hours. Daily needs: ${forecast.food} rations and ${forecast.wages} crowns.</p><p>${forecast.foodDays} full food days · ${forecast.wageDays} full wage days after current debt. Cold weather can increase food needs; hiring increases upkeep.</p>`,
+      ),
+    );
     if (s.crime.wanted)
       panel.append(
         card(
@@ -8951,8 +9592,9 @@ function render() {
     c.id = "event";
     if (s.event.kind === "dungeon") {
       const e = s.event,
+        layout = dungeonLayout(e.site),
         c = card(
-          `${places[e.site].name} dungeon`,
+          `${places[e.site].name} · ${layout.name}`,
           `<p>${e.message}</p><p>Company position ${e.x + 1},${e.y + 1}. Arrow tiles move one square. Inspect walls for secrets. Unstable ground and traps hurt the party. Sentries guard the eastern vault.</p>`,
         );
       c.id = "event";
@@ -8975,7 +9617,9 @@ function render() {
                           y === 1 &&
                           places[e.site].type === "mine"
                         ? "Ore"
-                        : (x === 3 || x === 5) && y === 3
+                        : (x === layout.trap[0] && y === layout.trap[1]) ||
+                            (x === layout.collapse[0] &&
+                              y === layout.collapse[1])
                           ? "Trap"
                           : "·",
               () => dungeonAction(s, "move", x, y),
@@ -8998,11 +9642,19 @@ function render() {
             !professional(s, "Miner") ||
             !!s.siteProgress[`deposit-${e.site}-${e.x}`],
         ),
-        button("Disarm darts · 1 wood / 1 hour", () =>
-          dungeonAction(s, "disarm"),
+        button(
+          "Disarm darts · 1 wood / 1 hour",
+          () => dungeonAction(s, "disarm"),
+          s.inventory.wood < 1 ||
+            !!s.siteProgress[`hazard-${e.site}-3`] ||
+            Math.abs(e.x - layout.trap[0]) + Math.abs(e.y - layout.trap[1]) > 1,
         ),
         button("Inspect nearby walls", () => dungeonAction(s, "inspect")),
-        button("Reinforce passage · 2 wood", () => dungeonAction(s, "shore")),
+        button(
+          "Reinforce passage · 2 wood",
+          () => dungeonAction(s, "shore"),
+          s.inventory.wood < 2 || !!s.siteProgress[`shore-${e.site}`],
+        ),
         button(
           "Open guarded vault",
           () => dungeonAction(s, "vault"),
@@ -9013,6 +9665,23 @@ function render() {
         ),
         button("Leave dungeon", () => dungeonAction(s, "leave")),
       );
+      a.append(c);
+    } else if (s.event.kind === "farm") {
+      const c = card("Ashbrook Farm", `<p>${s.event.message}</p>`);
+      c.id = "event";
+      for (const [action, label] of [
+        ["clue", "Read the farmer’s ledger"],
+        ["cellar", "Open the cellar"],
+        ["well", "Search the old well"],
+      ])
+        c.append(
+          button(
+            label,
+            () => farmAction(s, action),
+            !!s.siteProgress[`farm-${action}-13`],
+          ),
+        );
+      c.append(button("Leave farm", () => farmAction(s, "leave")));
       a.append(c);
     } else if (s.event.kind === "site") {
       const e = s.event;
@@ -9160,7 +9829,7 @@ function render() {
         button("Walk away", () => resolveEvent(s, "leave")),
       );
     }
-    if (!["site", "dungeon"].includes(s.event.kind)) a.append(c);
+    if (!["site", "dungeon", "farm"].includes(s.event.kind)) a.append(c);
   } else if (s.battle) {
     if (s.party[selected].role === "Archer")
       a.append(
@@ -9226,6 +9895,68 @@ function render() {
         ),
       );
     });
+    const previewCard = card(
+      "Target previews",
+      "<p>Damage includes armor, cover and flanking. Abilities can add status effects. Hover terrain for movement risks; disengage before leaving a melee enemy.</p>",
+    );
+    for (const enemy of s.battle.enemies.filter((e) => e.hp > 0)) {
+      const preview = combatPreview(s, selected, enemy.x, enemy.y, abilityMode);
+      previewCard.append(
+        button(
+          `${enemy.name || enemy.kind}: ${preview.text || preview.reason}`,
+          () => {
+            if (abilityMode) useSkill(s, selected, enemy.x, enemy.y);
+            else act(s, selected, enemy.x, enemy.y);
+          },
+          !preview.allowed,
+        ),
+      );
+    }
+    const moves = document.createElement("details"),
+      moveSummary = document.createElement("summary");
+    moveSummary.textContent = "Movement previews";
+    moves.append(moveSummary);
+    const moveChoice = document.createElement("select");
+    moveChoice.setAttribute("aria-label", "Preview movement destination");
+    for (let y = 0; y < 7; y++)
+      for (let x = 0; x < 9; x++) {
+        const preview = combatPreview(s, selected, x, y);
+        if (preview.kind !== "move" || !preview.allowed) continue;
+        const option = document.createElement("option");
+        option.value = `${x},${y}`;
+        option.textContent = `${x + 1},${y + 1} · ${preview.text}`;
+        moveChoice.append(option);
+      }
+    if (moveChoice.options.length) {
+      const moveDescription = document.createElement("p"),
+        moveButton = button("Move to previewed tile", () => {
+          const [x, y] = moveChoice.value.split(",").map(Number);
+          act(s, selected, x, y);
+        });
+      const updateMove = () => {
+        const [x, y] = moveChoice.value.split(",").map(Number);
+        moveDescription.textContent = combatPreview(s, selected, x, y).text;
+      };
+      moveChoice.onchange = updateMove;
+      updateMove();
+      moves.append(moveChoice, moveDescription, moveButton);
+    } else
+      moves.append(
+        document.createTextNode("No movement remains for this companion."),
+      );
+    previewCard.append(moves);
+    previewCard.classList.add("target-previews");
+    const previews = document.createElement("details");
+    previews.className = "combat-preview-menu";
+    const summary = document.createElement("summary");
+    summary.textContent = "Target previews";
+    previews.append(summary, previewCard);
+    a.append(previews);
+    const report = document.createElement("p");
+    report.id = "combat-report";
+    report.setAttribute("role", "status");
+    report.textContent = s.log[0] || "";
+    a.append(report);
     $("map-label").textContent =
       "Select ally · click tile to move / enemy to attack";
   } else {
@@ -9260,6 +9991,10 @@ function render() {
         !!s.ambushReady,
       ),
     );
+    if (s.location === 13)
+      a.append(
+        button("Explore abandoned farm", () => enterFarm(s), false, true),
+      );
     if (["mine", "ruin"].includes(places[s.location]?.type))
       a.append(button("Explore dungeon", () => enterDungeon(s)));
     if (places[s.location]?.type === "town")
@@ -9273,7 +10008,11 @@ function render() {
           tab = "Contracts";
         }),
       );
-    if (s.location >= 0 && places[s.location]?.type !== "town")
+    if (
+      s.location >= 0 &&
+      places[s.location]?.type !== "town" &&
+      s.location !== 13
+    )
       a.append(
         button(
           [4, 9, 10].includes(s.location)
@@ -9398,6 +10137,7 @@ function render() {
     renderedTab = tab;
   }
   updateClockUI();
+  renderHelp();
   draw();
 }
 function rect(x, y, w, h, c) {
@@ -9446,7 +10186,7 @@ function draw() {
     view.x = 325 - w / view.scale / 2;
     view.y = 225 - Math.max(160, h - 180) / view.scale / 2;
   }
-  if (["site", "dungeon"].includes(s.event?.kind)) {
+  if (["site", "dungeon", "farm"].includes(s.event?.kind)) {
     view.scale = Math.min(w / 768, Math.max(160, h - 160) / 432);
     view.x = (768 - w / view.scale) / 2;
     view.y = (432 - Math.max(160, h - 160) / view.scale) / 2;
@@ -9459,6 +10199,7 @@ function draw() {
       -view.y * view.scale,
     );
     if (s.event.kind === "dungeon") drawDungeonInterior(ctx, s);
+    else if (s.event.kind === "farm") drawFarmInterior(ctx, s);
     else drawSiteInterior(ctx, s);
     return;
   }
@@ -9540,11 +10281,16 @@ function draw() {
     s.battle.enemies
       .filter((e) => e.hp > 0)
       .forEach((e) => {
-        if (e.kind === "wolf") drawWolf(ctx, 136 + e.x * 62, 28 + e.y * 60);
+        const visual = combatPosition(
+          `enemy-${s.battle.enemies.indexOf(e)}`,
+          e,
+        );
+        if (e.kind === "wolf")
+          drawWolf(ctx, 136 + visual.x * 62, 28 + visual.y * 60);
         else
           person(
-            136 + e.x * 62,
-            28 + e.y * 60,
+            136 + visual.x * 62,
+            28 + visual.y * 60,
             e.kind === "archer"
               ? "#9b784e"
               : e.kind === "brute"
@@ -9562,14 +10308,14 @@ function draw() {
         ctx.textAlign = "center";
         ctx.fillText(
           `${e.name?.split(" ")[0] || e.kind || "raider"}${e.stun ? " STUN" : ""}${e.root ? " ROOT" : ""}${e.bleed ? " BLEED" : ""}`,
-          136 + e.x * 62,
-          12 + e.y * 60,
+          136 + visual.x * 62,
+          12 + visual.y * 60,
         );
-        rect(117 + e.x * 62, 49 + e.y * 60, 38, 5, "#777451");
-        rect(118 + e.x * 62, 50 + e.y * 60, 36, 3, "#c5b78a");
+        rect(117 + visual.x * 62, 49 + visual.y * 60, 38, 5, "#777451");
+        rect(118 + visual.x * 62, 50 + visual.y * 60, 36, 3, "#c5b78a");
         rect(
-          118 + e.x * 62,
-          50 + e.y * 60,
+          118 + visual.x * 62,
+          50 + visual.y * 60,
           Math.round((36 * e.hp) / e.max),
           3,
           "#a65f49",
@@ -9585,34 +10331,46 @@ function draw() {
     s.battle.units
       .filter((u) => s.party[u.id].hp > 0)
       .forEach((u) => {
+        const visual = combatPosition(`party-${u.id}`, u);
         if (selected === u.id) {
           ctx.strokeStyle = "#5b6541";
-          ctx.strokeRect(108 + u.x * 62, 3 + u.y * 60, 54, 52);
+          ctx.strokeRect(108 + visual.x * 62, 3 + visual.y * 60, 54, 52);
         }
         person(
-          136 + u.x * 62,
-          28 + u.y * 60,
+          136 + visual.x * 62,
+          28 + visual.y * 60,
           u.acted ? "#889079" : s.party[u.id].coat || partyCoats[u.id],
           0,
           s.party[u.id].role,
           u.id,
           s.party[u.id],
         );
-        drawLoadout(ctx, s, s.party[u.id], 136 + u.x * 62, 28 + u.y * 60);
+        drawLoadout(
+          ctx,
+          s,
+          s.party[u.id],
+          136 + visual.x * 62,
+          28 + visual.y * 60,
+        );
         ctx.font = "bold 9px monospace";
         ctx.textAlign = "center";
         ctx.fillStyle = "#474b33";
-        ctx.fillText(s.party[u.id].name, 136 + u.x * 62, 12 + u.y * 60);
-        rect(117 + u.x * 62, 49 + u.y * 60, 38, 5, "#777451");
-        rect(118 + u.x * 62, 50 + u.y * 60, 36, 3, "#c5b78a");
+        ctx.fillText(
+          s.party[u.id].name,
+          136 + visual.x * 62,
+          12 + visual.y * 60,
+        );
+        rect(117 + visual.x * 62, 49 + visual.y * 60, 38, 5, "#777451");
+        rect(118 + visual.x * 62, 50 + visual.y * 60, 36, 3, "#c5b78a");
         rect(
-          118 + u.x * 62,
-          50 + u.y * 60,
+          118 + visual.x * 62,
+          50 + visual.y * 60,
           (36 * s.party[u.id].hp) / s.party[u.id].max,
           3,
           "#a2b477",
         );
       });
+    drawCombatEffects();
     drawLighting(ctx, s, canvas.width, canvas.height);
     drawWeather(ctx, s);
     return;
@@ -9873,6 +10631,14 @@ function animate(time) {
       lastSave = time;
     }
   }
+  for (const [key, motion] of combatMotion)
+    if (time - motion.start >= 320) combatMotion.delete(key);
+  if (
+    s.battle &&
+    (combatEffects.length || combatMotion.size) &&
+    !document.hidden
+  )
+    draw();
   if (
     s.campOpen &&
     !document.hidden &&
@@ -9997,6 +10763,10 @@ canvas.addEventListener("pointermove", (event) => {
   if (enemy)
     $("map-label").textContent =
       `${enemy.name || enemy.kind || "raider"} · HP ${enemy.hp}/${enemy.max} · Armor ${enemy.armor || 0} · Range ${enemy.kind === "archer" ? 4 : 1}${enemy.kind === "wolf" ? ` · Rush ${enemy.bossId === "ashfang" ? 3 : 2} · pack hunter` : enemy.kind === "archer" ? " · Keeps distance" : " · Melee flanking +2"}${enemy.stun ? " · Stunned" : ""}${enemy.bleed ? " · Bleeding" : ""}${enemy.bossId ? ` · ${namedAdversaries.find((boss) => boss.id === enemy.bossId)?.mechanic || "Named adversary"}` : ""}`;
+  if (x >= 0 && x < 9 && y >= 0 && y < 7) {
+    const preview = combatPreview(s, selected, x, y, abilityMode);
+    $("map-label").textContent += ` · ${preview.text || preview.reason}`;
+  }
 });
 
 function menuRead(key, fallback = null) {
@@ -10271,6 +11041,18 @@ function showCompanyCreator() {
   banner.onchange = updateBanner;
   name.oninput = updateBanner;
   updateBanner();
+  const difficulty = creatorField(form, "Campaign difficulty", "standard", [
+    ["forgiving", "Forgiving"],
+    ["standard", "Standard"],
+    ["veteran", "Veteran"],
+  ]);
+  form.append(
+    menuElement(
+      "p",
+      "Forgiving: 20% lower food needs, 25% lower wages, weaker enemies. Veteran: 25% higher upkeep, tougher enemies, 15% more battle crowns. Difficulty stays with this company.",
+      "save-preview",
+    ),
+  );
   const origin = creatorField(
     form,
     "Starting background",
@@ -10409,6 +11191,7 @@ function showCompanyCreator() {
       name: name.value,
       banner: banner.value,
       origin: origin.value,
+      difficulty: difficulty.value,
       founders: fields.map((f) =>
         Object.fromEntries(
           Object.entries(f).map(([k, input]) => [k, input.value]),

@@ -1,6 +1,7 @@
 // Original, hand-built pixel artwork. All coordinates are logical pixels.
 import {
   dungeonWalls,
+  dungeonLayout,
   WORLD,
   places,
   terrainAt,
@@ -171,6 +172,32 @@ export function drawLandmark(c, p, index = 0) {
     pixel(c, x + 41, y - 6, 2, 17, "#6f5d3d");
     pixel(c, x + 43, y - 6, 8, 6, "#b79552");
     pixel(c, x + 44, y - 5, 5, 1, "#e1cc8f");
+  } else if (p.type === "farm") {
+    house(c, x - 22, y - 8, "#8e7250");
+    fence(c, x - 34, y + 30, 68);
+    for (let i = 0; i < 5; i++) {
+      pixel(c, x - 28 + i * 12, y + 14, 3, 12, "#a99953");
+      pixel(c, x - 31 + i * 12, y + 17, 9, 3, "#cbb270");
+    }
+    pixel(c, x + 23, y - 10, 13, 14, "#7d8069");
+    pixel(c, x + 25, y - 8, 9, 5, "#343e36");
+  } else if (p.scene === "cave") {
+    for (let i = 0; i < 5; i++)
+      rock(c, x - 24 + i * 11, y - 8 - (i % 2) * 8, 2);
+    pixel(c, x - 13, y - 9, 27, 24, "#303f3c");
+    for (const dx of [-20, 20]) {
+      pixel(c, x + dx, y + 8, 4, 17, "#75a8af");
+      pixel(c, x + dx + 1, y + 5, 2, 14, "#afd0c6");
+    }
+  } else if (p.scene === "camp") {
+    for (const dx of [-20, 16]) {
+      pixel(c, x + dx, y - 9, 22, 24, "#97684b");
+      pixel(c, x + dx + 3, y - 14, 16, 5, "#b68f67");
+      pixel(c, x + dx + 8, y + 1, 7, 14, "#444936");
+    }
+    fence(c, x - 35, y + 22, 72);
+    pixel(c, x - 4, y + 9, 8, 8, "#dba458");
+    pixel(c, x - 2, y + 6, 4, 8, "#b96e40");
   } else if (p.type === "ruin") {
     steppedOval(c, x - 25, y - 8, 56, 37, "#89906a");
     for (const dx of [-19, 15]) {
@@ -1199,16 +1226,51 @@ export function drawSiteInterior(c, s) {
   drawMapLabel(c, places[e.site].name, 384, 22);
 }
 export function drawDungeonInterior(c, s) {
+  const layout = dungeonLayout(s.event.site),
+    flooded = s.event.site === 8,
+    cave = s.event.site === 14,
+    camp = s.event.site === 12;
   pixel(c, 0, 0, 768, 432, "#393e35");
   for (let y = 0; y < 7; y++)
     for (let x = 0; x < 9; x++) {
       const wall = dungeonWalls(s).some(([a, b]) => a === x && b === y);
-      pixel(c, 105 + x * 62, y * 60, 58, 56, wall ? "#555947" : "#92856b");
-      if ([1, 5].includes(x) && y === 1)
+      pixel(
+        c,
+        105 + x * 62,
+        y * 60,
+        58,
+        56,
+        wall
+          ? cave
+            ? "#5c7180"
+            : camp
+              ? "#715b41"
+              : "#555947"
+          : flooded
+            ? "#71908a"
+            : cave
+              ? "#859497"
+              : camp
+                ? "#a39465"
+                : "#92856b",
+      );
+      if (
+        [1, 5].includes(x) &&
+        y === 1 &&
+        places[s.event.site].type === "mine" &&
+        !s.siteProgress[`deposit-${s.event.site}-${x}`]
+      )
         pixel(c, 125 + x * 62, 15 + y * 60, 14, 14, "#c2bca9");
       if (x === 8 && y === 5)
         pixel(c, 120 + x * 62, 15 + y * 60, 25, 17, "#b89960");
-      if ((x === 3 || x === 5) && y === 3)
+      if (
+        (x === layout.trap[0] &&
+          y === layout.trap[1] &&
+          !s.siteProgress[`hazard-${s.event.site}-3`]) ||
+        (x === layout.collapse[0] &&
+          y === layout.collapse[1] &&
+          !s.siteProgress[`shore-${s.event.site}`])
+      )
         pixel(c, 130 + x * 62, 23 + y * 60, 8, 8, "#633e31");
     }
   const p = s.party.find((p) => !p.dead);
@@ -1222,4 +1284,27 @@ export function drawDungeonInterior(c, s) {
     p.id,
     p,
   );
+}
+
+export function drawFarmInterior(c, s) {
+  pixel(c, 0, 0, 768, 432, "#8e986b");
+  pixel(c, 90, 48, 300, 275, "#7a674f");
+  pixel(c, 103, 60, 274, 250, "#baa17a");
+  for (let y = 70; y < 300; y += 18) pixel(c, 105, y, 270, 1, "#a78d69");
+  pixel(c, 115, 80, 85, 35, "#715938");
+  pixel(c, 141, 84, 25, 19, "#ddcda5");
+  pixel(c, 260, 160, 65, 90, "#574d3b");
+  for (let i = 0; i < 5; i++) pixel(c, 267, 168 + i * 15, 50, 3, "#987d51");
+  pixel(c, 510, 120, 54, 48, "#7b7b65");
+  pixel(c, 519, 129, 35, 19, "#3f4d44");
+  for (let x = 455; x < 690; x += 27)
+    for (let y = 230; y < 355; y += 22) {
+      pixel(c, x, y, 4, 14, "#a59651");
+      pixel(c, x - 4, y + 4, 12, 3, "#ceb66f");
+    }
+  drawMapLabel(c, "Ledger", 157, 132);
+  drawMapLabel(c, "Cellar", 293, 269);
+  drawMapLabel(c, "Old well", 537, 187);
+  const p = s.party.find((p) => !p.dead);
+  drawCharacter(c, 410, 350, p.coat || partyCoats[0], 0, p.role, p.id, p);
 }

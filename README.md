@@ -366,7 +366,7 @@ These unique items cannot be bought or crafted. Each bounty pays once and record
 
 Morale at 85+ grants +1 attack. Injuries impose −1 attack. Armor absorbs damage. Profession practice now unlocks ranks and company bonuses. Explorable sites have one-time rewards. Contracts are repeatable. Defeat rescues the company in Greyhaven at a cost; starvation deaths are permanent and cannot be reversed by medicine or resting. Fallen companions leave company equipment in stores and can be replaced at taverns while survivors remain. If everyone starves, start a new company.
 
-Progress automatically saves in browser local storage during play. **New Company** asks before replacing the autosave when you begin the adventure. Version-one through version-eleven saves migrate, preserving permanent equipment improvements; an unreadable autosave disables Continue and is kept until you choose a replacement. Browser storage is specific to your browser and origin; moving from a local file to a hosted site does not transfer progress.
+Progress automatically saves in browser local storage during play. **New Company** asks before replacing the autosave when you begin the adventure. Version-one through version-twelve saves migrate, preserving permanent equipment improvements; an unreadable autosave disables Continue and is kept until you choose a replacement. Browser storage is specific to your browser and origin; moving from a local file to a hosted site does not transfer progress.
 
 ## Validate and develop
 
@@ -451,3 +451,30 @@ GAME_URL=http://127.0.0.1:3002/ PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_module
 ```
 
 ![Playable dungeon on mobile](docs/screenshots/dungeon-mobile.png)
+
+
+### Exploration and combat feedback (0.25)
+
+**New exploration:** Ashbrook Farm lies south of Greyhaven. Its ledger unlocks the cellar and marks Briarhide Camp and Echo Cavern; surrounding terrain still needs exploration. Search the well and cellar for one-time supplies. The bandit camp and cave are playable dungeons. All eight dungeons have distinct, connected layouts, themed interiors, different secret and hazard positions, and vault rewards from 50 to 90 crowns. Existing Iron Hollow progress retains its original layout.
+
+**Combat feedback:** companions and enemies animate between positions, hits flash, and floating numbers show health changes. Reduced Motion keeps sprites stationary during transitions and removes moving hit effects. Hover a target for expected damage including armor, ranged cover, and flanking. Hover a destination for disengagement and marked-fire warnings. Open **Target previews** for attack buttons, or **Movement previews** to choose a destination and read its risks before moving; both work with touch and keyboard. The action report shows the latest combat result. Attack previews show primary damage; equipment perks, area effects, bleeding, and healing can add further effects.
+
+**Survival and difficulty:** forests yield eight rations per six-hour forage, farms ten, mines and highlands three, ruins four, and towns/open wilderness six. Each repeated forage at the same location that day loses two rations, up to a four-ration reduction and a minimum yield of two, before faction bonuses. Yields reset on the next day. Company displays daily food/wages, full days of supplies, debt-adjusted wage reserves, and time until the next meal. The field guide explains travel, combat, camps, dungeons, and discoveries; contextual Help remains available during play.
+
+Choose a permanent **Campaign difficulty** when creating a company:
+
+| Mode | Food | Wages | Enemy health / damage | Battle crowns |
+| --- | --- | --- | --- | --- |
+| Forgiving | 80%, rounded up | 75%, rounded up | 80% health, −1 damage | Standard |
+| Standard | Existing costs | Existing costs | Existing strength | Standard |
+| Veteran | 125%, rounded up | 125%, rounded up | 120% health, +1 damage | 115%, rounded up |
+
+Food always costs at least one ration for a living company. Old saves retain Standard difficulty and migrate without losing progress. Weather, research, professions, staffing, and hiring still affect upkeep.
+
+Run the exploration-feedback browser check with the existing development server:
+
+```sh
+GAME_URL=http://127.0.0.1:3002/ PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/exploration-feedback-smoke.mjs
+```
+
+![Abandoned farm on mobile](docs/screenshots/farm-mobile.png)

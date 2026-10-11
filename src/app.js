@@ -1,4 +1,10 @@
 import {
+  dungeonLayout,
+  enterFarm,
+  farmAction,
+  supplyForecast,
+  combatPreview,
+  fieldGuide,
   weatherInfo,
   prepareAmbush,
   tacticalAction,
@@ -190,6 +196,7 @@ import {
   drawWolf,
   drawSiteInterior,
   drawDungeonInterior,
+  drawFarmInterior,
   drawLighting,
   drawLoadout,
 } from "./art.js";
@@ -329,7 +336,117 @@ function objective() {
     ? "Walking · click or tap anywhere to change direction. Companions follow your route."
     : "Click or tap anywhere to walk. Visit towns for contracts and trade, or venture into the wilderness.";
 }
+let battleVisual = null,
+  visualSnapshot = new Map(),
+  combatEffects = [],
+  combatMotion = new Map();
+function captureCombatFeedback() {
+  if (battleVisual !== s.battle) {
+    battleVisual = s.battle;
+    visualSnapshot = new Map();
+    combatMotion.clear();
+    combatEffects = [];
+  }
+  if (!s.battle) return;
+  const now = performance.now(),
+    next = new Map();
+  const entities = [
+    ...s.battle.units.map((u) => ({
+      ...u,
+      key: `party-${u.id}`,
+      hp: s.party[u.id].hp,
+    })),
+    ...s.battle.enemies.map((e, i) => ({ ...e, key: `enemy-${i}` })),
+  ];
+  for (const e of entities) {
+    const old = visualSnapshot.get(e.key);
+    if (old && (old.x !== e.x || old.y !== e.y) && !menuSettings.reduceMotion)
+      combatMotion.set(e.key, { from: old, to: e, start: now });
+    if (old && old.hp !== e.hp)
+      combatEffects.push({ x: e.x, y: e.y, amount: e.hp - old.hp, start: now });
+    next.set(e.key, { x: e.x, y: e.y, hp: e.hp });
+  }
+  visualSnapshot = next;
+}
+function combatPosition(key, entity) {
+  const motion = combatMotion.get(key);
+  if (!motion || menuSettings.reduceMotion) return entity;
+  const t = Math.min(1, (performance.now() - motion.start) / 320),
+    ease = t * t * (3 - 2 * t);
+  if (t === 1) combatMotion.delete(key);
+  return {
+    x: motion.from.x + (motion.to.x - motion.from.x) * ease,
+    y: motion.from.y + (motion.to.y - motion.from.y) * ease,
+  };
+}
+function drawCombatEffects() {
+  const now = performance.now();
+  combatEffects = combatEffects.filter((e) => now - e.start < 950);
+  for (const e of combatEffects) {
+    const t = (now - e.start) / 950,
+      x = 136 + e.x * 62,
+      y = 28 + e.y * 60;
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, (1 - t) * 2);
+    ctx.fillStyle = e.amount < 0 ? "#b34f3e" : "#426742";
+    ctx.strokeStyle = "#f8e8bd";
+    ctx.lineWidth = 2;
+    ctx.font = "bold 15px monospace";
+    ctx.textAlign = "center";
+    const label = `${e.amount > 0 ? "+" : ""}${e.amount}`;
+    ctx.strokeText(label, x, y - 12 - (menuSettings.reduceMotion ? 0 : t * 22));
+    ctx.fillText(label, x, y - 12 - (menuSettings.reduceMotion ? 0 : t * 22));
+    if (e.amount < 0 && t < 0.25 && !menuSettings.reduceMotion) {
+      ctx.strokeStyle = "#e9d390";
+      ctx.beginPath();
+      ctx.moveTo(x - 11, y - 9);
+      ctx.lineTo(x + 11, y + 9);
+      ctx.moveTo(x + 11, y - 9);
+      ctx.lineTo(x - 11, y + 9);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+}
+function helpContext() {
+  return s.battle
+    ? "battle"
+    : s.event?.kind === "dungeon"
+      ? "dungeon"
+      : s.event?.kind === "farm"
+        ? "farm"
+        : s.campOpen
+          ? "camp"
+          : "travel";
+}
+function renderHelp() {
+  let el = $("field-tip");
+  if (!el) {
+    el = document.createElement("details");
+    el.id = "field-tip";
+    $("actions").append(el);
+  }
+  el.replaceChildren();
+  const context = helpContext(),
+    [title, text] = fieldGuide[context];
+  const summary = document.createElement("summary");
+  summary.textContent = `Help · ${title}`;
+  const p = document.createElement("p");
+  p.textContent = text;
+  el.append(
+    summary,
+    p,
+    button("Got it", () => {
+      s.helpSeen[context] = true;
+    }),
+  );
+  el.open = false;
+  el.ontoggle = () => {
+    if (el.open) s.helpSeen[context] = true;
+  };
+}
 function render() {
+  captureCombatFeedback();
   document.querySelector(".brand small").textContent =
     s.companyName.toUpperCase();
   document.querySelector(".brand-mark").textContent =
@@ -377,7 +494,7 @@ function render() {
 
   document.body.classList.toggle(
     "in-site",
-    ["site", "dungeon"].includes(s.event?.kind),
+    ["site", "dungeon", "farm"].includes(s.event?.kind),
   );
   document.body.classList.toggle("drawer-open", drawerOpen);
   document.body.classList.toggle("encounter", !!s.event);
@@ -459,6 +576,26 @@ function render() {
   const panel = $("panel");
   panel.replaceChildren();
   if (tab === "Company") {
+    const guide = document.createElement("details");
+    const guideTitle = document.createElement("summary");
+    guideTitle.textContent = "Field guide · travel, combat and survival";
+    guide.append(guideTitle);
+    guide.open = !s.helpSeen.travel;
+    for (const [title, text] of Object.values(fieldGuide))
+      guide.append(card(title, `<p>${text}</p>`));
+    guide.append(
+      button("Dismiss introduction", () => {
+        s.helpSeen.travel = true;
+      }),
+    );
+    panel.append(guide);
+    const forecast = supplyForecast(s);
+    panel.append(
+      card(
+        "Supply forecast",
+        `<p>${s.difficulty[0].toUpperCase() + s.difficulty.slice(1)} campaign. Next meal in ${forecast.nextMeal.toFixed(1)} hours. Daily needs: ${forecast.food} rations and ${forecast.wages} crowns.</p><p>${forecast.foodDays} full food days · ${forecast.wageDays} full wage days after current debt. Cold weather can increase food needs; hiring increases upkeep.</p>`,
+      ),
+    );
     if (s.crime.wanted)
       panel.append(
         card(
@@ -1625,8 +1762,9 @@ function render() {
     c.id = "event";
     if (s.event.kind === "dungeon") {
       const e = s.event,
+        layout = dungeonLayout(e.site),
         c = card(
-          `${places[e.site].name} dungeon`,
+          `${places[e.site].name} · ${layout.name}`,
           `<p>${e.message}</p><p>Company position ${e.x + 1},${e.y + 1}. Arrow tiles move one square. Inspect walls for secrets. Unstable ground and traps hurt the party. Sentries guard the eastern vault.</p>`,
         );
       c.id = "event";
@@ -1649,7 +1787,9 @@ function render() {
                           y === 1 &&
                           places[e.site].type === "mine"
                         ? "Ore"
-                        : (x === 3 || x === 5) && y === 3
+                        : (x === layout.trap[0] && y === layout.trap[1]) ||
+                            (x === layout.collapse[0] &&
+                              y === layout.collapse[1])
                           ? "Trap"
                           : "·",
               () => dungeonAction(s, "move", x, y),
@@ -1672,11 +1812,19 @@ function render() {
             !professional(s, "Miner") ||
             !!s.siteProgress[`deposit-${e.site}-${e.x}`],
         ),
-        button("Disarm darts · 1 wood / 1 hour", () =>
-          dungeonAction(s, "disarm"),
+        button(
+          "Disarm darts · 1 wood / 1 hour",
+          () => dungeonAction(s, "disarm"),
+          s.inventory.wood < 1 ||
+            !!s.siteProgress[`hazard-${e.site}-3`] ||
+            Math.abs(e.x - layout.trap[0]) + Math.abs(e.y - layout.trap[1]) > 1,
         ),
         button("Inspect nearby walls", () => dungeonAction(s, "inspect")),
-        button("Reinforce passage · 2 wood", () => dungeonAction(s, "shore")),
+        button(
+          "Reinforce passage · 2 wood",
+          () => dungeonAction(s, "shore"),
+          s.inventory.wood < 2 || !!s.siteProgress[`shore-${e.site}`],
+        ),
         button(
           "Open guarded vault",
           () => dungeonAction(s, "vault"),
@@ -1687,6 +1835,23 @@ function render() {
         ),
         button("Leave dungeon", () => dungeonAction(s, "leave")),
       );
+      a.append(c);
+    } else if (s.event.kind === "farm") {
+      const c = card("Ashbrook Farm", `<p>${s.event.message}</p>`);
+      c.id = "event";
+      for (const [action, label] of [
+        ["clue", "Read the farmer’s ledger"],
+        ["cellar", "Open the cellar"],
+        ["well", "Search the old well"],
+      ])
+        c.append(
+          button(
+            label,
+            () => farmAction(s, action),
+            !!s.siteProgress[`farm-${action}-13`],
+          ),
+        );
+      c.append(button("Leave farm", () => farmAction(s, "leave")));
       a.append(c);
     } else if (s.event.kind === "site") {
       const e = s.event;
@@ -1834,7 +1999,7 @@ function render() {
         button("Walk away", () => resolveEvent(s, "leave")),
       );
     }
-    if (!["site", "dungeon"].includes(s.event.kind)) a.append(c);
+    if (!["site", "dungeon", "farm"].includes(s.event.kind)) a.append(c);
   } else if (s.battle) {
     if (s.party[selected].role === "Archer")
       a.append(
@@ -1900,6 +2065,68 @@ function render() {
         ),
       );
     });
+    const previewCard = card(
+      "Target previews",
+      "<p>Damage includes armor, cover and flanking. Abilities can add status effects. Hover terrain for movement risks; disengage before leaving a melee enemy.</p>",
+    );
+    for (const enemy of s.battle.enemies.filter((e) => e.hp > 0)) {
+      const preview = combatPreview(s, selected, enemy.x, enemy.y, abilityMode);
+      previewCard.append(
+        button(
+          `${enemy.name || enemy.kind}: ${preview.text || preview.reason}`,
+          () => {
+            if (abilityMode) useSkill(s, selected, enemy.x, enemy.y);
+            else act(s, selected, enemy.x, enemy.y);
+          },
+          !preview.allowed,
+        ),
+      );
+    }
+    const moves = document.createElement("details"),
+      moveSummary = document.createElement("summary");
+    moveSummary.textContent = "Movement previews";
+    moves.append(moveSummary);
+    const moveChoice = document.createElement("select");
+    moveChoice.setAttribute("aria-label", "Preview movement destination");
+    for (let y = 0; y < 7; y++)
+      for (let x = 0; x < 9; x++) {
+        const preview = combatPreview(s, selected, x, y);
+        if (preview.kind !== "move" || !preview.allowed) continue;
+        const option = document.createElement("option");
+        option.value = `${x},${y}`;
+        option.textContent = `${x + 1},${y + 1} · ${preview.text}`;
+        moveChoice.append(option);
+      }
+    if (moveChoice.options.length) {
+      const moveDescription = document.createElement("p"),
+        moveButton = button("Move to previewed tile", () => {
+          const [x, y] = moveChoice.value.split(",").map(Number);
+          act(s, selected, x, y);
+        });
+      const updateMove = () => {
+        const [x, y] = moveChoice.value.split(",").map(Number);
+        moveDescription.textContent = combatPreview(s, selected, x, y).text;
+      };
+      moveChoice.onchange = updateMove;
+      updateMove();
+      moves.append(moveChoice, moveDescription, moveButton);
+    } else
+      moves.append(
+        document.createTextNode("No movement remains for this companion."),
+      );
+    previewCard.append(moves);
+    previewCard.classList.add("target-previews");
+    const previews = document.createElement("details");
+    previews.className = "combat-preview-menu";
+    const summary = document.createElement("summary");
+    summary.textContent = "Target previews";
+    previews.append(summary, previewCard);
+    a.append(previews);
+    const report = document.createElement("p");
+    report.id = "combat-report";
+    report.setAttribute("role", "status");
+    report.textContent = s.log[0] || "";
+    a.append(report);
     $("map-label").textContent =
       "Select ally · click tile to move / enemy to attack";
   } else {
@@ -1934,6 +2161,10 @@ function render() {
         !!s.ambushReady,
       ),
     );
+    if (s.location === 13)
+      a.append(
+        button("Explore abandoned farm", () => enterFarm(s), false, true),
+      );
     if (["mine", "ruin"].includes(places[s.location]?.type))
       a.append(button("Explore dungeon", () => enterDungeon(s)));
     if (places[s.location]?.type === "town")
@@ -1947,7 +2178,11 @@ function render() {
           tab = "Contracts";
         }),
       );
-    if (s.location >= 0 && places[s.location]?.type !== "town")
+    if (
+      s.location >= 0 &&
+      places[s.location]?.type !== "town" &&
+      s.location !== 13
+    )
       a.append(
         button(
           [4, 9, 10].includes(s.location)
@@ -2072,6 +2307,7 @@ function render() {
     renderedTab = tab;
   }
   updateClockUI();
+  renderHelp();
   draw();
 }
 function rect(x, y, w, h, c) {
@@ -2120,7 +2356,7 @@ function draw() {
     view.x = 325 - w / view.scale / 2;
     view.y = 225 - Math.max(160, h - 180) / view.scale / 2;
   }
-  if (["site", "dungeon"].includes(s.event?.kind)) {
+  if (["site", "dungeon", "farm"].includes(s.event?.kind)) {
     view.scale = Math.min(w / 768, Math.max(160, h - 160) / 432);
     view.x = (768 - w / view.scale) / 2;
     view.y = (432 - Math.max(160, h - 160) / view.scale) / 2;
@@ -2133,6 +2369,7 @@ function draw() {
       -view.y * view.scale,
     );
     if (s.event.kind === "dungeon") drawDungeonInterior(ctx, s);
+    else if (s.event.kind === "farm") drawFarmInterior(ctx, s);
     else drawSiteInterior(ctx, s);
     return;
   }
@@ -2214,11 +2451,16 @@ function draw() {
     s.battle.enemies
       .filter((e) => e.hp > 0)
       .forEach((e) => {
-        if (e.kind === "wolf") drawWolf(ctx, 136 + e.x * 62, 28 + e.y * 60);
+        const visual = combatPosition(
+          `enemy-${s.battle.enemies.indexOf(e)}`,
+          e,
+        );
+        if (e.kind === "wolf")
+          drawWolf(ctx, 136 + visual.x * 62, 28 + visual.y * 60);
         else
           person(
-            136 + e.x * 62,
-            28 + e.y * 60,
+            136 + visual.x * 62,
+            28 + visual.y * 60,
             e.kind === "archer"
               ? "#9b784e"
               : e.kind === "brute"
@@ -2236,14 +2478,14 @@ function draw() {
         ctx.textAlign = "center";
         ctx.fillText(
           `${e.name?.split(" ")[0] || e.kind || "raider"}${e.stun ? " STUN" : ""}${e.root ? " ROOT" : ""}${e.bleed ? " BLEED" : ""}`,
-          136 + e.x * 62,
-          12 + e.y * 60,
+          136 + visual.x * 62,
+          12 + visual.y * 60,
         );
-        rect(117 + e.x * 62, 49 + e.y * 60, 38, 5, "#777451");
-        rect(118 + e.x * 62, 50 + e.y * 60, 36, 3, "#c5b78a");
+        rect(117 + visual.x * 62, 49 + visual.y * 60, 38, 5, "#777451");
+        rect(118 + visual.x * 62, 50 + visual.y * 60, 36, 3, "#c5b78a");
         rect(
-          118 + e.x * 62,
-          50 + e.y * 60,
+          118 + visual.x * 62,
+          50 + visual.y * 60,
           Math.round((36 * e.hp) / e.max),
           3,
           "#a65f49",
@@ -2259,34 +2501,46 @@ function draw() {
     s.battle.units
       .filter((u) => s.party[u.id].hp > 0)
       .forEach((u) => {
+        const visual = combatPosition(`party-${u.id}`, u);
         if (selected === u.id) {
           ctx.strokeStyle = "#5b6541";
-          ctx.strokeRect(108 + u.x * 62, 3 + u.y * 60, 54, 52);
+          ctx.strokeRect(108 + visual.x * 62, 3 + visual.y * 60, 54, 52);
         }
         person(
-          136 + u.x * 62,
-          28 + u.y * 60,
+          136 + visual.x * 62,
+          28 + visual.y * 60,
           u.acted ? "#889079" : s.party[u.id].coat || partyCoats[u.id],
           0,
           s.party[u.id].role,
           u.id,
           s.party[u.id],
         );
-        drawLoadout(ctx, s, s.party[u.id], 136 + u.x * 62, 28 + u.y * 60);
+        drawLoadout(
+          ctx,
+          s,
+          s.party[u.id],
+          136 + visual.x * 62,
+          28 + visual.y * 60,
+        );
         ctx.font = "bold 9px monospace";
         ctx.textAlign = "center";
         ctx.fillStyle = "#474b33";
-        ctx.fillText(s.party[u.id].name, 136 + u.x * 62, 12 + u.y * 60);
-        rect(117 + u.x * 62, 49 + u.y * 60, 38, 5, "#777451");
-        rect(118 + u.x * 62, 50 + u.y * 60, 36, 3, "#c5b78a");
+        ctx.fillText(
+          s.party[u.id].name,
+          136 + visual.x * 62,
+          12 + visual.y * 60,
+        );
+        rect(117 + visual.x * 62, 49 + visual.y * 60, 38, 5, "#777451");
+        rect(118 + visual.x * 62, 50 + visual.y * 60, 36, 3, "#c5b78a");
         rect(
-          118 + u.x * 62,
-          50 + u.y * 60,
+          118 + visual.x * 62,
+          50 + visual.y * 60,
           (36 * s.party[u.id].hp) / s.party[u.id].max,
           3,
           "#a2b477",
         );
       });
+    drawCombatEffects();
     drawLighting(ctx, s, canvas.width, canvas.height);
     drawWeather(ctx, s);
     return;
@@ -2547,6 +2801,14 @@ function animate(time) {
       lastSave = time;
     }
   }
+  for (const [key, motion] of combatMotion)
+    if (time - motion.start >= 320) combatMotion.delete(key);
+  if (
+    s.battle &&
+    (combatEffects.length || combatMotion.size) &&
+    !document.hidden
+  )
+    draw();
   if (
     s.campOpen &&
     !document.hidden &&
@@ -2671,6 +2933,10 @@ canvas.addEventListener("pointermove", (event) => {
   if (enemy)
     $("map-label").textContent =
       `${enemy.name || enemy.kind || "raider"} · HP ${enemy.hp}/${enemy.max} · Armor ${enemy.armor || 0} · Range ${enemy.kind === "archer" ? 4 : 1}${enemy.kind === "wolf" ? ` · Rush ${enemy.bossId === "ashfang" ? 3 : 2} · pack hunter` : enemy.kind === "archer" ? " · Keeps distance" : " · Melee flanking +2"}${enemy.stun ? " · Stunned" : ""}${enemy.bleed ? " · Bleeding" : ""}${enemy.bossId ? ` · ${namedAdversaries.find((boss) => boss.id === enemy.bossId)?.mechanic || "Named adversary"}` : ""}`;
+  if (x >= 0 && x < 9 && y >= 0 && y < 7) {
+    const preview = combatPreview(s, selected, x, y, abilityMode);
+    $("map-label").textContent += ` · ${preview.text || preview.reason}`;
+  }
 });
 
 function menuRead(key, fallback = null) {
@@ -2945,6 +3211,18 @@ function showCompanyCreator() {
   banner.onchange = updateBanner;
   name.oninput = updateBanner;
   updateBanner();
+  const difficulty = creatorField(form, "Campaign difficulty", "standard", [
+    ["forgiving", "Forgiving"],
+    ["standard", "Standard"],
+    ["veteran", "Veteran"],
+  ]);
+  form.append(
+    menuElement(
+      "p",
+      "Forgiving: 20% lower food needs, 25% lower wages, weaker enemies. Veteran: 25% higher upkeep, tougher enemies, 15% more battle crowns. Difficulty stays with this company.",
+      "save-preview",
+    ),
+  );
   const origin = creatorField(
     form,
     "Starting background",
@@ -3083,6 +3361,7 @@ function showCompanyCreator() {
       name: name.value,
       banner: banner.value,
       origin: origin.value,
+      difficulty: difficulty.value,
       founders: fields.map((f) =>
         Object.fromEntries(
           Object.entries(f).map(([k, input]) => [k, input.value]),

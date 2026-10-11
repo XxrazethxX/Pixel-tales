@@ -12,6 +12,9 @@ export const places = [
   { name: "Redstone Quarry", x: 1250, y: 110, type: "mine" },
   { name: "Forgotten Stash", x: 350, y: 620, type: "cache" },
   { name: "Broken Crown", x: 1385, y: 755, type: "ruin" },
+  { name: "Briarhide Camp", x: 470, y: 490, type: "ruin", scene: "camp" },
+  { name: "Ashbrook Farm", x: 120, y: 510, type: "farm" },
+  { name: "Echo Cavern", x: 870, y: 440, type: "mine", scene: "cave" },
 ];
 export const studies = [
   {
@@ -112,8 +115,9 @@ export function researchLock(s, id) {
 }
 export function fresh() {
   return {
-    version: 11,
+    version: 12,
     companyName: "The Ashen Company",
+    difficulty: "standard",
     banner: "ashen",
     origin: "wanderers",
     inventory: { ore: 0, wood: 0, herbs: 0, medicine: 1, pelts: 0 },
@@ -147,6 +151,8 @@ export function fresh() {
     lessonLedger: {},
     rumors: {},
     siteProgress: {},
+    forageLedger: {},
+    helpSeen: {},
     crime: { wanted: 0, stolen: false },
     campFurniture: {},
     ambushReady: false,
@@ -414,6 +420,29 @@ export function startBattle(s, patrolId = null) {
   }
   deployBattle(s, patrol);
   if (!patrol) deployAdversary(s);
+  if (s.difficulty !== "standard")
+    for (const e of s.battle.enemies) {
+      e.hp = e.max = Math.max(
+        1,
+        Math.round(
+          e.hp *
+            (s.difficulty === "forgiving"
+              ? 0.8
+              : s.difficulty === "veteran"
+                ? 1.2
+                : 1),
+        ),
+      );
+      e.damage = Math.max(
+        1,
+        e.damage +
+          (s.difficulty === "forgiving"
+            ? -1
+            : s.difficulty === "veteran"
+              ? 1
+              : 0),
+      );
+    }
   if (s.ambushReady) {
     s.battle.valor = Math.min(5, s.battle.valor + 1);
     s.battle.enemies[0].stun = 1;
@@ -488,13 +517,16 @@ function win(s) {
   const difficulty = wildlife
     ? { tier: 1, knowledge: 1, xp: 20, salvage: 0, renown: 2 }
     : contractDifficulty(patrolFight ? null : s.contract);
-  const reward = patrolFight
+  const baseReward = patrolFight
     ? wildlife
       ? 0
       : raid
         ? 60
         : 40
     : s.contract.reward;
+  const reward = Math.ceil(
+    baseReward * (s.difficulty === "veteran" ? 1.15 : 1),
+  );
   if (wildlife) {
     s.food += 6;
     s.inventory.pelts += 2;
@@ -740,7 +772,7 @@ export function restore(raw) {
   const base = fresh();
   if (
     !raw ||
-    ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].includes(raw.version) ||
+    ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].includes(raw.version) ||
     !Array.isArray(raw.party) ||
     raw.party.length < 1 ||
     raw.party.length > 6 ||
@@ -766,7 +798,7 @@ export function restore(raw) {
   const result = {
     ...base,
     ...raw,
-    version: 11,
+    version: 12,
     inventory: { ...base.inventory, ...raw.inventory },
     explored: raw.explored || [],
     event: raw.event || null,
@@ -781,11 +813,36 @@ export function restore(raw) {
     Object.entries(raw.siteProgress || {}).filter(
       ([k, v]) =>
         v === true &&
-        /^(cart|secret|shore|guard|vault)-\d+$|^(hazard|deposit)-\d+-[135]$/.test(
+        /^(cart|secret|shore|guard|vault|farm-clue|farm-cellar|farm-well)-\d+$|^(hazard|deposit)-\d+-[135]$/.test(
           k,
         ),
     ),
   );
+  result.forageLedger = Object.fromEntries(
+    Object.entries(raw.forageLedger || {}).filter(
+      ([key, count]) =>
+        /^\d+-\d+$/.test(key) &&
+        Number.isInteger(count) &&
+        count > 0 &&
+        count <= 24,
+    ),
+  );
+  result.helpSeen = Object.fromEntries(
+    Object.entries(raw.helpSeen || {}).filter(
+      ([key, value]) =>
+        ["travel", "battle", "camp", "dungeon", "farm"].includes(key) &&
+        value === true,
+    ),
+  );
+  if (result.event?.kind === "farm")
+    result.event =
+      result.event.site === 13 && raw.location === 13
+        ? {
+            kind: "farm",
+            site: 13,
+            message: safeCompanyName(result.event.message, "", 180),
+          }
+        : null;
   result.crime = {
     wanted: Number.isInteger(raw.crime?.wanted)
       ? Math.max(0, Math.min(10, raw.crime.wanted))
@@ -803,6 +860,11 @@ export function restore(raw) {
       .map((f) => [f.id, raw.campFurniture[f.id]]),
   );
   result.ambushReady = raw.ambushReady === true;
+  result.difficulty = ["forgiving", "standard", "veteran"].includes(
+    raw.difficulty,
+  )
+    ? raw.difficulty
+    : "standard";
   if (result.event?.kind === "dungeon") {
     const e = result.event;
     result.event =
@@ -1615,7 +1677,13 @@ function awardExploration(s) {
 }
 export function forage(s) {
   if (s.battle || s.event || companyLost(s)) return false;
-  s.food += forageAmount(s);
+  const amount = forageAmount(s),
+    key = `${s.day}-${s.location}`;
+  s.food += amount;
+  s.forageLedger ||= {};
+  s.forageLedger[key] = Math.min(24, (s.forageLedger[key] || 0) + 1);
+  for (const old of Object.keys(s.forageLedger))
+    if (Number(old.split("-")[0]) < s.day - 1) delete s.forageLedger[old];
   const herbalist = professional(s, "Herbalist");
   if (herbalist) {
     s.inventory.herbs += 1 + professionRank(herbalist);
@@ -1623,7 +1691,10 @@ export function forage(s) {
   }
   spendHours(s, 6);
   s.morale = Math.max(0, s.morale - 3);
-  note(s, `Gathered ${forageAmount(s)} rations in six hours.`);
+  note(
+    s,
+    `Gathered ${amount} rations in six hours. Repeated gathering here today yields less.`,
+  );
   return true;
 }
 export function resolveEvent(s, choice) {
@@ -2291,7 +2362,7 @@ export function assignProfession(s, id, name) {
 }
 export function campCost(s) {
   const count = livingParty(s).length;
-  return count
+  const base = count
     ? Math.max(
         1,
         count +
@@ -2302,6 +2373,19 @@ export function campCost(s) {
           (s.campUpgrades.cookpot || 0) -
           (s.campOpen && campWorker(s, "cook") ? 1 : 0),
       ) + weatherInfo(s).food
+    : 0;
+  return count
+    ? Math.max(
+        1,
+        Math.ceil(
+          base *
+            (s.difficulty === "forgiving"
+              ? 0.8
+              : s.difficulty === "veteran"
+                ? 1.25
+                : 1),
+        ),
+      )
     : 0;
 }
 export function healAmount(s) {
@@ -3077,7 +3161,12 @@ export function companyLost(s) {
 export function dailyWages(s) {
   return Math.ceil(
     livingParty(s).reduce((total, p) => total + companionWages(p), 0) *
-      (s.research.includes("paymaster") ? 0.8 : 1),
+      (s.research.includes("paymaster") ? 0.8 : 1) *
+      (s.difficulty === "forgiving"
+        ? 0.75
+        : s.difficulty === "veteran"
+          ? 1.25
+          : 1),
   );
 }
 export function starvationDamage(s) {
@@ -3855,6 +3944,7 @@ export function battlefield(s) {
 function chooseBattleLayout(s, patrol) {
   const place = places[s.location],
     biome = terrainAt(s.position);
+  if (!patrol && place?.scene === "camp") return "forest-grove";
   if (patrol?.kind === "merchant") return "road";
   if (patrol?.kind === "wolves") return "forest-edge";
   if (!patrol && place?.type === "ruin")
@@ -4545,7 +4635,22 @@ function lootCaravanCargo(s, p) {
   }
 }
 export function forageAmount(s) {
-  return 6 + (s.reputation.freefolk >= 10 ? 2 : 0);
+  const type = places[s.location]?.type || terrainAt(s.position);
+  const base =
+    type === "forest"
+      ? 8
+      : type === "farm"
+        ? 10
+        : type === "mine" || type === "highlands"
+          ? 3
+          : type === "ruin"
+            ? 4
+            : 6;
+  const gathered = s.forageLedger?.[`${s.day}-${s.location}`] || 0;
+  return (
+    Math.max(2, base - Math.min(4, gathered * 2)) +
+    (s.reputation.freefolk >= 10 ? 2 : 0)
+  );
 }
 
 export const regionalStories = [
@@ -5706,6 +5811,11 @@ export function createCompany(options) {
   s.companyName = safeCompanyName(options.name);
   s.banner = options.banner;
   s.origin = origin.id;
+  s.difficulty = ["forgiving", "standard", "veteran"].includes(
+    options.difficulty,
+  )
+    ? options.difficulty
+    : "standard";
   s.gold = origin.gold;
   s.food = origin.food;
   s.renown = origin.renown || 0;
@@ -6145,33 +6255,174 @@ export function enterDungeon(s) {
   };
   return true;
 }
+export function dungeonLayout(site) {
+  const layouts = {
+    2: {
+      name: "Burial chambers",
+      walls: [
+        [2, 1],
+        [2, 2],
+        [2, 3],
+        [6, 4],
+        [6, 1],
+        [6, 2],
+      ],
+      secret: [4, 1],
+      trap: [3, 3],
+      collapse: [5, 3],
+      guard: [7, 5],
+      vault: [8, 5],
+      reward: 55,
+      clue: "Fresh air leaks through the northern burial wall.",
+    },
+    4: {
+      name: "Timbered galleries",
+      walls: [
+        [2, 1],
+        [2, 2],
+        [2, 3],
+        [6, 4],
+      ],
+      secret: [4, 1],
+      trap: [3, 3],
+      collapse: [5, 3],
+      guard: [7, 5],
+      vault: [8, 5],
+      reward: 50,
+      clue: "Scratched stone hints at a hidden door near the northern center.",
+    },
+    5: {
+      name: "Garrison corridors",
+      walls: [
+        [1, 1],
+        [1, 2],
+        [3, 2],
+        [3, 3],
+        [5, 4],
+      ],
+      secret: [6, 1],
+      trap: [3, 1],
+      collapse: [5, 3],
+      guard: [7, 5],
+      vault: [8, 5],
+      reward: 60,
+      clue: "A loose banner conceals a door in the northeast wall.",
+    },
+    8: {
+      name: "Flooded cloister",
+      walls: [
+        [2, 2],
+        [3, 2],
+        [4, 2],
+        [6, 3],
+        [6, 4],
+      ],
+      secret: [4, 1],
+      trap: [3, 4],
+      collapse: [5, 3],
+      guard: [7, 5],
+      vault: [8, 5],
+      reward: 65,
+      clue: "The northern altar sounds hollow when struck.",
+    },
+    9: {
+      name: "Quarry switchbacks",
+      walls: [
+        [2, 1],
+        [2, 2],
+        [4, 3],
+        [4, 4],
+        [6, 1],
+      ],
+      secret: [4, 1],
+      trap: [3, 3],
+      collapse: [5, 4],
+      guard: [7, 5],
+      vault: [8, 5],
+      reward: 60,
+      clue: "A boarded survey tunnel lies near the northern center.",
+    },
+    11: {
+      name: "Royal labyrinth",
+      walls: [
+        [1, 2],
+        [2, 2],
+        [3, 2],
+        [5, 1],
+        [5, 2],
+        [6, 4],
+        [7, 4],
+      ],
+      secret: [4, 1],
+      trap: [3, 3],
+      collapse: [5, 3],
+      guard: [7, 5],
+      vault: [8, 5],
+      reward: 90,
+      clue: "The crown carved into the northern wall hides a mechanism.",
+    },
+    12: {
+      name: "Bandit stockade",
+      walls: [
+        [2, 1],
+        [2, 2],
+        [4, 3],
+        [5, 3],
+        [6, 3],
+      ],
+      secret: [6, 1],
+      trap: [3, 3],
+      collapse: [5, 4],
+      guard: [7, 5],
+      vault: [8, 5],
+      reward: 70,
+      clue: "A torn canvas screens a cache in the northeast corner.",
+    },
+    14: {
+      name: "Crystal cave",
+      walls: [
+        [2, 1],
+        [2, 2],
+        [3, 2],
+        [6, 2],
+        [6, 3],
+      ],
+      secret: [4, 1],
+      trap: [3, 3],
+      collapse: [5, 3],
+      guard: [7, 5],
+      vault: [8, 5],
+      reward: 65,
+      clue: "The northern crystal wall resonates with a hollow echo.",
+    },
+  };
+  return layouts[site] || layouts[4];
+}
 export function dungeonWalls(s) {
+  const layout = dungeonLayout(s.event.site);
   return [
-    [2, 1],
-    [2, 2],
-    [2, 3],
-    [6, 4],
-    ...(!s.siteProgress[`secret-${s.event.site}`] ? [[4, 1]] : []),
+    ...layout.walls,
+    ...(!s.siteProgress[`secret-${s.event.site}`] ? [layout.secret] : []),
   ];
 }
 export function dungeonAction(s, action, x, y) {
   const e = s.event;
   if (e?.kind !== "dungeon") return false;
+  const layout = dungeonLayout(e.site);
   if (action === "leave") {
     s.event = null;
     return true;
   }
   if (action === "inspect") {
     if (
-      Math.abs(e.x - 4) + Math.abs(e.y - 1) <= 1 &&
+      Math.abs(e.x - layout.secret[0]) + Math.abs(e.y - layout.secret[1]) <=
+        1 &&
       !s.siteProgress[`secret-${e.site}`]
     ) {
       s.siteProgress[`secret-${e.site}`] = true;
       s.inventory.herbs += 4;
       e.message = "A secret passage! Four herbs recovered.";
-    } else
-      e.message =
-        "Scratched stone hints at a hidden door near the northern center.";
+    } else e.message = layout.clue;
     return true;
   }
   if (action === "shore") {
@@ -6200,7 +6451,7 @@ export function dungeonAction(s, action, x, y) {
   }
   if (action === "disarm") {
     if (
-      Math.abs(e.x - 3) + Math.abs(e.y - 3) > 1 ||
+      Math.abs(e.x - layout.trap[0]) + Math.abs(e.y - layout.trap[1]) > 1 ||
       s.inventory.wood < 1 ||
       s.siteProgress[`hazard-${e.site}-3`]
     )
@@ -6220,9 +6471,9 @@ export function dungeonAction(s, action, x, y) {
     )
       return false;
     s.siteProgress[`vault-${e.site}`] = true;
-    s.gold += 50;
+    s.gold += layout.reward;
     s.knowledge += 2;
-    e.message = "Recovered 50 crowns and two knowledge from the guarded vault.";
+    e.message = `Recovered ${layout.reward} crowns and two knowledge from the guarded vault.`;
     return true;
   }
   if (
@@ -6241,15 +6492,17 @@ export function dungeonAction(s, action, x, y) {
   e.y = y;
   e.message = "";
   if (
-    (x === 3 && y === 3) ||
-    (x === 5 && y === 3 && !s.siteProgress[`shore-${e.site}`])
+    (x === layout.trap[0] && y === layout.trap[1]) ||
+    (x === layout.collapse[0] &&
+      y === layout.collapse[1] &&
+      !s.siteProgress[`shore-${e.site}`])
   ) {
-    const key = `hazard-${e.site}-${x}`;
+    const key = `hazard-${e.site}-${x === layout.trap[0] && y === layout.trap[1] ? 3 : 5}`;
     if (!s.siteProgress[key]) {
       s.siteProgress[key] = true;
       for (const p of livingParty(s)) p.hp = Math.max(1, p.hp - 3);
       e.message =
-        x === 3
+        x === layout.trap[0] && y === layout.trap[1]
           ? "A dart trap deals 3 damage to each companion."
           : "A cave-in deals 3 damage. Reinforce the passage next time.";
     }
@@ -6301,3 +6554,177 @@ function departCompanion(s, p) {
     `${p.name} leaves alive after losing faith in the company. Their equipment stays in stores.`,
   );
 }
+
+export function enterFarm(s) {
+  if (
+    s.location !== 13 ||
+    s.battle ||
+    s.event ||
+    s.campOpen ||
+    s.destination ||
+    companyLost(s)
+  )
+    return false;
+  s.event = {
+    kind: "farm",
+    site: 13,
+    message:
+      "The farmhouse is deserted. Muddy bootprints lead east, and a ledger lies beside a locked cellar. Explore for supplies and clues.",
+  };
+  return true;
+}
+export function farmAction(s, action) {
+  if (s.event?.kind !== "farm") return false;
+  if (action === "leave") {
+    s.event = null;
+    return true;
+  }
+  const key = `farm-${action}-13`;
+  if (!["clue", "cellar", "well"].includes(action) || s.siteProgress[key])
+    return false;
+  if (action === "cellar" && !s.siteProgress["farm-clue-13"]) {
+    s.event.message =
+      "Three carved symbols lock the cellar. Find the farmer's ledger first.";
+    return false;
+  }
+  s.siteProgress[key] = true;
+  if (action === "clue") {
+    s.event.message =
+      "Ledger: seed, rain, harvest. The cellar combination is solved. Raiders carried supplies to Briarhide Camp; a charcoal map marks Echo Cavern beyond it.";
+    for (const site of [12, 14])
+      if (!s.discovered.includes(site)) s.discovered.push(site);
+    s.knowledge++;
+  } else if (action === "cellar") {
+    s.food += 12;
+    s.inventory.wood += 3;
+    s.event.message =
+      "The cellar opens: twelve preserved rations and three wood recovered.";
+  } else {
+    s.inventory.herbs += 3;
+    s.event.message =
+      "Medicinal herbs grow beside the old well. Three herbs recovered.";
+  }
+  spendHours(s, 1);
+  note(s, `Ashbrook Farm: ${s.event.message}`);
+  return true;
+}
+export function supplyForecast(s) {
+  const food = campCost(s),
+    wages = dailyWages(s);
+  return {
+    food,
+    wages,
+    foodDays: food ? Math.floor(s.food / food) : 0,
+    wageDays: wages ? Math.floor(Math.max(0, s.gold - s.wageDebt) / wages) : 0,
+    nextMeal: Math.max(0, 24 - s.timeOfDay),
+  };
+}
+export function combatPreview(s, id, x, y, skillMode = false) {
+  if (
+    !Number.isInteger(x) ||
+    !Number.isInteger(y) ||
+    x < 0 ||
+    x > 8 ||
+    y < 0 ||
+    y > 6
+  )
+    return { allowed: false, reason: "Outside the battlefield." };
+  const b = s.battle,
+    u = b?.units.find((u) => u.id === id),
+    p = s.party[id];
+  if (!u || !p || p.hp <= 0)
+    return { allowed: false, reason: "Select a conscious companion." };
+  const tile = terrainCell(s, x, y),
+    enemy = b.enemies.find((e) => e.hp > 0 && e.x === x && e.y === y);
+  if (enemy) {
+    const skill = skillMode ? skillFor(p) : null;
+    let reason = u.acted
+      ? "Action already spent."
+      : skillMode && (!skill || u.cooldown > 0 || b.valor < skill.cost)
+        ? "Ability unavailable: check valor and cooldown."
+        : Math.abs(x - u.x) + Math.abs(y - u.y) > attackRange(p, skillMode, s)
+          ? "Out of range."
+          : !hasLineOfSight(s, u, enemy)
+            ? "Sight blocked."
+            : "";
+    const flank = p.role === "Archer" ? 0 : flankingBonus(s, u, enemy);
+    const cover =
+      !skill?.piercing && Math.abs(x - u.x) + Math.abs(y - u.y) > 1
+        ? tile.cover
+        : 0;
+    const armor = skill?.piercing
+      ? 0
+      : Math.max(0, (enemy.armor || 0) - (skill?.sunder ? 2 : 0));
+    const damage = Math.max(
+      1,
+      attackPower(s, p) + (skill?.bonus || 0) + flank - cover - armor,
+    );
+    return {
+      allowed: !reason,
+      reason,
+      damage,
+      flank,
+      cover,
+      armor,
+      kind: "attack",
+      text:
+        reason ||
+        `${skill?.name || "Attack"}: ${damage} damage · armor −${armor} · cover −${cover} · flank +${flank}${skill?.area ? " · area attack" : ""}`,
+    };
+  }
+  const path =
+    !u.moved && (!u.acted || u.safeMove) && !skillMode
+      ? battlePath(s, u, x, y)
+      : null;
+  let reactions = 0,
+    previous = u,
+    reacted = new Set();
+  for (const point of path || []) {
+    for (const e of b.enemies)
+      if (
+        !u.safeMove &&
+        e.hp > 0 &&
+        e.kind !== "archer" &&
+        !e.stun &&
+        !e.reacted &&
+        !reacted.has(e) &&
+        Math.abs(e.x - previous.x) + Math.abs(e.y - previous.y) === 1 &&
+        Math.abs(e.x - point.x) + Math.abs(e.y - point.y) > 1
+      ) {
+        reactions++;
+        reacted.add(e);
+      }
+    previous = point;
+  }
+  const fire = b.threat?.tiles?.some((t) => t.x === x && t.y === y) || false;
+  return {
+    allowed: !!path?.length,
+    kind: "move",
+    reactions,
+    text: path?.length
+      ? `Move · ${tile.kind} · cost ${tile.cost}${reactions ? ` · WARNING: ${reactions} disengagement attack(s)` : " · no disengagement attacks"}${fire ? " · WARNING: marked hazard" : ""}`
+      : "Movement unavailable or route blocked.",
+  };
+}
+export const fieldGuide = {
+  travel: [
+    "Keep the company supplied",
+    "Click anywhere on the map to walk freely. Villages contain markets, recruitment and contracts. Forage takes six hours; rich forests and farms yield more food. Repeated gathering at one location gives less until the next day. Food and wages are paid at midnight; hunger causes lasting wounds and death.",
+  ],
+  battle: [
+    "Read the battlefield",
+    "Select a companion, then click a highlighted destination or enemy. You can move and act once per round. Hover tiles for expected damage, cover and flanking; leaving melee range risks a reaction attack. Disengage trades your action for safe movement. Red warnings mark enemy hazards. End turn lets enemies act.",
+  ],
+  camp: [
+    "Make camp work",
+    "Assign companions to camp jobs. Matching professions operate upgrades, cook meals, forge supplies and treat wounds. Build furniture for extra benefits. Rest uses time and pays daily food and wages; check the forecast before resting.",
+  ],
+  dungeon: [
+    "Explore carefully",
+    "Grid buttons move one square. Inspect near suspicious walls to uncover secrets. Disarm darts from a neighboring tile or reinforce unstable passages. Ore needs a Miner. Defeat sentries before taking the vault; treasure is collected once.",
+  ],
+  farm: [
+    "Follow the clues",
+    "Search the farm's ledger before opening the cellar. Clues mark new destinations without revealing the surrounding terrain. Supplies and discoveries can only be collected once.",
+  ],
+};

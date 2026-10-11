@@ -923,3 +923,72 @@ nav button[data-count]::after {
   width: 100%;
   min-width: 0;
 }
+
+#field-tip {
+  position: relative;
+  width: auto;
+  max-width: 280px;
+  margin: 0;
+  padding: 7px 10px;
+  background: #e9dfc2;
+  border: 1px solid #9b8b67;
+  font-size: 11px;
+  max-height: 190px;
+  overflow: auto;
+}
+#field-tip summary {
+  margin: 0;
+  padding: 0;
+}
+#field-tip p {
+  line-height: 1.7;
+}
+.drawer-open #field-tip {
+  display: none;
+}
+.combat-preview-menu {
+  margin: 0;
+  padding: 8px;
+  background: #e9dfc2;
+  border: 1px solid #9b8b67;
+  max-height: 240px;
+  overflow: auto;
+}
+.combat-preview-menu summary {
+  margin: 0;
+  padding: 0;
+}
+.combat-preview-menu .card {
+  padding: 6px;
+}
+.combat-preview-menu button {
+  display: block;
+  font-size: 10px;
+}
+@media (max-width: 620px) {
+  .combat-preview-menu {
+    max-width: calc(100vw - 25px);
+  }
+}
+
+#combat-report {
+  width: 100%;
+  margin: 0;
+  padding: 5px 8px;
+  font-size: 11px;
+  background: #e9dfc2e8;
+  color: #494633;
+}
+
+.combat-preview-menu select {
+  width: 100%;
+  max-width: 100%;
+  padding: 8px;
+  color: #494633;
+  background: #efe5ca;
+  border: 1px solid #9b8b67;
+}
+
+#actions {
+  max-width: min(700px, calc(100% - 36px));
+}
