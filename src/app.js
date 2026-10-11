@@ -1,4 +1,19 @@
 import {
+  campCost,
+  healAmount,
+  craftPlan,
+  professional,
+  professionRank,
+  rankNames,
+  professions,
+  assignProfession,
+  talentsFor,
+  learnTalent,
+  classSkills,
+  useSkill,
+  attackRange,
+  movementRange,
+  workSite,
   WORLD,
   advancePatrols,
   nearbyPatrols,
@@ -38,7 +53,8 @@ let s = fresh();
 try {
   s = restore(JSON.parse(localStorage.getItem("pixel-tales")));
 } catch {}
-let drawerOpen = false;
+let drawerOpen = false,
+  abilityMode = false;
 let tab = "Company",
   selected = 0,
   craftTarget = 0;
@@ -74,7 +90,9 @@ function objective() {
   if (s.battle) {
     const p = s.party[selected],
       u = s.battle.units.find((u) => u.id === selected);
-    return `Round ${s.battle.turn} · ${p.name}: ${u?.moved ? "movement used" : "move up to 2 tiles"} · ${u?.acted ? "action used" : "attack or brace"}. Move and attack in the same round. Bows reach 4 tiles; spears 2; other weapons 1.`;
+    if (abilityMode)
+      return `${classSkills[p.role].name} armed: click an outlined enemy within ${attackRange(p, true)} tiles. ${classSkills[p.role].desc} Costs ${classSkills[p.role].cost} valor.`;
+    return `Valor ${s.battle.valor}/5 · Round ${s.battle.turn} · ${p.name}: ${u?.moved ? "movement used" : `move up to ${movementRange(p)} tiles`} · ${u?.acted ? "action used" : "attack or brace"}. Move and attack in the same round. Bows reach 4 tiles; spears 2; other weapons 1.`;
   }
   if (s.contract)
     return `Active: ${s.contract.name}. ${s.location === s.contract.target ? "Use the gold button below to complete your objective." : `Travel to ${places[s.contract.target].name} by clicking any point on the map.`}`;
@@ -102,7 +120,9 @@ function render() {
       "Storage unavailable · progress is temporary";
   }
   $("resources").innerHTML =
-    `<span>◈ ${s.gold} crowns</span><span>▧ ${s.food} rations</span><span>✦ ${s.knowledge} knowledge</span><span>☀ Day ${s.day}</span>`;
+    `<span>◈ ${s.gold} crowns</span><span>▧ ${s.food} rations</span><span>✦ ${s.knowledge} knowledge</span><span>☀ Day ${s.day}</span>${s.battle ? `<span>◆ Valor ${s.battle.valor}/5</span>` : ""}`;
+  if (!s.battle || s.battle.units.find((u) => u.id === selected)?.acted)
+    abilityMode = false;
   $("objective").textContent = objective();
   $("tabs").replaceChildren(
     ...["Company", "Contracts", "Research", "Workshop", "Town", "Journal"].map(
@@ -122,31 +142,85 @@ function render() {
     panel.append(
       card(
         "The Ashen Company",
-        `<div class="row"><span class="hint">${s.completed} contracts · ${s.skirmishes} skirmishes · ${s.renown} renown</span><span class="badge">Morale ${s.morale}%</span></div><div class="bar"><i style="width:${s.morale}%"></i></div><p>Map: ${s.discovered.length}/${places.length} locations discovered.</p><p>Wages: ${s.party.length * 2} crowns per camp. At 85 morale, all attacks gain +1 damage. Injuries reduce attack by 1.</p>`,
+        `<div class="row"><span class="hint">${s.completed} contracts · ${s.skirmishes} skirmishes · ${s.renown} renown</span><span class="badge">Morale ${s.morale}%</span></div><div class="bar"><i style="width:${s.morale}%"></i></div><p>Map: ${s.discovered.length}/${places.length} locations discovered.</p><p>Wages: ${s.party.length * 2} crowns per camp. At 85 morale, all attacks gain +1 damage. Injuries reduce attack by 1. Skilled cooks reduce camp supplies to ${campCost(s)} rations.</p>`,
       ),
     );
     s.party.forEach((p) => {
       const c = card(
         `${p.name} · Level ${p.level}`,
-        `<p>${p.role} · ${p.profession} (${p.professionXP} practice) ${p.injury ? "· INJURED" : ""}</p><div class="row"><span class="hint">HP ${p.hp}/${p.max}</span><span class="hint">ATK ${attackPower(s, p)} · Armor ${p.armor}</span></div><div class="bar"><i style="width:${(p.hp / p.max) * 100}%"></i></div><p>XP ${p.xp}/${p.level * 30} · ${p.points} training points</p>`,
+        `<p>${p.role} · ${rankNames[professionRank(p)]} ${p.profession} (${p.professionXP} practice${professionRank(p) < 3 ? ` / ${[3, 8, 15][professionRank(p)]} for next rank` : " · mastered"}) ${p.injury ? "· INJURED" : ""}</p><div class="row"><span class="hint">HP ${p.hp}/${p.max}</span><span class="hint">ATK ${attackPower(s, p)} · Armor ${p.armor}</span></div><div class="bar"><i style="width:${(p.hp / p.max) * 100}%"></i></div><p>XP ${p.xp}/${p.level * 30} · ${p.points} training points</p>`,
       );
       if (p.points)
         c.append(
-          button("Strength +1", () => train(s, p.id, "strength"), !!s.battle),
+          button(
+            "Strength +1",
+            () => train(s, p.id, "strength"),
+            !!s.battle || !!s.event,
+          ),
           button(
             "Vitality +5 HP",
             () => train(s, p.id, "vitality"),
-            !!s.battle,
+            !!s.battle || !!s.event,
           ),
         );
       if (p.hp < p.max || p.injury)
         c.append(
           button(
-            "Use medicine · heal 15",
+            `Use medicine · heal ${healAmount(s)}`,
             () => heal(s, p.id),
             s.inventory.medicine < 1 || !!s.battle || !!s.event,
           ),
         );
+      const professionSelect = document.createElement("select");
+      professionSelect.setAttribute("aria-label", `Profession for ${p.name}`);
+      professions.forEach((name) => {
+        const option = document.createElement("option");
+        option.value = name;
+        option.textContent = name;
+        option.selected = name === p.profession;
+        professionSelect.append(option);
+      });
+      professionSelect.disabled = !!s.battle || !!s.event;
+      professionSelect.onchange = () => {
+        stopMovement(s);
+        assignProfession(s, p.id, professionSelect.value);
+        render();
+      };
+      c.append(professionSelect);
+      const progression = document.createElement("details"),
+        summary = document.createElement("summary");
+      summary.textContent = "Class abilities & specialization";
+      progression.append(summary);
+      progression.open = p.points > 0 && !p.talent;
+      const ability = document.createElement("p");
+      ability.className = "hint";
+      ability.textContent = `${classSkills[p.role].name} · ${classSkills[p.role].cost} valor · ${classSkills[p.role].desc}`;
+      progression.append(ability);
+      const hint = document.createElement("p");
+      hint.className = "hint";
+      hint.textContent =
+        "Choose one permanent specialization at level 2 for one training point. Uses the same points as strength and vitality.";
+      progression.append(hint);
+      talentsFor(p).forEach((t) => {
+        const text = document.createElement("p");
+        text.className = "hint";
+        text.textContent = `${t.name}: ${t.desc}`;
+        progression.append(
+          text,
+          button(
+            p.talent === t.id
+              ? `${t.name} learned`
+              : `Learn ${t.name} · 1 point`,
+            () => learnTalent(s, p.id, t.id),
+            !!p.talent ||
+              p.level < 2 ||
+              p.points < 1 ||
+              !!s.battle ||
+              !!s.event,
+          ),
+        );
+      });
+      c.append(progression);
       panel.append(c);
     });
   }
@@ -224,9 +298,10 @@ function render() {
     panel.append(target);
     recipes.forEach((r) => {
       const p = s.party[craftTarget],
+        plan = craftPlan(s, r.id),
         el = card(
           r.name,
-          `<p>${r.desc}${["blade", "armor"].includes(r.id) ? ` · ${p.name}` : ""}</p><p>Costs: ${r.ore} ore · ${r.wood} wood · ${r.herbs || 0} herbs</p>`,
+          `<p>${r.id === "meal" ? `Gain ${8 + (plan.maker ? professionRank(plan.maker) : 0) * 2} rations` : r.id === "medicine" ? `Creates ${1 + Math.floor((plan.maker ? professionRank(plan.maker) : 0) / 2)} medicine; each heals ${healAmount(s)} HP and cures injury` : r.desc}${["blade", "armor"].includes(r.id) ? ` · ${p.name}` : ""}</p><p>Costs: ${plan.cost.ore} ore · ${plan.cost.wood} wood · ${plan.cost.herbs} herbs</p><p>${plan.maker ? `${rankNames[professionRank(plan.maker)]} ${plan.profession} ${plan.maker.name}` : `Requires a conscious ${plan.profession}`} · Higher ranks improve efficiency.</p>`,
         );
       el.append(
         button(
@@ -234,9 +309,10 @@ function render() {
           () => craft(s, r.id, craftTarget),
           !!s.battle ||
             !!s.event ||
-            s.inventory.ore < r.ore ||
-            s.inventory.wood < r.wood ||
-            s.inventory.herbs < (r.herbs || 0) ||
+            !plan.maker ||
+            s.inventory.ore < plan.cost.ore ||
+            s.inventory.wood < plan.cost.wood ||
+            s.inventory.herbs < plan.cost.herbs ||
             (r.id === "blade" && p.weapon >= 4) ||
             (r.id === "armor" && p.armor >= 3),
         ),
@@ -335,7 +411,15 @@ function render() {
     a.append(c);
   } else if (s.battle) {
     a.append(
-      button(`End round ${s.battle.turn}`, () => endTurn(s), false, true),
+      button(
+        `End round ${s.battle.turn}`,
+        () => {
+          abilityMode = false;
+          endTurn(s);
+        },
+        false,
+        true,
+      ),
       button(
         "Brace · reduce damage",
         () => guard(s, selected),
@@ -348,12 +432,28 @@ function render() {
         note(s, "Retreated. The company lives to fight another day.");
       }),
     );
+    const actor = s.party[selected],
+      unit = s.battle.units.find((u) => u.id === selected),
+      skill = classSkills[actor.role];
+    a.append(
+      button(
+        `${skill.name} · ${skill.cost} valor${unit.cooldown ? ` · cooldown ${unit.cooldown}` : ""}`,
+        () => (abilityMode = !abilityMode),
+        unit.acted || unit.cooldown > 0 || s.battle.valor < skill.cost,
+        abilityMode,
+      ),
+    );
+    if (abilityMode)
+      a.append(button("Basic attack", () => (abilityMode = false)));
     s.battle.units.forEach((u) => {
       const p = s.party[u.id];
       a.append(
         button(
           `${p.name}${u.acted ? " ✓" : ""}`,
-          () => (selected = u.id),
+          () => {
+            selected = u.id;
+            abilityMode = false;
+          },
           p.hp <= 0,
           selected === u.id,
         ),
@@ -364,9 +464,9 @@ function render() {
   } else {
     a.append(
       button(
-        `Camp · 4 rations / ${s.party.length * 2} crowns`,
+        `Camp · ${campCost(s)} rations / ${s.party.length * 2} crowns`,
         () => camp(s),
-        s.food < 4 || s.gold < s.party.length * 2,
+        s.food < campCost(s) || s.gold < s.party.length * 2,
       ),
       button("Forage · +6 rations / 1 day", () => forage(s)),
     );
@@ -389,6 +489,20 @@ function render() {
             : "Explore · knowledge & materials",
           () => explore(s),
           s.explored.includes(s.location),
+        ),
+      );
+    if (["forest", "mine"].includes(places[s.location]?.type))
+      a.append(
+        button(
+          places[s.location].type === "mine"
+            ? "Work mine · 2 rations / 1 day"
+            : "Gather herbs · 2 rations / 1 day",
+          () => workSite(s),
+          s.food < 2 ||
+            !professional(
+              s,
+              places[s.location].type === "mine" ? "Miner" : "Herbalist",
+            ),
         ),
       );
     if (s.contract?.target === s.location)
@@ -508,46 +622,66 @@ function draw() {
   if (s.battle) {
     rect(0, 0, 768, 432, "#3b4937");
     for (let y = 0; y < 7; y++)
-      for (let x = 0; x < 9; x++) {
-        rect(
-          105 + x * 62,
-          0 + y * 60,
-          60,
-          58,
-          (x + y) % 2 ? "#526044" : "#59664a",
-        );
-        const active = s.battle.units.find((u) => u.id === selected);
-        if (active && !active.acted) {
-          const p = s.party[selected],
-            range = p.role === "Archer" ? 4 : p.role === "Spearman" ? 2 : 1;
-          for (let y = 0; y < 7; y++)
-            for (let x = 0; x < 9; x++) {
-              const distance = Math.abs(active.x - x) + Math.abs(active.y - y),
-                enemy = s.battle.enemies.some(
-                  (e) => e.hp > 0 && e.x === x && e.y === y,
-                ),
-                occupied = s.battle.units.some(
-                  (u) => s.party[u.id].hp > 0 && u.x === x && u.y === y,
-                );
-              if (
-                (enemy && distance <= range) ||
-                (!active.moved &&
-                  !occupied &&
-                  !enemy &&
-                  distance <= 2 &&
-                  distance > 0)
-              ) {
-                ctx.strokeStyle = enemy ? "#d9a07e" : "#a3b578";
-                ctx.lineWidth = 2;
-                ctx.strokeRect(109 + x * 62, 4 + y * 60, 51, 49);
-              }
-            }
+      for (let x = 0; x < 9; x++)
+        rect(105 + x * 62, y * 60, 60, 58, (x + y) % 2 ? "#526044" : "#59664a");
+    const active = s.battle.units.find((u) => u.id === selected);
+    if (active && !active.acted) {
+      const p = s.party[selected],
+        range = attackRange(p, abilityMode);
+      for (let y = 0; y < 7; y++)
+        for (let x = 0; x < 9; x++) {
+          const distance = Math.abs(active.x - x) + Math.abs(active.y - y),
+            enemy = s.battle.enemies.some(
+              (e) => e.hp > 0 && e.x === x && e.y === y,
+            ),
+            occupied = s.battle.units.some(
+              (u) => s.party[u.id].hp > 0 && u.x === x && u.y === y,
+            );
+          if (
+            (enemy && distance <= range) ||
+            (!abilityMode &&
+              !active.moved &&
+              !enemy &&
+              !occupied &&
+              distance > 0 &&
+              distance <= movementRange(p))
+          ) {
+            ctx.strokeStyle = enemy
+              ? abilityMode
+                ? "#e8c87e"
+                : "#d9a07e"
+              : "#a3b578";
+            ctx.lineWidth = 2;
+            ctx.strokeRect(109 + x * 62, 4 + y * 60, 51, 49);
+          }
         }
-      }
+    }
     s.battle.enemies
       .filter((e) => e.hp > 0)
       .forEach((e) => {
-        person(136 + e.x * 62, 28 + e.y * 60, "#8f5143");
+        person(
+          136 + e.x * 62,
+          28 + e.y * 60,
+          e.kind === "archer"
+            ? "#9b784e"
+            : e.kind === "brute"
+              ? "#765c63"
+              : "#8f5143",
+          0,
+          e.kind === "archer"
+            ? "Archer"
+            : e.kind === "brute"
+              ? "Shieldbearer"
+              : "",
+        );
+        ctx.fillStyle = "#e5d8bb";
+        ctx.font = "9px monospace";
+        ctx.textAlign = "center";
+        ctx.fillText(
+          `${e.kind || "raider"}${e.stun ? " STUN" : ""}${e.root ? " ROOT" : ""}${e.bleed ? " BLEED" : ""}`,
+          136 + e.x * 62,
+          12 + e.y * 60,
+        );
         rect(118 + e.x * 62, 50 + e.y * 60, (36 * e.hp) / e.max, 3, "#b97560");
       });
     s.battle.units
@@ -690,8 +824,19 @@ canvas.onclick = (e) => {
       ally = s.battle.units.find(
         (u) => u.x === tx && u.y === ty && s.party[u.id].hp > 0,
       );
-    if (ally) selected = ally.id;
-    else act(s, selected, tx, ty);
+    if (ally) {
+      selected = ally.id;
+      abilityMode = false;
+    } else {
+      const success = abilityMode
+        ? useSkill(s, selected, tx, ty)
+        : act(s, selected, tx, ty);
+      if (!success)
+        note(
+          s,
+          "No action: check range, remaining action, cooldown, and valor.",
+        );
+    }
   } else {
     heldKeys.clear();
     moveTo(s, x, y);
@@ -874,3 +1019,16 @@ $("atlas").onclick = (event) => {
   );
   render();
 };
+
+canvas.addEventListener("pointermove", (event) => {
+  if (!s.battle) return;
+  const bounds = canvas.getBoundingClientRect(),
+    x = Math.floor(
+      (view.x + (event.clientX - bounds.left) / view.scale - 105) / 62,
+    ),
+    y = Math.floor((view.y + (event.clientY - bounds.top) / view.scale) / 60),
+    enemy = s.battle.enemies.find((e) => e.hp > 0 && e.x === x && e.y === y);
+  if (enemy)
+    $("map-label").textContent =
+      `${enemy.kind || "raider"} · HP ${enemy.hp}/${enemy.max} · Armor ${enemy.armor || 0} · Range ${enemy.kind === "archer" ? 4 : 1}${enemy.stun ? " · Stunned" : ""}${enemy.bleed ? " · Bleeding" : ""}`;
+});

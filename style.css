@@ -527,3 +527,33 @@ canvas {
     max-width: calc(100% - 140px);
   }
 }
+select {
+  display: block;
+  width: 100%;
+  margin-top: 12px;
+  padding: 9px;
+  background: #24332a;
+  border: 1px solid var(--line);
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+}
+details {
+  margin-top: 14px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+summary {
+  font-size: 11px;
+  color: var(--gold);
+  cursor: pointer;
+}
+details p {
+  margin: 10px 0;
+}
+.in-battle #actions {
+  max-width: 900px;
+}
+.in-battle #map-label {
+  max-width: calc(100% - 36px);
+}

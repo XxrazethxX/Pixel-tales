@@ -32,6 +32,39 @@ A caravan and two bandit patrols roam independently while exploration is active.
 
 Research **Watchful eyes** for a 210-pixel discovery radius, **A fair bargain** for cheaper purchases, and **Borderlands charts** (requires Watchful eyes) to reveal landmark locations without exploring their terrain. Hidden stashes offer one-time crowns and medicine. Road events now include wounded travellers, abandoned camps, and storms with different choices and costs.
 
+## Company development and tactical abilities
+
+Every class starts with an active ability. Select a companion, press its ability button, then click an outlined enemy. Press **Basic attack** to cancel aiming. Abilities use the companion's action and shared **valor**, and have a two-round cooldown: use in round one, unavailable in round two, available again in round three. Valor starts at three, caps at five, regenerates one per completed round, and gains one from bracing or an enemy kill.
+
+| Class        | Ability     | Cost    | Effect                                                |
+| ------------ | ----------- | ------- | ----------------------------------------------------- |
+| Swordswoman  | Cleave      | 2 valor | +2 damage; hits the target and enemies adjacent to it |
+| Shieldbearer | Shield bash | 1 valor | +1 damage; stuns the target for its next turn         |
+| Archer       | Aimed shot  | 2 valor | +4 damage; reaches five tiles                         |
+| Spearman     | Lunge       | 1 valor | +2 damage; reaches three tiles                        |
+
+At level two, spend one training point in **Company → Class abilities & specialization** to choose a permanent branch. This competes with strength and vitality training.
+
+| Class        | Branch one                               | Branch two                                          |
+| ------------ | ---------------------------------------- | --------------------------------------------------- |
+| Swordswoman  | Duelist: +2 attack                       | Reaver: cleave causes two turns of bleeding         |
+| Shieldbearer | Bulwark: bracing shields adjacent allies | Stalwart: shield bash stuns for two turns           |
+| Archer       | Marksman: +1 basic and skill range       | Trapper: aimed shots prevent movement for two turns |
+| Spearman     | Skirmisher: move three tiles             | Bloodletter: lunge causes two turns of bleeding     |
+
+Bleeding deals two damage per enemy turn, ignoring armor. Rooted enemies can still attack if in range. Enemy archers shoot from four tiles and retreat from adjacent companions; brutes deal more damage and have armor. Hover over an enemy to inspect health, armor, range, and status.
+
+Each profession ranks up at **3, 8, and 15 practice**: Apprentice, Journeyman, and Master. The best conscious worker supplies the company bonus. Switch professions with the Company dropdown; experience in each profession is retained independently.
+
+| Profession | Practice sources                                                  | Rank benefits                                                                                              |
+| ---------- | ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Smith      | Crafting weapons and armor                                        | Reduce ore costs by one per rank, minimum one                                                              |
+| Miner      | Exploring and working mines                                       | +2 ore per rank when exploring or working                                                                  |
+| Herbalist  | Exploring forests, fieldwork, foraging, making and using medicine | Better herb yields, +3 medicine healing and +2 camp healing per rank; two medicine per craft at Journeyman |
+| Cook       | Camping and cooking provisions                                    | Lower camp food costs (minimum two), better camp morale, +2 crafted rations per rank                       |
+
+Near a mine or forest, **Work mine / Gather herbs** is repeatable: it costs two rations and a day and awards two practice to the worker. Exploring remains a one-time reward. Crafting medicine requires a conscious Herbalist; cooking requires a Cook; weapon and armor work requires a Smith.
+
 ## Your first expedition
 
 1. Open **Contracts** in Greyhaven and accept _Wolves in human clothing_.
@@ -39,12 +72,12 @@ Research **Watchful eyes** for a 210-pixel discovery radius, **A fair bargain** 
 3. **Explore** to collect knowledge, ore, wood, and herbs, then **Engage raiders**.
 4. Select a companion using their button or sprite. Outlined green tiles are movement options; outlined red enemies are attack targets. Each companion can move up to two Manhattan tiles **and** attack once per round. Bows reach four tiles, spears two, other weapons one. **Brace** trades your attack for damage reduction. End the round for enemy actions.
 5. Victory awards crowns, knowledge, salvage, and XP. Train leveled companions in **Company**, unlock permanent upgrades in **Research**, and equip crafted weapons and armor in **Workshop**.
-6. Return to town for the **Town** market and recruit up to six companions. Buy medicine, heal injured allies, or camp to restore health and morale. Camp costs four rations and two crowns per companion.
+6. Return to town for the **Town** market and recruit up to six companions. Buy medicine, heal injured allies, or camp to restore health and morale. Camp costs up to four rations (less with a skilled Cook) and two crowns per companion.
 7. Walk to Iron Hollow and the Watchtower, take additional contracts, and respond to roadside choices. Delivery contracts offer a noncombat source of income and knowledge.
 
-Morale at 85+ grants +1 attack. Injuries impose −1 attack. Armor absorbs damage. Professions earn practice from exploration and crafting; practice is tracked, but profession tiers are not yet implemented. Explorable sites have one-time rewards. Contracts are repeatable. Defeat rescues the company in Greyhaven at a cost; there is no permadeath yet.
+Morale at 85+ grants +1 attack. Injuries impose −1 attack. Armor absorbs damage. Profession practice now unlocks ranks and company bonuses. Explorable sites have one-time rewards. Contracts are repeatable. Defeat rescues the company in Greyhaven at a cost; there is no permadeath yet.
 
-Progress automatically saves in browser local storage. **New company** asks before replacing it. Version-one through version-three saves migrate; invalid saves fall back to a fresh company. Browser storage is specific to your browser and origin; moving from a local file to a hosted site does not transfer progress.
+Progress automatically saves in browser local storage. **New company** asks before replacing it. Version-one through version-four saves migrate; invalid saves fall back to a fresh company. Browser storage is specific to your browser and origin; moving from a local file to a hosted site does not transfer progress.
 
 ## Validate and develop
 
@@ -55,7 +88,7 @@ npm run build
 
 Edit `src/game.js` (rules) and `src/app.js` (UI), then rebuild. Commit the generated `game.bundle.js` so downloaded copies run immediately. The build uses only Node's standard library.
 
-A browser-driven smoke test also exercises combat victory, research, crafting, recruitment, delivery, reload persistence, a 390px mobile layout, caravan trading, navigator travel, and discovery beyond the original map. With a running server and Playwright Core installed in a temporary directory:
+A browser-driven smoke test also exercises combat victory, research, crafting, recruitment, delivery, reload persistence, a 390px mobile layout, caravan trading, navigator travel, discovery beyond the original map, aimed shots, specializations, profession reassignment, and fieldwork. With a running server and Playwright Core installed in a temporary directory:
 
 ```sh
 npm install --prefix /tmp/pixel-browser --cache /tmp/pixel-npm-cache playwright-core
@@ -64,4 +97,4 @@ PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node
 
 It uses `/usr/bin/chromium` by default; override `CHROMIUM_PATH` or `GAME_URL` as needed. Desktop and mobile screenshots are written under `/tmp`.
 
-Next development areas: deeper skills and professions, impassable terrain and pathfinding, varied enemy behaviors, equipment inventories, regional factions, procedural encounters, and Android packaging.
+Next development areas: advanced skill tiers, impassable terrain and pathfinding, varied enemy behaviors, equipment inventories, regional factions, procedural encounters, and Android packaging.

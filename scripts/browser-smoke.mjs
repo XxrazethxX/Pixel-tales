@@ -107,13 +107,21 @@ await page
 await walk(350, 145);
 await click("Explore · knowledge & materials");
 await click("Engage raiders");
+await click("Nell");
+await click("Aimed shot · 2 valor");
+await tile(6, 3);
+assert.equal((await state()).battle.enemies[1].hp, 11);
+assert.equal((await state()).battle.valor, 1);
+assert.equal((await state()).battle.units[2].cooldown, 2);
+await page.screenshot({ path: "/tmp/pixel-tales-battle.png", fullPage: true });
+
 for (let turn = 0; turn < 30 && (await state()).battle; turn++) {
   for (const id of (await state()).battle.units.map((u) => u.id)) {
     let s = await state();
     if (!s.battle) break;
     let u = s.battle.units.find((u) => u.id === id),
       p = s.party[id];
-    if (p.hp <= 0) continue;
+    if (p.hp <= 0 || u.acted) continue;
     const btn = page
       .locator("#actions button")
       .filter({ hasText: new RegExp("^" + p.name) });
@@ -162,6 +170,23 @@ assert.equal(
   "contract should be won through browser clicks",
 );
 assert.ok((await state()).party.some((p) => p.points > 0));
+await click("Company");
+await page
+  .getByRole("button", { name: "Learn Duelist · 1 point", exact: true })
+  .click();
+assert.equal((await state()).party[0].talent, "duelist");
+await page
+  .getByRole("combobox", { name: "Profession for Mara", exact: true })
+  .selectOption("Cook");
+assert.equal((await state()).party[0].profession, "Cook");
+await page
+  .getByRole("combobox", { name: "Profession for Mara", exact: true })
+  .selectOption("Smith");
+await click("Close panel");
+await click("Gather herbs · 2 rations / 1 day");
+await click("Gather herbs · 2 rations / 1 day");
+assert.ok((await state()).party[2].professionXP >= 5);
+
 await click("Research");
 await page
   .locator("#panel")
@@ -175,6 +200,7 @@ assert.equal((await state()).party[0].weapon, 2);
 await walk(170, 280);
 await click("Town");
 await click("Recruit companion");
+await click("10 rations · 15 crowns");
 assert.equal((await state()).party.length, 5);
 await click("Contracts");
 await page
@@ -259,7 +285,7 @@ await page.setViewportSize({ width: 1440, height: 1000 });
 await page.screenshot({ path: "/tmp/pixel-tales-desktop.png", fullPage: true });
 assert.deepEqual(errors, []);
 console.log(
-  "PASS: free walking, redirection, stop/reload, browser-driven combat victory, exploration, research, crafting, roadside choice, recruitment, delivery, save/reload, mobile layout, caravan trading, navigator travel, hidden stash discovery, and persistent charting; no JS errors.",
+  "PASS: free walking, redirection, stop/reload, browser-driven combat victory, exploration, research, crafting, roadside choice, recruitment, delivery, save/reload, mobile layout, caravan trading, navigator travel, hidden stash discovery, persistent charting, aimed shots, specialization learning, profession reassignment, and fieldwork ranks; no JS errors.",
 );
 // Exercise startup with no network and no usable origin/storage (download-style runtime).
 const offlineContext = await browser.newContext({ offline: true });

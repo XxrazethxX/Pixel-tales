@@ -56,7 +56,7 @@ studies.push(
 );
 export function fresh() {
   return {
-    version: 4,
+    version: 5,
     inventory: { ore: 0, wood: 0, herbs: 0, medicine: 1 },
     explored: [],
     event: null,
@@ -109,6 +109,8 @@ export function fresh() {
               ? "Herbalist"
               : "Cook",
       professionXP: 0,
+      professionXPBy: {},
+      talent: null,
     })),
   };
 }
@@ -136,19 +138,28 @@ export function travel(s, to) {
 }
 export function camp(s) {
   if (s.battle || s.event) return false;
-  const wages = s.party.length * 2;
-  if (s.food < 4 || s.gold < wages) {
-    note(s, "Camp needs 4 rations and 2 crowns per companion for wages.");
+  const wages = s.party.length * 2,
+    foodCost = campCost(s),
+    cook = professional(s, "Cook"),
+    recovery =
+      (s.research.includes("medicine") ? 18 : 10) +
+      professionBonus(s, "Herbalist") * 2;
+  if (s.food < foodCost || s.gold < wages) {
+    note(
+      s,
+      `Camp needs ${foodCost} rations and 2 crowns per companion for wages.`,
+    );
     return false;
   }
-  s.food -= 4;
+  s.food -= foodCost;
   s.gold -= wages;
   s.day++;
-  s.morale = Math.min(100, s.morale + 10);
+  s.morale = Math.min(100, s.morale + 10 + professionBonus(s, "Cook"));
   for (const p of s.party) {
-    p.hp = Math.min(p.max, p.hp + (s.research.includes("medicine") ? 18 : 10));
+    p.hp = Math.min(p.max, p.hp + recovery);
     if (p.hp === p.max) p.injury = false;
   }
+  if (cook) practice(s, cook, 1);
   note(s, "Campfires lit. Wages paid, wounds tended, spirits lifted.");
   return true;
 }
@@ -197,6 +208,7 @@ export function startBattle(s, patrolId = null) {
     kind: patrol ? "patrol" : "contract",
     patrolId: patrol?.id || null,
     turn: 1,
+    valor: 3,
     units: s.party
       .filter((p) => p.hp > 0)
       .map((p, i) => ({
@@ -206,11 +218,39 @@ export function startBattle(s, patrolId = null) {
         acted: false,
         moved: false,
         guard: false,
+        cooldown: 0,
       })),
     enemies: [
-      { id: 0, x: 7, y: 1, hp: 16, max: 16 },
-      { id: 1, x: 6, y: 3, hp: 20, max: 20 },
-      { id: 2, x: 7, y: 5, hp: 16, max: 16 },
+      {
+        id: 0,
+        x: 7,
+        y: 1,
+        hp: 16,
+        max: 16,
+        kind: "raider",
+        damage: 5,
+        armor: 0,
+      },
+      {
+        id: 1,
+        x: 6,
+        y: 3,
+        hp: 20,
+        max: 20,
+        kind: "brute",
+        damage: 6,
+        armor: 1,
+      },
+      {
+        id: 2,
+        x: 7,
+        y: 5,
+        hp: 16,
+        max: 16,
+        kind: "archer",
+        damage: 4,
+        armor: 0,
+      },
     ],
   };
   note(
@@ -229,15 +269,14 @@ export function act(s, id, x, y) {
   const d = Math.abs(x - u.x) + Math.abs(y - u.y);
   const e = b.enemies.find((e) => e.hp > 0 && e.x === x && e.y === y);
   if (e) {
-    if (d > (p.role === "Archer" ? 4 : p.role === "Spearman" ? 2 : 1))
-      return false;
-    e.hp = Math.max(0, e.hp - attackPower(s, p));
-    note(s, `${p.name} strikes for ${attackPower(s, p)} damage.`);
+    if (d > attackRange(p)) return false;
+    const damage = hitEnemy(s, e, attackPower(s, p));
+    note(s, `${p.name} strikes for ${damage} damage.`);
     u.acted = true;
   } else {
     if (
       u.moved ||
-      d > 2 ||
+      d > movementRange(p) ||
       d === 0 ||
       b.units.some((v) => v.x === x && v.y === y && s.party[v.id].hp > 0)
     )
@@ -281,6 +320,18 @@ export function endTurn(s) {
   const b = s.battle;
   if (!b) return false;
   for (const e of b.enemies.filter((e) => e.hp > 0)) {
+    if (e.bleed > 0) {
+      hitEnemy(s, e, 2 + (e.armor || 0));
+      e.bleed--;
+      note(s, "An enemy suffers 2 bleeding damage.");
+      if (e.hp === 0) continue;
+    }
+    if (e.stun > 0) {
+      e.stun--;
+      e.root = Math.max(0, (e.root || 0) - 1);
+      note(s, "A stunned enemy loses its turn.");
+      continue;
+    }
     const targets = b.units
       .filter((u) => s.party[u.id].hp > 0)
       .sort(
@@ -291,43 +342,68 @@ export function endTurn(s) {
       );
     const t = targets[0];
     if (!t) break;
-    const dist = () => Math.abs(t.x - e.x) + Math.abs(t.y - e.y);
-    if (dist() > 1) {
+    const range = e.kind === "archer" ? 4 : 1,
+      dist = () => Math.abs(t.x - e.x) + Math.abs(t.y - e.y);
+    const rooted = (e.root || 0) > 0;
+    e.root = Math.max(0, (e.root || 0) - 1);
+    if (!rooted && (dist() > range || (e.kind === "archer" && dist() <= 1))) {
       const options = [
-        [e.x + Math.sign(t.x - e.x), e.y],
-        [e.x, e.y + Math.sign(t.y - e.y)],
+        [e.x + 1, e.y],
+        [e.x - 1, e.y],
+        [e.x, e.y + 1],
+        [e.x, e.y - 1],
       ].filter(
         ([x, y]) =>
           x >= 0 &&
           x <= 8 &&
           y >= 0 &&
           y <= 6 &&
-          (x !== e.x || y !== e.y) &&
           !b.units.some(
             (u) => s.party[u.id].hp > 0 && u.x === x && u.y === y,
           ) &&
-          !b.enemies.some((v) => v.hp > 0 && v !== e && v.x === x && v.y === y),
+          !b.enemies.some((v) => v !== e && v.hp > 0 && v.x === x && v.y === y),
+      );
+      const retreat = e.kind === "archer" && dist() <= 1;
+      options.sort(
+        (a, c) =>
+          (Math.abs(a[0] - t.x) +
+            Math.abs(a[1] - t.y) -
+            (Math.abs(c[0] - t.x) + Math.abs(c[1] - t.y))) *
+          (retreat ? -1 : 1),
       );
       if (options.length) [e.x, e.y] = options[0];
     }
-    if (dist() === 1) {
-      const p = s.party[t.id];
-      p.hp = Math.max(
-        0,
-        p.hp -
-          Math.max(
-            1,
-            (p.role === "Shieldbearer" ? 3 : 5) -
-              (p.armor || 0) -
-              (t.guard ? 2 : 0),
-          ),
+    if (dist() <= range) {
+      const p = s.party[t.id],
+        aura = b.units.some(
+          (u) =>
+            u.id !== t.id &&
+            u.guard &&
+            s.party[u.id].hp > 0 &&
+            s.party[u.id].talent === "bulwark" &&
+            Math.abs(u.x - t.x) + Math.abs(u.y - t.y) <= 1,
+        )
+          ? 2
+          : 0;
+      const damage = Math.max(
+        1,
+        (e.damage || 5) -
+          (p.role === "Shieldbearer" ? 2 : 0) -
+          (p.armor || 0) -
+          (t.guard ? 2 : 0) -
+          aura,
       );
+      p.hp = Math.max(0, p.hp - damage);
       p.injury = p.hp < p.max / 2;
       note(
         s,
-        `${p.name} takes a hit${p.hp === 0 ? " and falls unconscious" : ""}.`,
+        `${p.name} takes ${damage} damage${p.hp === 0 ? " and falls unconscious" : ""}.`,
       );
     }
+  }
+  if (b.enemies.every((e) => e.hp === 0)) {
+    win(s);
+    return true;
   }
   if (s.party.every((p) => p.hp === 0)) {
     s.battle = null;
@@ -347,10 +423,12 @@ export function endTurn(s) {
     );
   } else {
     b.turn++;
+    b.valor = Math.min(5, (b.valor ?? 3) + 1);
     b.units.forEach((u) => {
       u.acted = false;
       u.moved = false;
       u.guard = false;
+      u.cooldown = Math.max(0, (u.cooldown || 0) - 1);
     });
   }
   return true;
@@ -360,7 +438,7 @@ export function restore(raw) {
   const base = fresh();
   if (
     !raw ||
-    ![1, 2, 3, 4].includes(raw.version) ||
+    ![1, 2, 3, 4, 5].includes(raw.version) ||
     !Array.isArray(raw.party) ||
     raw.party.length < 1 ||
     raw.party.length > 6 ||
@@ -386,7 +464,7 @@ export function restore(raw) {
   const result = {
     ...base,
     ...raw,
-    version: 4,
+    version: 5,
     inventory: { ...base.inventory, ...raw.inventory },
     explored: raw.explored || [],
     event: raw.event || null,
@@ -463,15 +541,33 @@ export function restore(raw) {
     weapon: p.weapon || 0,
     profession: p.profession || "Cook",
     professionXP: p.professionXP || 0,
+    professionXPBy: Object.fromEntries(
+      Object.entries(p.professionXPBy || {}).filter(
+        ([k, v]) => professions.includes(k) && Number.isFinite(v) && v >= 0,
+      ),
+    ),
+    talent: talentsFor(p).some((t) => t.id === p.talent) ? p.talent : null,
   }));
   // Old saves retain company progression but return to the map for the new combat rules.
   if (raw.version === 1) result.battle = null;
+  if (result.battle) {
+    result.battle.valor = Number.isFinite(result.battle.valor)
+      ? Math.max(0, Math.min(5, result.battle.valor))
+      : 3;
+    result.battle.units.forEach(
+      (u) =>
+        (u.cooldown = Number.isFinite(u.cooldown)
+          ? Math.max(0, u.cooldown)
+          : 0),
+    );
+  }
   return result;
 }
 export function attackPower(s, p) {
   return (
     p.damage +
     (p.weapon || 0) +
+    (p.talent === "duelist" ? 2 : 0) +
     (s.research.includes("steel") ? 2 : 0) +
     (s.morale >= 85 ? 1 : 0) -
     (p.injury ? 1 : 0)
@@ -482,6 +578,7 @@ export function guard(s, id) {
   if (!u || u.acted || s.party[id].hp <= 0) return false;
   u.guard = true;
   u.acted = true;
+  s.battle.valor = Math.min(5, (s.battle.valor ?? 3) + 1);
   note(s, `${s.party[id].name} braces: incoming damage reduced this round.`);
   return true;
 }
@@ -490,6 +587,7 @@ export function train(s, id, kind) {
   if (
     !p ||
     s.battle ||
+    s.event ||
     p.points < 1 ||
     !["strength", "vitality"].includes(kind)
   )
@@ -529,6 +627,8 @@ export function recruit(s) {
     weapon: 0,
     profession: id === 4 ? "Herbalist" : "Miner",
     professionXP: 0,
+    professionXPBy: {},
+    talent: null,
   });
   note(
     s,
@@ -570,26 +670,26 @@ export const recipes = [
 ];
 export function craft(s, id, target = 0) {
   const r = recipes.find((r) => r.id === id),
-    p = s.party[target];
+    p = s.party[target],
+    plan = craftPlan(s, id);
   if (
     !r ||
     !p ||
+    !plan.maker ||
     s.battle ||
     s.event ||
-    !s.party.some((p) => p.profession === "Smith") ||
-    Object.entries({ ore: r.ore, wood: r.wood, herbs: r.herbs || 0 }).some(
-      ([k, v]) => s.inventory[k] < v,
-    ) ||
+    Object.entries(plan.cost).some(([k, v]) => s.inventory[k] < v) ||
     (id === "blade" && p.weapon >= 4) ||
     (id === "armor" && p.armor >= 3)
   )
     return false;
-  for (const k of ["ore", "wood", "herbs"]) s.inventory[k] -= r[k] || 0;
-  if (id === "blade") p.weapon += 2;
+  for (const [key, cost] of Object.entries(plan.cost)) s.inventory[key] -= cost;
+  if (id === "blade") p.weapon = Math.min(4, p.weapon + 2);
   if (id === "armor") p.armor++;
-  if (id === "medicine") s.inventory.medicine++;
-  if (id === "meal") s.food += 8;
-  s.party.find((p) => p.profession === "Smith").professionXP++;
+  if (id === "medicine")
+    s.inventory.medicine += 1 + Math.floor(professionRank(plan.maker) / 2);
+  if (id === "meal") s.food += 8 + professionRank(plan.maker) * 2;
+  practice(s, plan.maker, 1);
   note(
     s,
     `Crafted ${r.name}${["blade", "armor"].includes(id) ? ` for ${p.name}` : ""}.`,
@@ -607,7 +707,9 @@ export function heal(s, id) {
   )
     return false;
   s.inventory.medicine--;
-  p.hp = Math.min(p.max, p.hp + 15);
+  p.hp = Math.min(p.max, p.hp + healAmount(s));
+  const herbalist = professional(s, "Herbalist");
+  if (herbalist) practice(s, herbalist, 1);
   p.injury = false;
   note(s, `Treated ${p.name} with a poultice.`);
   return true;
@@ -624,9 +726,10 @@ export function explore(s) {
   const type = places[s.location]?.type;
   s.explored.push(s.location);
   s.knowledge++;
-  s.inventory.ore += type === "mine" ? 6 : 2;
+  s.inventory.ore += type === "mine" ? 6 + professionBonus(s, "Miner") * 2 : 2;
   s.inventory.wood += type === "forest" ? 5 : 1;
-  s.inventory.herbs += type === "forest" ? 4 : 1;
+  s.inventory.herbs +=
+    type === "forest" ? 4 + professionBonus(s, "Herbalist") * 2 : 1;
   if (type === "cache") {
     s.gold += 30;
     s.inventory.medicine++;
@@ -634,7 +737,7 @@ export function explore(s) {
   }
   for (const p of s.party)
     if (p.profession === (type === "mine" ? "Miner" : "Herbalist"))
-      p.professionXP++;
+      if (p.hp > 0) practice(s, p, 1);
   note(
     s,
     `Explored ${places[s.location].name}. Discovered knowledge and gathered crafting materials.`,
@@ -644,6 +747,11 @@ export function explore(s) {
 export function forage(s) {
   if (s.battle || s.event) return false;
   s.food += 6;
+  const herbalist = professional(s, "Herbalist");
+  if (herbalist) {
+    s.inventory.herbs += 1 + professionRank(herbalist);
+    practice(s, herbalist, 1);
+  }
   s.day++;
   s.morale = Math.max(0, s.morale - 3);
   note(s, "Gathered 6 rations. A day passes.");
@@ -1042,4 +1150,255 @@ export function roadEvent(s) {
     title: "Strangers in the wilderness",
     text: "A wounded courier asks for medicine. A merchant offers to buy your silence and leave him behind.",
   };
+}
+
+export const professions = ["Smith", "Miner", "Herbalist", "Cook"];
+export const rankNames = ["Novice", "Apprentice", "Journeyman", "Master"];
+export function professionRank(p) {
+  return p.professionXP >= 15
+    ? 3
+    : p.professionXP >= 8
+      ? 2
+      : p.professionXP >= 3
+        ? 1
+        : 0;
+}
+export function professional(s, name) {
+  return (
+    s.party
+      .filter((p) => p.profession === name && p.hp > 0)
+      .sort((a, b) => b.professionXP - a.professionXP)[0] || null
+  );
+}
+export function professionBonus(s, name) {
+  const p = professional(s, name);
+  return p ? professionRank(p) : 0;
+}
+export function practice(s, p, amount) {
+  const before = professionRank(p);
+  p.professionXP += amount;
+  p.professionXPBy ||= {};
+  p.professionXPBy[p.profession] = p.professionXP;
+  if (professionRank(p) > before)
+    note(
+      s,
+      `${p.name} became a ${rankNames[professionRank(p)]} ${p.profession}.`,
+    );
+}
+export function assignProfession(s, id, name) {
+  const p = s.party[id];
+  if (
+    !p ||
+    s.battle ||
+    s.event ||
+    !professions.includes(name) ||
+    name === p.profession
+  )
+    return false;
+  p.professionXPBy ||= {};
+  p.professionXPBy[p.profession] = p.professionXP;
+  p.profession = name;
+  p.professionXP = p.professionXPBy[name] || 0;
+  note(
+    s,
+    `${p.name} takes up ${name}. Previous profession experience is retained.`,
+  );
+  return true;
+}
+export function campCost(s) {
+  return Math.max(2, 4 - professionBonus(s, "Cook"));
+}
+export function healAmount(s) {
+  return 15 + professionBonus(s, "Herbalist") * 3;
+}
+export function craftPlan(s, id) {
+  const r = recipes.find((r) => r.id === id);
+  if (!r) return { maker: null, cost: {} };
+  const name =
+      id === "medicine" ? "Herbalist" : id === "meal" ? "Cook" : "Smith",
+    maker = professional(s, name),
+    discount = maker && name === "Smith" ? professionRank(maker) : 0;
+  return {
+    maker,
+    profession: name,
+    cost: {
+      ore: r.ore ? Math.max(1, r.ore - discount) : 0,
+      wood: r.wood || 0,
+      herbs: r.herbs || 0,
+    },
+  };
+}
+export function workSite(s) {
+  const type = places[s.location]?.type,
+    name = type === "mine" ? "Miner" : type === "forest" ? "Herbalist" : null,
+    maker = professional(s, name);
+  if (!maker || s.battle || s.event || s.food < 2) return false;
+  s.destination = null;
+  s.food -= 2;
+  s.day++;
+  const yieldAmount = 3 + professionRank(maker) * 2;
+  if (type === "mine") s.inventory.ore += yieldAmount;
+  else {
+    s.inventory.herbs += yieldAmount;
+    s.inventory.wood += 2;
+  }
+  practice(s, maker, 2);
+  note(
+    s,
+    `${maker.name} worked at ${places[s.location].name}: gained ${yieldAmount} ${type === "mine" ? "ore" : "herbs"} for 2 rations and a day.`,
+  );
+  return true;
+}
+export const classSkills = {
+  Swordswoman: {
+    name: "Cleave",
+    cost: 2,
+    cooldown: 2,
+    range: 1,
+    bonus: 2,
+    desc: "Strike your target and enemies next to it.",
+  },
+  Shieldbearer: {
+    name: "Shield bash",
+    cost: 1,
+    cooldown: 2,
+    range: 1,
+    bonus: 1,
+    desc: "Strike and stun an enemy for its next turn.",
+  },
+  Archer: {
+    name: "Aimed shot",
+    cost: 2,
+    cooldown: 2,
+    range: 5,
+    bonus: 4,
+    desc: "Deal heavy damage at long range.",
+  },
+  Spearman: {
+    name: "Lunge",
+    cost: 1,
+    cooldown: 2,
+    range: 3,
+    bonus: 2,
+    desc: "Thrust from three tiles away.",
+  },
+};
+export const specializations = {
+  Swordswoman: [
+    { id: "duelist", name: "Duelist", desc: "+2 attack on all strikes." },
+    {
+      id: "reaver",
+      name: "Reaver",
+      desc: "Cleave inflicts bleeding: 2 damage for two turns.",
+    },
+  ],
+  Shieldbearer: [
+    {
+      id: "bulwark",
+      name: "Bulwark",
+      desc: "Bracing protects adjacent allies: absorb 2 extra damage.",
+    },
+    {
+      id: "stalwart",
+      name: "Stalwart",
+      desc: "Shield bash stuns for two enemy turns.",
+    },
+  ],
+  Archer: [
+    {
+      id: "marksman",
+      name: "Marksman",
+      desc: "Basic and aimed shots gain +1 range.",
+    },
+    {
+      id: "pinning",
+      name: "Trapper",
+      desc: "Aimed shot roots its target for two enemy turns.",
+    },
+  ],
+  Spearman: [
+    {
+      id: "skirmisher",
+      name: "Skirmisher",
+      desc: "Move up to three tiles per round.",
+    },
+    {
+      id: "bloodletter",
+      name: "Bloodletter",
+      desc: "Lunge inflicts bleeding: 2 damage for two turns.",
+    },
+  ],
+};
+export function talentsFor(p) {
+  return specializations[p.role] || [];
+}
+export function learnTalent(s, id, talent) {
+  const p = s.party[id],
+    t = p && talentsFor(p).find((t) => t.id === talent);
+  if (!t || s.battle || s.event || p.talent || p.level < 2 || p.points < 1)
+    return false;
+  p.points--;
+  p.talent = talent;
+  note(s, `${p.name} specializes as ${t.name}.`);
+  return true;
+}
+export function attackRange(p, skill = false) {
+  return (
+    (skill
+      ? classSkills[p.role]?.range || 1
+      : p.role === "Archer"
+        ? 4
+        : p.role === "Spearman"
+          ? 2
+          : 1) + (p.talent === "marksman" ? 1 : 0)
+  );
+}
+export function movementRange(p) {
+  return p.talent === "skirmisher" ? 3 : 2;
+}
+export function hitEnemy(s, e, power) {
+  const damage = Math.max(1, power - (e.armor || 0)),
+    wasAlive = e.hp > 0;
+  e.hp = Math.max(0, e.hp - damage);
+  if (wasAlive && e.hp === 0)
+    s.battle.valor = Math.min(5, (s.battle.valor ?? 3) + 1);
+  return damage;
+}
+export function useSkill(s, id, x, y) {
+  const b = s.battle,
+    u = b?.units.find((u) => u.id === id),
+    p = s.party[id],
+    skill = p && classSkills[p.role],
+    enemy = b?.enemies.find((e) => e.hp > 0 && e.x === x && e.y === y);
+  if (
+    !b ||
+    !u ||
+    !p ||
+    !skill ||
+    p.hp <= 0 ||
+    u.acted ||
+    u.cooldown > 0 ||
+    b.valor < skill.cost ||
+    !enemy ||
+    Math.abs(x - u.x) + Math.abs(y - u.y) > attackRange(p, true)
+  )
+    return false;
+  b.valor -= skill.cost;
+  u.acted = true;
+  u.cooldown = skill.cooldown;
+  const victims =
+    p.role === "Swordswoman"
+      ? b.enemies.filter(
+          (e) => e.hp > 0 && Math.abs(e.x - x) + Math.abs(e.y - y) <= 1,
+        )
+      : [enemy];
+  victims.forEach((e) => {
+    const damage = hitEnemy(s, e, attackPower(s, p) + skill.bonus);
+    if (p.role === "Shieldbearer") e.stun = p.talent === "stalwart" ? 2 : 1;
+    if (p.talent === "pinning") e.root = 2;
+    if (p.talent === "reaver" || p.talent === "bloodletter") e.bleed = 2;
+    note(s, `${p.name} uses ${skill.name} for ${damage} damage.`);
+  });
+  if (b.enemies.every((e) => e.hp === 0)) win(s);
+  return true;
 }

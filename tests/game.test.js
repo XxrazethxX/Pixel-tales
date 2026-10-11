@@ -83,7 +83,7 @@ test("old saves migrate and malformed saves recover", () => {
   s.gold = 99;
   const migrated = restore(s);
   assert.equal(migrated.gold, 99);
-  assert.equal(migrated.version, 4);
+  assert.equal(migrated.version, 5);
   assert.equal(migrated.inventory.medicine, 1);
   assert.equal(restore({ version: 1 }).party.length, 4);
   assert.equal(restore(null).day, 1);
@@ -371,4 +371,177 @@ test("hidden stashes pay once and new event choices have concrete effects", () =
   assert.equal(s.party[1].hp, 0);
   assert.equal(s.morale, 65);
   assert.equal(resolveEvent(s, "push"), false);
+});
+
+import {
+  attackPower,
+  useSkill,
+  learnTalent,
+  attackRange,
+  movementRange,
+  professionRank,
+  assignProfession,
+  campCost,
+  healAmount,
+  craftPlan,
+  workSite,
+} from "../src/game.js";
+function battleFixture() {
+  const s = fresh();
+  accept(s, 0);
+  travel(s, 1);
+  startBattle(s);
+  return s;
+}
+test("aimed shots validate range, spend valor once, and enforce cooldowns", () => {
+  const s = battleFixture();
+  assert.equal(useSkill(s, 2, 7, 1), false);
+  assert.equal(s.battle.valor, 3);
+  assert.ok(useSkill(s, 2, 6, 3));
+  assert.equal(s.battle.enemies[1].hp, 11);
+  assert.equal(s.battle.valor, 1);
+  assert.equal(useSkill(s, 2, 6, 3), false);
+  endTurn(s);
+  assert.equal(s.battle.units[2].cooldown, 1);
+  assert.equal(
+    useSkill(s, 2, s.battle.enemies[1].x, s.battle.enemies[1].y),
+    false,
+  );
+  endTurn(s);
+  assert.equal(s.battle.units[2].cooldown, 0);
+  assert.equal(s.battle.valor, 3);
+});
+test("shield bash stuns enemies and cleave hits neighboring foes", () => {
+  const s = battleFixture();
+  s.battle.enemies = [
+    { id: 0, x: 2, y: 2, hp: 30, max: 30, damage: 9 },
+    { id: 1, x: 2, y: 1, hp: 30, max: 30 },
+  ];
+  assert.ok(useSkill(s, 1, 2, 2));
+  assert.equal(s.battle.enemies[0].stun, 1);
+  const hp = s.party[1].hp;
+  endTurn(s);
+  assert.equal(s.party[1].hp, hp);
+  assert.equal(s.battle.enemies[0].stun, 0);
+  const c = battleFixture();
+  c.battle.enemies = [
+    { id: 0, x: 2, y: 1, hp: 30, max: 30 },
+    { id: 1, x: 3, y: 1, hp: 30, max: 30 },
+  ];
+  assert.ok(useSkill(c, 0, 2, 1));
+  assert.deepEqual(
+    c.battle.enemies.map((e) => e.hp),
+    [21, 21],
+  );
+  assert.equal(c.battle.valor, 1);
+});
+test("specializations share level-up points and preserve their branch in saves", () => {
+  const s = fresh();
+  assert.equal(learnTalent(s, 0, "duelist"), false);
+  s.party[0].level = 2;
+  s.party[0].points = 2;
+  assert.ok(learnTalent(s, 0, "duelist"));
+  assert.equal(s.party[0].points, 1);
+  assert.equal(attackPower(s, s.party[0]), 9);
+  assert.equal(learnTalent(s, 0, "reaver"), false);
+  assert.equal(learnTalent(s, 0, "marksman"), false);
+  const saved = restore(JSON.parse(JSON.stringify(s)));
+  assert.equal(saved.party[0].talent, "duelist");
+  s.party[2].talent = "marksman";
+  assert.equal(attackRange(s.party[2]), 5);
+  assert.equal(attackRange(s.party[2], true), 6);
+  s.party[3].talent = "skirmisher";
+  assert.equal(movementRange(s.party[3]), 3);
+});
+test("bleeding can finish a fight during the enemy turn", () => {
+  const s = battleFixture();
+  s.party[3].talent = "bloodletter";
+  s.battle.enemies = [{ id: 0, x: 3, y: 4, hp: 10, max: 10, armor: 0 }];
+  assert.ok(useSkill(s, 3, 3, 4));
+  assert.equal(s.battle.enemies[0].hp, 2);
+  assert.equal(s.battle.enemies[0].bleed, 2);
+  endTurn(s);
+  assert.equal(s.battle, null);
+  assert.equal(s.completed, 1);
+});
+test("rooting prevents movement but permits ranged attacks, and archers retreat from melee", () => {
+  const s = battleFixture();
+  s.party[2].talent = "pinning";
+  s.battle.enemies = [
+    { id: 0, x: 6, y: 3, hp: 30, max: 30, kind: "archer", damage: 4 },
+  ];
+  assert.ok(useSkill(s, 2, 6, 3));
+  endTurn(s);
+  assert.equal(s.battle.enemies[0].x, 6);
+  assert.equal(s.battle.enemies[0].root, 1);
+  const r = battleFixture();
+  r.battle.enemies = [
+    { id: 0, x: 2, y: 1, hp: 30, max: 30, kind: "archer", damage: 4 },
+  ];
+  endTurn(r);
+  assert.notDeepEqual(
+    { x: r.battle.enemies[0].x, y: r.battle.enemies[0].y },
+    { x: 2, y: 1 },
+  );
+  assert.ok(r.party[0].hp < 28);
+});
+test("bulwark protects adjacent allies and bracing restores capped valor", () => {
+  const s = battleFixture();
+  s.party[1].talent = "bulwark";
+  s.battle.enemies = [{ id: 0, x: 2, y: 1, hp: 30, max: 30, damage: 5 }];
+  s.battle.valor = 5;
+  assert.ok(guard(s, 1));
+  assert.equal(s.battle.valor, 5);
+  endTurn(s);
+  assert.equal(s.party[0].hp, 25);
+  assert.equal(s.battle.valor, 5);
+});
+test("profession assignments retain independent experience and rank bonuses are real", () => {
+  const s = fresh();
+  s.party[0].professionXP = 8;
+  assert.equal(professionRank(s.party[0]), 2);
+  assert.equal(craftPlan(s, "blade").cost.ore, 1);
+  assert.ok(assignProfession(s, 0, "Cook"));
+  assert.equal(s.party[0].professionXP, 0);
+  assert.ok(assignProfession(s, 0, "Smith"));
+  assert.equal(s.party[0].professionXP, 8);
+  assert.equal(assignProfession(s, 0, "Mage"), false);
+  s.party[3].professionXP = 3;
+  assert.equal(campCost(s), 3);
+  s.party[2].professionXP = 8;
+  assert.equal(healAmount(s), 21);
+  const saved = restore(JSON.parse(JSON.stringify(s)));
+  assert.equal(saved.party[0].professionXPBy.Smith, 8);
+});
+test("repeated fieldwork advances professions and costs supplies and time", () => {
+  const s = fresh();
+  travel(s, 4);
+  const food = s.food,
+    day = s.day;
+  assert.ok(workSite(s));
+  assert.equal(s.inventory.ore, 3);
+  assert.equal(s.party[1].professionXP, 2);
+  assert.ok(workSite(s));
+  assert.equal(professionRank(s.party[1]), 1);
+  assert.ok(workSite(s));
+  assert.equal(s.inventory.ore, 11);
+  assert.equal(s.food, food - 6);
+  assert.equal(s.day, day + 3);
+  s.food = 1;
+  assert.equal(workSite(s), false);
+});
+test("crafting uses the proper profession and higher ranks increase output", () => {
+  const s = fresh();
+  s.inventory.herbs = 9;
+  s.inventory.wood = 2;
+  s.party[2].professionXP = 8;
+  s.party[3].professionXP = 3;
+  assert.ok(craft(s, "medicine"));
+  assert.equal(s.inventory.medicine, 3);
+  assert.equal(s.party[2].professionXP, 9);
+  assert.equal(s.party[0].professionXP, 0);
+  assert.ok(craft(s, "meal"));
+  assert.equal(s.food, 34);
+  s.party[2].hp = 0;
+  assert.equal(craft(s, "medicine"), false);
 });
