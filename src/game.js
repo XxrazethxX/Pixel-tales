@@ -136,6 +136,7 @@ export function fresh() {
       professionXP: 0,
       professionXPBy: {},
       talent: null,
+      advancedSkill: null,
       equipment: { weapon: null, armor: null, shield: null, helmet: null },
     })),
   };
@@ -757,6 +758,12 @@ export function restore(raw) {
         ? [...base.party[id].traits]
         : [],
     talent: talentsFor(p).some((t) => t.id === p.talent) ? p.talent : null,
+    advancedSkill:
+      p.level >= 4 &&
+      talentsFor(p).some((t) => t.id === p.talent) &&
+      advancedSkillsFor(p).some((skill) => skill.id === p.advancedSkill)
+        ? p.advancedSkill
+        : null,
   }));
   const ids = new Set();
   result.gear = (Array.isArray(raw.gear) ? raw.gear : [])
@@ -1064,6 +1071,7 @@ export function recruit(s, offerId = null) {
     professionXP: 0,
     professionXPBy: {},
     talent: null,
+    advancedSkill: null,
     equipment: { weapon: null, armor: null, shield: null, helmet: null },
   };
   for (const other of s.party) delete s.bonds[bondKey(id, other.id)];
@@ -1994,6 +2002,123 @@ export const specializations = {
     },
   ],
 };
+// Advanced skills upgrade the existing class action; companions choose one permanent path.
+export const advancedSkills = {
+  Swordswoman: [
+    {
+      id: "sunder",
+      name: "Sundering cleave",
+      cost: 2,
+      cooldown: 2,
+      bonus: 2,
+      desc: "Cleave lowers each victim's armor by 2 before damage, for the rest of the battle.",
+      sunder: true,
+    },
+    {
+      id: "reaping",
+      name: "Reaping cleave",
+      cost: 3,
+      cooldown: 3,
+      bonus: 3,
+      desc: "Cleave restores 2 health per living enemy struck, up to 6 health.",
+      leech: true,
+    },
+  ],
+  Shieldbearer: [
+    {
+      id: "rally",
+      name: "Rallying bash",
+      cost: 2,
+      cooldown: 3,
+      bonus: 1,
+      desc: "Bash and stun; restore 3 health to yourself and conscious adjacent companions.",
+      rally: true,
+    },
+    {
+      id: "shock",
+      name: "Shockwave bash",
+      cost: 3,
+      cooldown: 3,
+      bonus: 1,
+      desc: "Bash hits and stuns the target and enemies next to it.",
+      area: true,
+    },
+  ],
+  Archer: [
+    {
+      id: "piercing",
+      name: "Piercing shot",
+      cost: 3,
+      cooldown: 3,
+      bonus: 4,
+      desc: "Aimed shot ignores enemy armor and terrain cover.",
+      piercing: true,
+    },
+    {
+      id: "quickshot",
+      name: "Quick shot",
+      cost: 1,
+      cooldown: 1,
+      bonus: 2,
+      desc: "A cheaper shot with a one-round cooldown, but a smaller damage bonus.",
+    },
+  ],
+  Spearman: [
+    {
+      id: "impale",
+      name: "Impaling lunge",
+      cost: 2,
+      cooldown: 2,
+      bonus: 2,
+      desc: "Lunge also hits the enemy directly behind an aligned target.",
+      impale: true,
+    },
+    {
+      id: "hamstring",
+      name: "Hamstring lunge",
+      cost: 2,
+      cooldown: 3,
+      bonus: 3,
+      desc: "Lunge roots its target for two enemy turns.",
+      root: true,
+    },
+  ],
+};
+export function advancedSkillsFor(p) {
+  return advancedSkills[p?.role] || [];
+}
+export function skillFor(p) {
+  const base = classSkills[p?.role];
+  if (!base) return null;
+  const advanced = advancedSkillsFor(p).find(
+    (skill) => skill.id === p.advancedSkill,
+  );
+  return advanced ? { ...base, ...advanced } : base;
+}
+export function learnAdvancedSkill(s, id, skillId) {
+  const p = s.party[id],
+    choice = advancedSkillsFor(p).find((skill) => skill.id === skillId);
+  if (
+    !p ||
+    p.dead ||
+    !choice ||
+    p.advancedSkill ||
+    !p.talent ||
+    p.level < 4 ||
+    p.points < 2 ||
+    s.battle ||
+    s.event ||
+    companyLost(s)
+  )
+    return false;
+  p.points -= 2;
+  p.advancedSkill = skillId;
+  note(
+    s,
+    `${p.name} mastered ${choice.name}. This permanently upgrades their class action.`,
+  );
+  return true;
+}
 export function talentsFor(p) {
   return specializations[p.role] || [];
 }
@@ -2018,7 +2143,7 @@ export function learnTalent(s, id, talent) {
 export function attackRange(p, skill = false, s = null) {
   return (
     (skill
-      ? classSkills[p.role]?.range || 1
+      ? skillFor(p)?.range || 1
       : p.role === "Archer"
         ? 4
         : p.role === "Spearman"
@@ -2046,7 +2171,7 @@ export function useSkill(s, id, x, y) {
   const b = s.battle,
     u = b?.units.find((u) => u.id === id),
     p = s.party[id],
-    skill = p && classSkills[p.role],
+    skill = p && skillFor(p),
     enemy = b?.enemies.find((e) => e.hp > 0 && e.x === x && e.y === y);
   if (
     !b ||
@@ -2066,28 +2191,56 @@ export function useSkill(s, id, x, y) {
   u.acted = true;
   u.cooldown = skill.cooldown;
   const victims =
-    p.role === "Swordswoman"
+    p.role === "Swordswoman" || skill.area
       ? b.enemies.filter(
           (e) => e.hp > 0 && Math.abs(e.x - x) + Math.abs(e.y - y) <= 1,
         )
-      : [enemy];
+      : skill.impale && (u.x === x || u.y === y)
+        ? b.enemies.filter(
+            (e) =>
+              e.hp > 0 &&
+              ((e.x === x && e.y === y) ||
+                (e.x === x + Math.sign(x - u.x) &&
+                  e.y === y + Math.sign(y - u.y))),
+          )
+        : [enemy];
   victims.forEach((e) => {
+    if (skill.sunder) e.armor = Math.max(0, (e.armor || 0) - 2);
     const flank = p.role === "Archer" ? 0 : flankingBonus(s, u, e);
     const damage = hitEnemy(
       s,
       e,
       attackPower(s, p) +
         skill.bonus +
+        (skill.piercing ? e.armor || 0 : 0) +
         flank -
-        (Math.abs(e.x - u.x) + Math.abs(e.y - u.y) > 1
+        (!skill.piercing && Math.abs(e.x - u.x) + Math.abs(e.y - u.y) > 1
           ? terrainCell(s, e.x, e.y).cover
           : 0),
     );
     if (p.role === "Shieldbearer") e.stun = p.talent === "stalwart" ? 2 : 1;
-    if (p.talent === "pinning") e.root = 2;
+    if (p.talent === "pinning" || skill.root) e.root = 2;
     if (p.talent === "reaver" || p.talent === "bloodletter") e.bleed = 2;
     note(s, `${p.name} uses ${skill.name} for ${damage} damage.`);
   });
+  if (skill.leech) {
+    const healing = Math.min(p.max - p.hp, Math.min(6, victims.length * 2));
+    p.hp += healing;
+    note(s, `${p.name} reaps ${healing} health.`);
+  }
+  if (skill.rally) {
+    let healing = 0;
+    for (const ally of b.units.filter(
+      (ally) => Math.abs(ally.x - u.x) + Math.abs(ally.y - u.y) <= 1,
+    )) {
+      const companion = s.party[ally.id];
+      if (companion.dead || companion.hp <= 0) continue;
+      const recovered = Math.min(3, companion.max - companion.hp);
+      companion.hp += recovered;
+      healing += recovered;
+    }
+    note(s, `${p.name} rallies the line, restoring ${healing} health.`);
+  }
   if (b.enemies.every((e) => e.hp === 0)) win(s);
   return true;
 }

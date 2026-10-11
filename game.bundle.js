@@ -138,6 +138,7 @@ function fresh() {
       professionXP: 0,
       professionXPBy: {},
       talent: null,
+      advancedSkill: null,
       equipment: { weapon: null, armor: null, shield: null, helmet: null },
     })),
   };
@@ -759,6 +760,12 @@ function restore(raw) {
         ? [...base.party[id].traits]
         : [],
     talent: talentsFor(p).some((t) => t.id === p.talent) ? p.talent : null,
+    advancedSkill:
+      p.level >= 4 &&
+      talentsFor(p).some((t) => t.id === p.talent) &&
+      advancedSkillsFor(p).some((skill) => skill.id === p.advancedSkill)
+        ? p.advancedSkill
+        : null,
   }));
   const ids = new Set();
   result.gear = (Array.isArray(raw.gear) ? raw.gear : [])
@@ -1066,6 +1073,7 @@ function recruit(s, offerId = null) {
     professionXP: 0,
     professionXPBy: {},
     talent: null,
+    advancedSkill: null,
     equipment: { weapon: null, armor: null, shield: null, helmet: null },
   };
   for (const other of s.party) delete s.bonds[bondKey(id, other.id)];
@@ -1996,6 +2004,123 @@ const specializations = {
     },
   ],
 };
+// Advanced skills upgrade the existing class action; companions choose one permanent path.
+const advancedSkills = {
+  Swordswoman: [
+    {
+      id: "sunder",
+      name: "Sundering cleave",
+      cost: 2,
+      cooldown: 2,
+      bonus: 2,
+      desc: "Cleave lowers each victim's armor by 2 before damage, for the rest of the battle.",
+      sunder: true,
+    },
+    {
+      id: "reaping",
+      name: "Reaping cleave",
+      cost: 3,
+      cooldown: 3,
+      bonus: 3,
+      desc: "Cleave restores 2 health per living enemy struck, up to 6 health.",
+      leech: true,
+    },
+  ],
+  Shieldbearer: [
+    {
+      id: "rally",
+      name: "Rallying bash",
+      cost: 2,
+      cooldown: 3,
+      bonus: 1,
+      desc: "Bash and stun; restore 3 health to yourself and conscious adjacent companions.",
+      rally: true,
+    },
+    {
+      id: "shock",
+      name: "Shockwave bash",
+      cost: 3,
+      cooldown: 3,
+      bonus: 1,
+      desc: "Bash hits and stuns the target and enemies next to it.",
+      area: true,
+    },
+  ],
+  Archer: [
+    {
+      id: "piercing",
+      name: "Piercing shot",
+      cost: 3,
+      cooldown: 3,
+      bonus: 4,
+      desc: "Aimed shot ignores enemy armor and terrain cover.",
+      piercing: true,
+    },
+    {
+      id: "quickshot",
+      name: "Quick shot",
+      cost: 1,
+      cooldown: 1,
+      bonus: 2,
+      desc: "A cheaper shot with a one-round cooldown, but a smaller damage bonus.",
+    },
+  ],
+  Spearman: [
+    {
+      id: "impale",
+      name: "Impaling lunge",
+      cost: 2,
+      cooldown: 2,
+      bonus: 2,
+      desc: "Lunge also hits the enemy directly behind an aligned target.",
+      impale: true,
+    },
+    {
+      id: "hamstring",
+      name: "Hamstring lunge",
+      cost: 2,
+      cooldown: 3,
+      bonus: 3,
+      desc: "Lunge roots its target for two enemy turns.",
+      root: true,
+    },
+  ],
+};
+function advancedSkillsFor(p) {
+  return advancedSkills[p?.role] || [];
+}
+function skillFor(p) {
+  const base = classSkills[p?.role];
+  if (!base) return null;
+  const advanced = advancedSkillsFor(p).find(
+    (skill) => skill.id === p.advancedSkill,
+  );
+  return advanced ? { ...base, ...advanced } : base;
+}
+function learnAdvancedSkill(s, id, skillId) {
+  const p = s.party[id],
+    choice = advancedSkillsFor(p).find((skill) => skill.id === skillId);
+  if (
+    !p ||
+    p.dead ||
+    !choice ||
+    p.advancedSkill ||
+    !p.talent ||
+    p.level < 4 ||
+    p.points < 2 ||
+    s.battle ||
+    s.event ||
+    companyLost(s)
+  )
+    return false;
+  p.points -= 2;
+  p.advancedSkill = skillId;
+  note(
+    s,
+    `${p.name} mastered ${choice.name}. This permanently upgrades their class action.`,
+  );
+  return true;
+}
 function talentsFor(p) {
   return specializations[p.role] || [];
 }
@@ -2020,7 +2145,7 @@ function learnTalent(s, id, talent) {
 function attackRange(p, skill = false, s = null) {
   return (
     (skill
-      ? classSkills[p.role]?.range || 1
+      ? skillFor(p)?.range || 1
       : p.role === "Archer"
         ? 4
         : p.role === "Spearman"
@@ -2048,7 +2173,7 @@ function useSkill(s, id, x, y) {
   const b = s.battle,
     u = b?.units.find((u) => u.id === id),
     p = s.party[id],
-    skill = p && classSkills[p.role],
+    skill = p && skillFor(p),
     enemy = b?.enemies.find((e) => e.hp > 0 && e.x === x && e.y === y);
   if (
     !b ||
@@ -2068,28 +2193,56 @@ function useSkill(s, id, x, y) {
   u.acted = true;
   u.cooldown = skill.cooldown;
   const victims =
-    p.role === "Swordswoman"
+    p.role === "Swordswoman" || skill.area
       ? b.enemies.filter(
           (e) => e.hp > 0 && Math.abs(e.x - x) + Math.abs(e.y - y) <= 1,
         )
-      : [enemy];
+      : skill.impale && (u.x === x || u.y === y)
+        ? b.enemies.filter(
+            (e) =>
+              e.hp > 0 &&
+              ((e.x === x && e.y === y) ||
+                (e.x === x + Math.sign(x - u.x) &&
+                  e.y === y + Math.sign(y - u.y))),
+          )
+        : [enemy];
   victims.forEach((e) => {
+    if (skill.sunder) e.armor = Math.max(0, (e.armor || 0) - 2);
     const flank = p.role === "Archer" ? 0 : flankingBonus(s, u, e);
     const damage = hitEnemy(
       s,
       e,
       attackPower(s, p) +
         skill.bonus +
+        (skill.piercing ? e.armor || 0 : 0) +
         flank -
-        (Math.abs(e.x - u.x) + Math.abs(e.y - u.y) > 1
+        (!skill.piercing && Math.abs(e.x - u.x) + Math.abs(e.y - u.y) > 1
           ? terrainCell(s, e.x, e.y).cover
           : 0),
     );
     if (p.role === "Shieldbearer") e.stun = p.talent === "stalwart" ? 2 : 1;
-    if (p.talent === "pinning") e.root = 2;
+    if (p.talent === "pinning" || skill.root) e.root = 2;
     if (p.talent === "reaver" || p.talent === "bloodletter") e.bleed = 2;
     note(s, `${p.name} uses ${skill.name} for ${damage} damage.`);
   });
+  if (skill.leech) {
+    const healing = Math.min(p.max - p.hp, Math.min(6, victims.length * 2));
+    p.hp += healing;
+    note(s, `${p.name} reaps ${healing} health.`);
+  }
+  if (skill.rally) {
+    let healing = 0;
+    for (const ally of b.units.filter(
+      (ally) => Math.abs(ally.x - u.x) + Math.abs(ally.y - u.y) <= 1,
+    )) {
+      const companion = s.party[ally.id];
+      if (companion.dead || companion.hp <= 0) continue;
+      const recovered = Math.min(3, companion.max - companion.hp);
+      companion.hp += recovered;
+      healing += recovered;
+    }
+    note(s, `${p.name} rallies the line, restoring ${healing} health.`);
+  }
   if (b.enemies.every((e) => e.hp === 0)) win(s);
   return true;
 }
@@ -4897,7 +5050,7 @@ function objective() {
     const p = s.party[selected],
       u = s.battle.units.find((u) => u.id === selected);
     if (abilityMode)
-      return `${classSkills[p.role].name} armed: click an outlined enemy within ${attackRange(p, true, s)} tiles. ${classSkills[p.role].desc} Costs ${classSkills[p.role].cost} valor.`;
+      return `${skillFor(p).name} armed: click an outlined enemy within ${attackRange(p, true, s)} tiles. ${skillFor(p).desc} Costs ${skillFor(p).cost} valor.`;
     return `Valor ${s.battle.valor}/5 · Round ${s.battle.turn} · ${p.name}: ${u?.moved ? "movement used" : `move up to ${movementRange(p)} tiles`} · ${u?.acted ? "action used" : "attack or brace"}. ${resolveLabel(p)} · ${bondSupport(s, p) ? "Trusted support +1 attack · " : ""}${fatigueLabel(p)} · Fatigue ${Math.round(p.fatigue || 0)}/100. Melee flanking +2: place allies on opposite sides of a foe. Wolves rush wounded targets and gain +1 damage when hunting together. Cover blocks 2 ranged damage; mud costs 2 movement. Disengage before leaving melee reach.`;
   }
   if (s.contract)
@@ -5081,7 +5234,7 @@ function render() {
       );
       const worn = card(
         "Equipped gear",
-        `<p>Weapon: ${equippedItem(s, p, "weapon")?.name || "Company issue"}<br>Armor: ${equippedItem(s, p, "armor")?.name || "Company issue"}</p>`,
+        `<p>Weapon: ${equippedItem(s, p, "weapon")?.name || "Company issue"}<br>Armor: ${equippedItem(s, p, "armor")?.name || "Company issue"}<br>Shield: ${equippedItem(s, p, "shield")?.name || "None"}<br>Helmet: ${equippedItem(s, p, "helmet")?.name || "None"}</p>`,
       );
       worn.append(
         button("Manage equipment", () => {
@@ -5158,10 +5311,10 @@ function render() {
         summary = document.createElement("summary");
       summary.textContent = "Class abilities & specialization";
       progression.append(summary);
-      progression.open = p.points > 0 && !p.talent;
+      progression.open = p.points > 0 && (!p.talent || !p.advancedSkill);
       const ability = document.createElement("p");
       ability.className = "hint";
-      ability.textContent = `${classSkills[p.role].name} · ${classSkills[p.role].cost} valor · ${classSkills[p.role].desc}`;
+      ability.textContent = `${skillFor(p).name} · ${skillFor(p).cost} valor · ${skillFor(p).desc}`;
       progression.append(ability);
       const hint = document.createElement("p");
       hint.className = "hint";
@@ -5187,6 +5340,31 @@ function render() {
           ),
         );
       });
+      const advancedHint = document.createElement("p");
+      advancedHint.className = "hint";
+      advancedHint.textContent =
+        "At level 4, spend two training points to permanently upgrade your class action. Requires a specialization. Choose one path; it replaces the basic skill and keeps your specialization's effects.";
+      progression.append(advancedHint);
+      for (const choice of advancedSkillsFor(p)) {
+        const text = document.createElement("p");
+        text.className = "hint";
+        text.textContent = `${choice.name} · ${choice.cost} valor · ${choice.cooldown} round cooldown: ${choice.desc}`;
+        progression.append(
+          text,
+          button(
+            p.advancedSkill === choice.id
+              ? `${choice.name} mastered`
+              : `Master ${choice.name} · 2 points`,
+            () => learnAdvancedSkill(s, p.id, choice.id),
+            !!p.advancedSkill ||
+              !p.talent ||
+              p.level < 4 ||
+              p.points < 2 ||
+              !!s.battle ||
+              !!s.event,
+          ),
+        );
+      }
       c.append(progression);
       panel.append(c);
     });
@@ -5947,7 +6125,7 @@ function render() {
     );
     const actor = s.party[selected],
       unit = s.battle.units.find((u) => u.id === selected),
-      skill = classSkills[actor.role];
+      skill = skillFor(actor);
     a.append(
       button(
         `${skill.name} · ${skill.cost} valor${unit.cooldown ? ` · cooldown ${unit.cooldown}` : ""}`,

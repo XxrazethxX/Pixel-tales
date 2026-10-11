@@ -184,6 +184,25 @@ Brush and rubble provide **2 cover against ranged attacks**, for either side. Mu
 
 Wolves rush reachable wounded companions, move farther, and gain pack damage when hunting together. Bandit archers maintain distance, while their melee allies close in. Cover, shields, bracing, fatigue, resolve, and trusted companions all affect the outcome.
 
+## Advanced class training
+
+[Advanced training on mobile](docs/screenshots/advanced-training-mobile.png)
+
+Open **Company → Class abilities & specialization**. At **level 4**, companions with a level-two specialization can spend **two training points** to master one permanent advanced skill. These are the same points used for strength and vitality, so save points if you want advanced training. Training is disabled during battles and encounters. The chosen upgrade replaces the class ability in combat and keeps the companion's specialization effects; it does not add a second attack per round.
+
+| Class        | Advanced path    | Valor / cooldown | Effect                                                                               |
+| ------------ | ---------------- | ---------------- | ------------------------------------------------------------------------------------ |
+| Swordswoman  | Sundering cleave | 2 / 2 rounds     | Reduce each victim's armor by 2 before cleave damage, for the rest of the battle.    |
+| Swordswoman  | Reaping cleave   | 3 / 3 rounds     | Stronger cleave; heal 2 per enemy struck, up to 6, without exceeding maximum health. |
+| Shieldbearer | Rallying bash    | 2 / 3 rounds     | Bash and stun; heal yourself and conscious adjacent companions by 3.                 |
+| Shieldbearer | Shockwave bash   | 3 / 3 rounds     | Bash and stun the target and enemies adjacent to it.                                 |
+| Archer       | Piercing shot    | 3 / 3 rounds     | Aimed shot ignores armor and terrain cover.                                          |
+| Archer       | Quick shot       | 1 / 1 round      | Smaller damage bonus, lower valor cost, and faster cooldown.                         |
+| Spearman     | Impaling lunge   | 2 / 2 rounds     | Hit an aligned target and the enemy immediately behind it.                           |
+| Spearman     | Hamstring lunge  | 2 / 3 rounds     | Stronger lunge; root the target for two enemy turns.                                 |
+
+Cooldowns count down after enemy turns. Existing saves keep their companions, gear, stories, and points; learned advanced skills also persist. Healing skills cannot revive unconscious or dead companions. Shieldbearer upgrades retain Stalwart's longer stun, spear upgrades retain Bloodletter's bleeding, and archer upgrades retain Marksman range or Trapper roots.
+
 ## Regional trade and caravan cargo
 
 Visit a village's **Market square → Regional trade** to buy and sell grain, cloth, salt, and iron. Trade cargo has **20 total slots**, separate from rations and crafting materials. Greyhaven has cheap grain, Saltbridge cheap salt, and Emberfall cheap iron. Supply prices also vary by village. Stock is finite, and regional shortages raise the price of a requested good. Each shortage has eight units of demand; supplying the last unit grants League reputation once. Bulk sales price each unit separately as demand runs out. Stock and shortages refresh every three days.
@@ -250,6 +269,7 @@ PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node
 PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/camp-jobs-smoke.mjs
 PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/companions-smoke.mjs
 PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/complete-systems-smoke.mjs
+PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/advanced-skills-smoke.mjs
 ```
 
 It uses `/usr/bin/chromium` by default; override `CHROMIUM_PATH` or `GAME_URL` as needed. Desktop and mobile screenshots are written under `/tmp`. The village smoke test checks regional offers, renown locks and unlocks, resale, inn recovery, save persistence, and dangerous encounters. The equipment smoke test covers purchases, class restrictions, assignment and transfer, resale, research and crafting, combat restrictions, reloads, mobile layout, and new-company reset.
@@ -262,4 +282,6 @@ The companion smoke test covers trait previews and hiring, daily costs, capacity
 
 The complete-systems smoke test checks regional stock depletion, trading routes and shortages, four equipment slots, shield/two-handed restrictions, branching story choices and rewards, faction battles, free disengagement, save persistence, and mobile menus.
 
-Further development includes advanced skill tiers, durability, procedural encounters, and Android packaging.
+The advanced-skills smoke test covers prerequisites, training costs, permanent choices, save persistence, mobile menus, upgraded combat actions, armor/cover piercing, specialization compatibility, and cooldowns.
+
+Further development includes durability, procedural encounters, and Android packaging.

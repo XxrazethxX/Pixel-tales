@@ -9,7 +9,9 @@ import {
   assignProfession,
   talentsFor,
   learnTalent,
-  classSkills,
+  skillFor,
+  advancedSkillsFor,
+  learnAdvancedSkill,
   useSkill,
   attackRange,
   movementRange,
@@ -225,7 +227,7 @@ function objective() {
     const p = s.party[selected],
       u = s.battle.units.find((u) => u.id === selected);
     if (abilityMode)
-      return `${classSkills[p.role].name} armed: click an outlined enemy within ${attackRange(p, true, s)} tiles. ${classSkills[p.role].desc} Costs ${classSkills[p.role].cost} valor.`;
+      return `${skillFor(p).name} armed: click an outlined enemy within ${attackRange(p, true, s)} tiles. ${skillFor(p).desc} Costs ${skillFor(p).cost} valor.`;
     return `Valor ${s.battle.valor}/5 · Round ${s.battle.turn} · ${p.name}: ${u?.moved ? "movement used" : `move up to ${movementRange(p)} tiles`} · ${u?.acted ? "action used" : "attack or brace"}. ${resolveLabel(p)} · ${bondSupport(s, p) ? "Trusted support +1 attack · " : ""}${fatigueLabel(p)} · Fatigue ${Math.round(p.fatigue || 0)}/100. Melee flanking +2: place allies on opposite sides of a foe. Wolves rush wounded targets and gain +1 damage when hunting together. Cover blocks 2 ranged damage; mud costs 2 movement. Disengage before leaving melee reach.`;
   }
   if (s.contract)
@@ -409,7 +411,7 @@ function render() {
       );
       const worn = card(
         "Equipped gear",
-        `<p>Weapon: ${equippedItem(s, p, "weapon")?.name || "Company issue"}<br>Armor: ${equippedItem(s, p, "armor")?.name || "Company issue"}</p>`,
+        `<p>Weapon: ${equippedItem(s, p, "weapon")?.name || "Company issue"}<br>Armor: ${equippedItem(s, p, "armor")?.name || "Company issue"}<br>Shield: ${equippedItem(s, p, "shield")?.name || "None"}<br>Helmet: ${equippedItem(s, p, "helmet")?.name || "None"}</p>`,
       );
       worn.append(
         button("Manage equipment", () => {
@@ -486,10 +488,10 @@ function render() {
         summary = document.createElement("summary");
       summary.textContent = "Class abilities & specialization";
       progression.append(summary);
-      progression.open = p.points > 0 && !p.talent;
+      progression.open = p.points > 0 && (!p.talent || !p.advancedSkill);
       const ability = document.createElement("p");
       ability.className = "hint";
-      ability.textContent = `${classSkills[p.role].name} · ${classSkills[p.role].cost} valor · ${classSkills[p.role].desc}`;
+      ability.textContent = `${skillFor(p).name} · ${skillFor(p).cost} valor · ${skillFor(p).desc}`;
       progression.append(ability);
       const hint = document.createElement("p");
       hint.className = "hint";
@@ -515,6 +517,31 @@ function render() {
           ),
         );
       });
+      const advancedHint = document.createElement("p");
+      advancedHint.className = "hint";
+      advancedHint.textContent =
+        "At level 4, spend two training points to permanently upgrade your class action. Requires a specialization. Choose one path; it replaces the basic skill and keeps your specialization's effects.";
+      progression.append(advancedHint);
+      for (const choice of advancedSkillsFor(p)) {
+        const text = document.createElement("p");
+        text.className = "hint";
+        text.textContent = `${choice.name} · ${choice.cost} valor · ${choice.cooldown} round cooldown: ${choice.desc}`;
+        progression.append(
+          text,
+          button(
+            p.advancedSkill === choice.id
+              ? `${choice.name} mastered`
+              : `Master ${choice.name} · 2 points`,
+            () => learnAdvancedSkill(s, p.id, choice.id),
+            !!p.advancedSkill ||
+              !p.talent ||
+              p.level < 4 ||
+              p.points < 2 ||
+              !!s.battle ||
+              !!s.event,
+          ),
+        );
+      }
       c.append(progression);
       panel.append(c);
     });
@@ -1275,7 +1302,7 @@ function render() {
     );
     const actor = s.party[selected],
       unit = s.battle.units.find((u) => u.id === selected),
-      skill = classSkills[actor.role];
+      skill = skillFor(actor);
     a.append(
       button(
         `${skill.name} · ${skill.cost} valor${unit.cooldown ? ` · cooldown ${unit.cooldown}` : ""}`,
