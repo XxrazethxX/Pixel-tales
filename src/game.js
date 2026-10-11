@@ -56,7 +56,7 @@ studies.push(
 );
 export function fresh() {
   return {
-    version: 5,
+    version: 6,
     inventory: { ore: 0, wood: 0, herbs: 0, medicine: 1 },
     explored: [],
     event: null,
@@ -183,9 +183,7 @@ export function research(s, id) {
 }
 export function startBattle(s, patrolId = null) {
   const patrol = patrolId
-    ? s.patrols.find(
-        (p) => p.id === patrolId && !p.cleared && p.kind === "bandits",
-      )
+    ? s.patrols.find((p) => p.id === patrolId && !p.cleared)
     : null;
   if (
     patrolId &&
@@ -204,9 +202,19 @@ export function startBattle(s, patrolId = null) {
   )
     return false;
   s.destination = null;
+  if (patrol?.kind === "merchant" && !patrol.hostile) {
+    patrol.hostile = true;
+    s.morale = Math.max(0, s.morale - 10);
+    s.renown = Math.max(0, s.renown - 5);
+    note(
+      s,
+      "You attack peaceful traders. −10 morale, −5 renown; this caravan will no longer trade.",
+    );
+  }
   s.battle = {
     kind: patrol ? "patrol" : "contract",
     patrolId: patrol?.id || null,
+    caravanRaid: patrol?.kind === "merchant",
     turn: 1,
     valor: 3,
     units: s.party
@@ -290,7 +298,9 @@ export function act(s, id, x, y) {
 }
 function win(s) {
   const patrolFight = s.battle.kind === "patrol";
-  const reward = patrolFight ? 40 : s.contract.reward;
+  const raid = patrolFight && s.battle.caravanRaid;
+  const reward = patrolFight ? (raid ? 60 : 40) : s.contract.reward;
+  if (raid) s.food += 10;
   s.gold += reward;
   s.knowledge += 2;
   if (patrolFight) {
@@ -298,7 +308,7 @@ function win(s) {
     const patrol = s.patrols.find((p) => p.id === s.battle.patrolId);
     if (patrol) patrol.cleared = true;
   } else s.completed++;
-  s.renown += 5;
+  if (!raid) s.renown += 5;
   s.inventory.ore += 2;
   s.inventory.wood += 2;
   for (const p of s.party.filter((p) => p.hp > 0)) {
@@ -311,7 +321,7 @@ function win(s) {
   }
   note(
     s,
-    `${patrolFight ? "Patrol defeated" : "Contract fulfilled"}. Earned ${reward} crowns, 2 knowledge, and 35 XP per survivor.`,
+    `${raid ? "Caravan plundered · 10 rations seized" : patrolFight ? "Patrol defeated" : "Contract fulfilled"}. Earned ${reward} crowns, 2 knowledge, and 35 XP per survivor.`,
   );
   if (!patrolFight) s.contract = null;
   s.battle = null;
@@ -438,7 +448,7 @@ export function restore(raw) {
   const base = fresh();
   if (
     !raw ||
-    ![1, 2, 3, 4, 5].includes(raw.version) ||
+    ![1, 2, 3, 4, 5, 6].includes(raw.version) ||
     !Array.isArray(raw.party) ||
     raw.party.length < 1 ||
     raw.party.length > 6 ||
@@ -464,7 +474,7 @@ export function restore(raw) {
   const result = {
     ...base,
     ...raw,
-    version: 5,
+    version: 6,
     inventory: { ...base.inventory, ...raw.inventory },
     explored: raw.explored || [],
     event: raw.event || null,
@@ -529,6 +539,7 @@ export function restore(raw) {
             ? Math.abs(saved.waypoint) % p.route.length
             : 0,
           cleared: !!saved.cleared,
+          hostile: !!saved.hostile,
         }
       : p;
   });
@@ -810,6 +821,7 @@ export function resolveEvent(s, choice) {
   return true;
 }
 export function contracts(s) {
+  if (places[s.location]?.type !== "town" || s.battle || s.event) return [];
   return [
     { name: "Wolves in human clothing", target: 1, reward: 65, kind: "battle" },
     { name: "The barrow road", target: 2, reward: 85, kind: "battle" },
@@ -1125,7 +1137,9 @@ export function nearbyPatrols(s) {
   );
 }
 export function tradeCaravan(s, id) {
-  const p = nearbyPatrols(s).find((p) => p.id === id && p.kind === "merchant"),
+  const p = nearbyPatrols(s).find(
+      (p) => p.id === id && p.kind === "merchant" && !p.hostile,
+    ),
     price = s.research.includes("barter") ? 10 : 12;
   if (!p || s.battle || s.event || s.gold < price) return false;
   s.gold -= price;
@@ -1400,5 +1414,29 @@ export function useSkill(s, id, x, y) {
     note(s, `${p.name} uses ${skill.name} for ${damage} damage.`);
   });
   if (b.enemies.every((e) => e.hp === 0)) win(s);
+  return true;
+}
+
+export function buyGear(s, item, target = 0) {
+  const p = s.party[target];
+  const offer = { weapon: [35, 2, 4], armor: [30, 1, 3] }[item];
+  if (
+    !p ||
+    !offer ||
+    s.battle ||
+    s.event ||
+    places[s.location]?.type !== "town"
+  )
+    return false;
+  const price = s.research.includes("barter")
+    ? Math.ceil(offer[0] * 0.8)
+    : offer[0];
+  if (s.gold < price || p[item] >= offer[2]) return false;
+  s.gold -= price;
+  p[item] = Math.min(offer[2], p[item] + offer[1]);
+  note(
+    s,
+    `Bought ${item} for ${p.name}: +${item === "weapon" ? "attack" : "armor"}, ${price} crowns.`,
+  );
   return true;
 }

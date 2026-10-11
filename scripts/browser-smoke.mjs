@@ -52,7 +52,8 @@ const walk = async (x, y) => {
       continue;
     }
     assert.ok(
-      Math.hypot(s.position.x - x, s.position.y - y) < 1,
+      Math.hypot(s.position.x - x, s.position.y - y) <
+        (s.location === 0 || s.location === 3 || s.location === 6 ? 29 : 1),
       "party must reach clicked world coordinate",
     );
     return;
@@ -61,8 +62,22 @@ const walk = async (x, y) => {
 };
 await page.goto(process.env.GAME_URL || "http://127.0.0.1:3000/");
 await page.waitForSelector("#tabs button");
-assert.equal(await page.locator("#tabs button").count(), 6);
-assert.equal(await page.locator("#drawer").isVisible(), false);
+assert.equal(await page.locator("#tabs button").count(), 4);
+assert.equal(await page.locator("#drawer").isVisible(), true);
+assert.equal(
+  await page
+    .getByRole("button", { name: "Visit Market square", exact: true })
+    .count(),
+  1,
+);
+assert.equal(
+  await page
+    .getByRole("button", { name: "Accept contract", exact: true })
+    .count(),
+  0,
+);
+await page.screenshot({ path: "/tmp/pixel-tales-village.png" });
+await click("Close panel");
 // Choose open terrain rather than a landmark and redirect while actually walking.
 await worldClick(260, 300);
 await page.waitForFunction(
@@ -96,10 +111,25 @@ await page
 await click("Trade · 10 rations / 12 crowns");
 assert.equal((await state()).gold, 108);
 assert.equal((await state()).food, 34);
+await page
+  .getByRole("button", { name: "Attack Copper Road caravan", exact: true })
+  .click();
+assert.equal((await state()).battle.caravanRaid, true);
+assert.equal((await state()).patrols[0].hostile, true);
+await click("Retreat · lose 15 crowns");
+assert.equal(
+  await page
+    .getByRole("button", {
+      name: "Trade · 10 rations / 12 crowns",
+      exact: true,
+    })
+    .count(),
+  0,
+);
 // Begin the full contract smoke run with independent state.
 await page.evaluate(() => localStorage.removeItem("pixel-tales"));
 await page.reload();
-await click("Contracts");
+await click("Visit Contract board");
 await page
   .getByRole("button", { name: "Accept contract", exact: true })
   .first()
@@ -198,16 +228,25 @@ await click("Workshop");
 await page.getByRole("button", { name: "Craft", exact: true }).first().click();
 assert.equal((await state()).party[0].weapon, 2);
 await walk(170, 280);
-await click("Town");
+assert.equal(await page.locator("#drawer").isVisible(), true);
+await click("Visit The Crooked Lantern");
 await click("Recruit companion");
+await click("Back to village");
+await click("Visit Market square");
 await click("10 rations · 15 crowns");
+await click("Back to village");
+await click("Visit Blacksmith");
+await click("Weapon +2 · 35 crowns");
+assert.equal((await state()).party[0].weapon, 4);
+await click("Back to village");
 assert.equal((await state()).party.length, 5);
-await click("Contracts");
+await click("Visit Contract board");
 await page
   .getByRole("button", { name: "Accept contract", exact: true })
   .nth(2)
   .click();
 await walk(590, 355);
+await click("Close panel");
 await click("Deliver 5 rations");
 assert.equal((await state()).completed, 2);
 await page.reload();
@@ -306,9 +345,9 @@ offlineHTML = offlineHTML
       "</script>",
   );
 await offlinePage.setContent(offlineHTML);
-assert.equal(await offlinePage.locator("#tabs button").count(), 6);
+assert.equal(await offlinePage.locator("#tabs button").count(), 4);
 await offlinePage
-  .getByRole("button", { name: "Contracts", exact: true })
+  .getByRole("button", { name: "Visit Contract board", exact: true })
   .click();
 await offlinePage
   .getByRole("button", { name: "Accept contract", exact: true })

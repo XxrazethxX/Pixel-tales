@@ -20,7 +20,7 @@ Open the server on port 3000. If that port is already in use, reuse the existing
 
 The map fills the game screen. **Click or tap any ground** to set your own destination; the party walks there with animated companions following the route you actually took. Click again to redirect, use **Stop walking** to halt, or hold **WASD / arrow keys** to steer. There are no preset travel paths or destination buttons. The camera follows the company on narrow screens, keeping sprite proportions intact.
 
-Towns and other sites offer actions only when you are within 28 world pixels. Management menus are overlays opened from the bottom toolbar; opening one pauses walking. Close the panel to return to exploration. You can forage and camp anywhere. Each 160 world pixels walked costs a day and four rations (three with Trailcraft); partial distance carries between destinations. Shallows slow travel. Encounters pause the party for your decision. Saves retain your exact position and distance, and reload safely stopped.
+Towns and other sites offer actions only when you are within 28 world pixels. Arriving at a village stops the party and opens its places menu: visit the market for supplies, the blacksmith to buy and equip weapons or armor, the tavern to recruit companions, or the contract board for paid work. Available contracts appear only at village boards; your accepted objective remains visible during exploration. Management menus are overlays opened from the bottom toolbar; opening one pauses walking. Close the panel to return to exploration. You can forage and camp anywhere. Each 160 world pixels walked costs a day and four rations (three with Trailcraft); partial distance carries between destinations. Shallows slow travel. Encounters pause the party for your decision. Saves retain your exact position and distance, and reload safely stopped.
 
 ## The living borderlands
 
@@ -28,7 +28,7 @@ The world is now **1536 × 864**: four times the original area, with twelve loca
 
 The small **world navigator** in the top right shows your charted terrain, known landmarks, current viewport, and destination. Click any point there to start a long journey; supplies and encounters still apply. It selects a coordinate, not a predetermined path.
 
-A caravan and two bandit patrols roam independently while exploration is active. They pause during menus, battles, and encounters. Within 48 pixels, buy provisions from the caravan or confront a bandit group. Combat is optional: steer away if the company is unprepared. Patrol victories award 40 crowns, knowledge, salvage, and XP without completing or clearing your contract. Defeated patrols stay defeated after reload.
+A caravan and two bandit patrols roam independently while exploration is active. They pause during menus, battles, and encounters. Within 48 pixels, buy provisions from the caravan, attack its guards, or confront a bandit group. Attacking peaceful traders costs 10 morale and up to 5 renown once, and permanently ends trade with that caravan, even after retreat. Winning a caravan raid grants 60 crowns, 10 rations, knowledge, salvage, and XP; it grants no renown. Combat is optional: steer away if the company is unprepared. Patrol victories award 40 crowns, knowledge, salvage, and XP without completing or clearing your contract. Defeated patrols stay defeated after reload.
 
 Research **Watchful eyes** for a 210-pixel discovery radius, **A fair bargain** for cheaper purchases, and **Borderlands charts** (requires Watchful eyes) to reveal landmark locations without exploring their terrain. Hidden stashes offer one-time crowns and medicine. Road events now include wounded travellers, abandoned camps, and storms with different choices and costs.
 
@@ -67,17 +67,17 @@ Near a mine or forest, **Work mine / Gather herbs** is repeatable: it costs two 
 
 ## Your first expedition
 
-1. Open **Contracts** in Greyhaven and accept _Wolves in human clothing_.
+1. Choose **Visit Contract board** in Greyhaven’s arrival menu and accept _Wolves in human clothing_.
 2. Close the panel and click toward **Pinewatch** on the map. You can take any route and stop anywhere along the way.
 3. **Explore** to collect knowledge, ore, wood, and herbs, then **Engage raiders**.
 4. Select a companion using their button or sprite. Outlined green tiles are movement options; outlined red enemies are attack targets. Each companion can move up to two Manhattan tiles **and** attack once per round. Bows reach four tiles, spears two, other weapons one. **Brace** trades your attack for damage reduction. End the round for enemy actions.
 5. Victory awards crowns, knowledge, salvage, and XP. Train leveled companions in **Company**, unlock permanent upgrades in **Research**, and equip crafted weapons and armor in **Workshop**.
-6. Return to town for the **Town** market and recruit up to six companions. Buy medicine, heal injured allies, or camp to restore health and morale. Camp costs up to four rations (less with a skilled Cook) and two crowns per companion.
+6. Return to a village, visit its **Market square** for supplies and its **Crooked Lantern** tavern to recruit up to six companions. Buy medicine, heal injured allies, or camp to restore health and morale. Camp costs up to four rations (less with a skilled Cook) and two crowns per companion.
 7. Walk to Iron Hollow and the Watchtower, take additional contracts, and respond to roadside choices. Delivery contracts offer a noncombat source of income and knowledge.
 
 Morale at 85+ grants +1 attack. Injuries impose −1 attack. Armor absorbs damage. Profession practice now unlocks ranks and company bonuses. Explorable sites have one-time rewards. Contracts are repeatable. Defeat rescues the company in Greyhaven at a cost; there is no permadeath yet.
 
-Progress automatically saves in browser local storage. **New company** asks before replacing it. Version-one through version-four saves migrate; invalid saves fall back to a fresh company. Browser storage is specific to your browser and origin; moving from a local file to a hosted site does not transfer progress.
+Progress automatically saves in browser local storage. **New company** asks before replacing it. Version-one through version-five saves migrate; invalid saves fall back to a fresh company. Browser storage is specific to your browser and origin; moving from a local file to a hosted site does not transfer progress.
 
 ## Validate and develop
 
@@ -88,7 +88,7 @@ npm run build
 
 Edit `src/game.js` (rules) and `src/app.js` (UI), then rebuild. Commit the generated `game.bundle.js` so downloaded copies run immediately. The build uses only Node's standard library.
 
-A browser-driven smoke test also exercises combat victory, research, crafting, recruitment, delivery, reload persistence, a 390px mobile layout, caravan trading, navigator travel, discovery beyond the original map, aimed shots, specializations, profession reassignment, and fieldwork. With a running server and Playwright Core installed in a temporary directory:
+A browser-driven smoke test also exercises combat victory, research, crafting, recruitment, delivery, reload persistence, a 390px mobile layout, village arrival menus, gear purchases, caravan trading and attacks, navigator travel, discovery beyond the original map, aimed shots, specializations, profession reassignment, and fieldwork. With a running server and Playwright Core installed in a temporary directory:
 
 ```sh
 npm install --prefix /tmp/pixel-browser --cache /tmp/pixel-npm-cache playwright-core

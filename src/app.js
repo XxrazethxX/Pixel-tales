@@ -48,11 +48,15 @@ import {
   accept,
   deliver,
   buy,
+  buyGear,
 } from "./game.js";
 let s = fresh();
 try {
   s = restore(JSON.parse(localStorage.getItem("pixel-tales")));
 } catch {}
+const heldKeys = new Set();
+let observedLocation = null,
+  pendingVillage = null;
 let drawerOpen = false,
   abilityMode = false;
 let tab = "Company",
@@ -101,6 +105,25 @@ function objective() {
     : "Click or tap anywhere to walk. Visit towns for contracts and trade, or venture into the wilderness.";
 }
 function render() {
+  const inVillage =
+    places[s.location]?.type === "town" && !s.battle && !s.event;
+  if (observedLocation !== s.location) {
+    pendingVillage = places[s.location]?.type === "town" ? s.location : null;
+    observedLocation = s.location;
+  }
+  if (pendingVillage !== null && inVillage) {
+    pendingVillage = null;
+    stopMovement(s);
+    heldKeys.clear();
+    drawerOpen = true;
+    tab = "Town";
+  }
+  if (
+    ["Town", "Market", "Blacksmith", "Tavern", "Contracts"].includes(tab) &&
+    !inVillage
+  )
+    tab = "Company";
+
   document.body.classList.toggle("drawer-open", drawerOpen);
   document.body.classList.toggle("encounter", !!s.event);
   document.body.classList.toggle("in-battle", !!s.battle);
@@ -125,16 +148,14 @@ function render() {
     abilityMode = false;
   $("objective").textContent = objective();
   $("tabs").replaceChildren(
-    ...["Company", "Contracts", "Research", "Workshop", "Town", "Journal"].map(
-      (t) => {
-        const b = button(t, () => {
-          drawerOpen = tab === t ? !drawerOpen : true;
-          tab = t;
-        });
-        b.classList.toggle("active", drawerOpen && tab === t);
-        return b;
-      },
-    ),
+    ...["Company", "Research", "Workshop", "Journal"].map((t) => {
+      const b = button(t, () => {
+        drawerOpen = tab === t ? !drawerOpen : true;
+        tab = t;
+      });
+      b.classList.toggle("active", drawerOpen && tab === t);
+      return b;
+    }),
   );
   const panel = $("panel");
   panel.replaceChildren();
@@ -320,21 +341,61 @@ function render() {
       panel.append(el);
     });
   }
-  if (tab === "Town") {
-    if (places[s.location]?.type !== "town")
-      panel.append(
-        card(
-          "Far from home",
-          "<p>Travel to Greyhaven, Saltbridge, or Emberfall for the market and recruitment.</p>",
-        ),
+  if (
+    inVillage &&
+    ["Town", "Market", "Blacksmith", "Tavern", "Contracts"].includes(tab)
+  ) {
+    if (tab !== "Town")
+      panel.prepend(
+        button("Back to village", () => {
+          tab = "Town";
+        }),
       );
-    else {
+    if (tab === "Town") {
       panel.append(
         card(
           places[s.location].name,
-          "<p>Trade with the quartermaster, hire companions, and prepare for the road.</p>",
+          "<p>Your company has arrived. Choose a place to visit, or close this menu to continue walking.</p>",
         ),
       );
+      for (const [venue, destination, description] of [
+        [
+          "Market square",
+          "Market",
+          "Buy food, medicine, and crafting supplies.",
+        ],
+        ["Blacksmith", "Blacksmith", "Buy and equip weapons and armor."],
+        [
+          "The Crooked Lantern",
+          "Tavern",
+          "Hire new companions for your company.",
+        ],
+        [
+          "Contract board",
+          "Contracts",
+          "Find paid work and accept a contract.",
+        ],
+      ]) {
+        const c = card(venue, `<p>${description}</p>`);
+        c.append(
+          button(
+            `Visit ${venue}`,
+            () => {
+              tab = destination;
+            },
+            false,
+            true,
+          ),
+        );
+        panel.append(c);
+      }
+      panel.append(
+        button("Leave village", () => {
+          drawerOpen = false;
+        }),
+      );
+    }
+    if (tab === "Market") {
       const market = card("Quartermaster", "");
       [
         ["food", "10 rations", 15],
@@ -355,6 +416,8 @@ function render() {
         ),
       );
       panel.append(market);
+    }
+    if (tab === "Tavern") {
       const inn = card(
         "The Crooked Lantern",
         `<p>${s.party.length < 6 ? (s.party.length === 4 ? "Tamsin, an archer and herbalist" : "Bram, a shieldbearer and miner") + " is looking for work." : "Your company is full."}</p><p>Recruitment: 60 crowns · +2 wages per camp · Capacity 6</p>`,
@@ -367,6 +430,42 @@ function render() {
         ),
       );
       panel.append(inn);
+    }
+    if (tab === "Blacksmith") {
+      panel.append(
+        card(
+          "Blacksmith",
+          "<p>Purchase equipment directly for a companion. Weapons add attack (maximum +4); armor reduces incoming damage (maximum 3).</p>",
+        ),
+      );
+      const selector = document.createElement("select");
+      selector.setAttribute("aria-label", "Equip companion");
+      s.party.forEach((p, i) =>
+        selector.add(
+          new Option(`${p.name} · weapon +${p.weapon} · armor ${p.armor}`, i),
+        ),
+      );
+      selector.value = craftTarget;
+      selector.onchange = () => {
+        craftTarget = Number(selector.value);
+        render();
+      };
+      panel.append(selector);
+      for (const [item, label, cost, cap] of [
+        ["weapon", "Weapon +2", 35, 4],
+        ["armor", "Armor +1", 30, 3],
+      ]) {
+        const price = s.research.includes("barter")
+          ? Math.ceil(cost * 0.8)
+          : cost;
+        panel.append(
+          button(
+            `${label} · ${price} crowns`,
+            () => buyGear(s, item, craftTarget),
+            s.gold < price || s.party[craftTarget][item] >= cap,
+          ),
+        );
+      }
     }
   }
   const a = $("actions");
@@ -516,22 +615,24 @@ function render() {
           true,
         ),
       );
-    nearbyPatrols(s).forEach((p) =>
-      a.append(
-        button(
-          p.kind === "merchant"
-            ? `Trade · 10 rations / ${s.research.includes("barter") ? 10 : 12} crowns`
-            : `Confront ${p.name}`,
-          () =>
-            p.kind === "merchant"
-              ? tradeCaravan(s, p.id)
-              : startBattle(s, p.id),
-          p.kind === "merchant" &&
-            s.gold < (s.research.includes("barter") ? 10 : 12),
-          p.kind === "bandits",
-        ),
-      ),
-    );
+    nearbyPatrols(s).forEach((p) => {
+      if (p.kind === "merchant") {
+        if (!p.hostile)
+          a.append(
+            button(
+              `Trade · 10 rations / ${s.research.includes("barter") ? 10 : 12} crowns`,
+              () => tradeCaravan(s, p.id),
+              s.gold < (s.research.includes("barter") ? 10 : 12),
+            ),
+          );
+        a.append(button(`Attack ${p.name}`, () => startBattle(s, p.id)));
+        a.lastChild.title =
+          "Fight caravan guards for 60 crowns and 10 rations. First attack costs 10 morale and 5 renown; the caravan stops trading.";
+      } else
+        a.append(
+          button(`Confront ${p.name}`, () => startBattle(s, p.id), false, true),
+        );
+    });
     if (s.destination)
       a.prepend(button("Stop walking", () => stopMovement(s), false, true));
     $("map-label").textContent =
@@ -849,6 +950,7 @@ $("reset").onclick = () => {
     confirm("Start a new company? Your current local save will be replaced.")
   ) {
     s = fresh();
+    observedLocation = null;
     selected = 0;
     render();
   }
@@ -859,7 +961,6 @@ $("close-drawer").onclick = () => {
   drawerOpen = false;
   render();
 };
-const heldKeys = new Set();
 let previousFrame = 0,
   lastSave = 0;
 function animate(time) {

@@ -83,7 +83,7 @@ test("old saves migrate and malformed saves recover", () => {
   s.gold = 99;
   const migrated = restore(s);
   assert.equal(migrated.gold, 99);
-  assert.equal(migrated.version, 5);
+  assert.equal(migrated.version, 6);
   assert.equal(migrated.inventory.medicine, 1);
   assert.equal(restore({ version: 1 }).party.length, 4);
   assert.equal(restore(null).day, 1);
@@ -544,4 +544,46 @@ test("crafting uses the proper profession and higher ranks increase output", () 
   assert.equal(s.food, 34);
   s.party[2].hp = 0;
   assert.equal(craft(s, "medicine"), false);
+});
+
+import { contracts, buyGear } from "../src/game.js";
+test("village offers disappear outside towns and gear purchases equip the selected companion", () => {
+  const s = fresh();
+  assert.equal(contracts(s).length, 6);
+  assert.ok(buyGear(s, "weapon", 1));
+  assert.equal(s.party[1].weapon, 2);
+  assert.equal(s.gold, 85);
+  assert.ok(buyGear(s, "armor", 0));
+  assert.equal(s.party[0].armor, 1);
+  s.location = -1;
+  assert.deepEqual(contracts(s), []);
+  assert.equal(accept(s, 0), false);
+  assert.equal(buyGear(s, "armor"), false);
+  s.location = 0;
+  s.gold = 200;
+  s.party[0].weapon = 4;
+  assert.equal(buyGear(s, "weapon"), false);
+  assert.equal(s.gold, 200);
+});
+test("caravan attacks require proximity, end trade, persist hostility and award cargo without clearing contracts", () => {
+  const s = fresh();
+  accept(s, 2);
+  const contract = s.contract;
+  assert.equal(startBattle(s, "caravan"), false);
+  s.position = { x: s.patrols[0].x, y: s.patrols[0].y };
+  assert.ok(startBattle(s, "caravan"));
+  assert.equal(s.morale, 65);
+  assert.equal(s.battle.caravanRaid, true);
+  assert.equal(restore(s).patrols[0].hostile, true);
+  assert.equal(tradeCaravan(s, "caravan"), false);
+  s.battle.enemies.forEach((e) => (e.hp = 0));
+  s.battle.enemies[0] = { id: 0, x: 2, y: 1, hp: 1, max: 16 };
+  assert.ok(act(s, 0, 2, 1));
+  assert.equal(s.battle, null);
+  assert.equal(s.gold, 180);
+  assert.equal(s.food, 34);
+  assert.equal(s.renown, 0);
+  assert.equal(s.contract, contract);
+  assert.equal(s.patrols[0].cleared, true);
+  assert.equal(startBattle(s, "caravan"), false);
 });
