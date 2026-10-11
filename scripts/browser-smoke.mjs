@@ -15,22 +15,80 @@ const click = async (text) =>
   page.getByRole("button", { name: text, exact: true }).click();
 const state = () =>
   page.evaluate(() => JSON.parse(localStorage.getItem("pixel-tales")));
-const tile = async (x, y) => {
+const worldClick = async (x, y) => {
   const r = await page.locator("canvas").boundingBox();
+  const view = await page.locator("canvas").evaluate((c) => ({
+    x: Number(c.dataset.viewX),
+    y: Number(c.dataset.viewY),
+    scale: Number(c.dataset.scale),
+  }));
   await page.mouse.click(
-    r.x + ((136 + x * 62) * r.width) / 768,
-    r.y + ((28 + y * 60) * r.height) / 432,
+    r.x + (x - view.x) * view.scale,
+    r.y + (y - view.y) * view.scale,
   );
 };
+const tile = (x, y) => worldClick(136 + x * 62, 28 + y * 60);
+const walk = async (x, y) => {
+  if (await page.locator("#drawer").isVisible()) await click("Close panel");
+  for (let attempt = 0; attempt < 8; attempt++) {
+    await worldClick(x, y);
+    await page.waitForFunction(
+      () => {
+        const s = JSON.parse(localStorage.getItem("pixel-tales"));
+        return !s.destination || s.event;
+      },
+      {},
+      { timeout: 20000 },
+    );
+    const s = await state();
+    if (s.event) {
+      await click("Walk away");
+      continue;
+    }
+    assert.ok(
+      Math.hypot(s.position.x - x, s.position.y - y) < 1,
+      "party must reach clicked world coordinate",
+    );
+    return;
+  }
+  throw Error("Could not finish walking");
+};
 await page.goto(process.env.GAME_URL || "http://127.0.0.1:3000/");
-await page.waitForSelector("#destinations button");
-assert.equal(await page.locator("#tabs button").count(), 5);
+await page.waitForSelector("#tabs button");
+assert.equal(await page.locator("#tabs button").count(), 6);
+assert.equal(await page.locator("#drawer").isVisible(), false);
+// Choose open terrain rather than a landmark and redirect while actually walking.
+await worldClick(260, 300);
+await page.waitForFunction(
+  () => JSON.parse(localStorage.getItem("pixel-tales")).position.x > 190,
+);
+let walking = await state();
+assert.ok(walking.position.x < 260);
+assert.ok(Math.abs(walking.destination.x - 260) < 1);
+await worldClick(245, 235);
+assert.ok(Math.abs((await state()).destination.y - 235) < 1);
+await click("Stop walking");
+const stopped = (await state()).position;
+await page.waitForTimeout(200);
+assert.deepEqual((await state()).position, stopped);
+await page.reload();
+assert.deepEqual((await state()).position, stopped);
+await page.keyboard.down("d");
+await page.waitForTimeout(300);
+await page.keyboard.up("d");
+assert.ok(
+  (await state()).position.x > stopped.x,
+  "keyboard steering moves the party",
+);
+// Begin the full contract smoke run with independent state.
+await page.evaluate(() => localStorage.removeItem("pixel-tales"));
+await page.reload();
 await click("Contracts");
 await page
   .getByRole("button", { name: "Accept contract", exact: true })
   .first()
   .click();
-await click("Pinewatch");
+await walk(350, 145);
 await click("Explore · knowledge & materials");
 await click("Engage raiders");
 for (let turn = 0; turn < 30 && (await state()).battle; turn++) {
@@ -98,8 +156,7 @@ assert.ok((await state()).research.includes("rations"));
 await click("Workshop");
 await page.getByRole("button", { name: "Craft", exact: true }).first().click();
 assert.equal((await state()).party[0].weapon, 2);
-await click("Greyhaven");
-await click("Help · 1 medicine");
+await walk(170, 280);
 await click("Town");
 await click("Recruit companion");
 assert.equal((await state()).party.length, 5);
@@ -108,7 +165,7 @@ await page
   .getByRole("button", { name: "Accept contract", exact: true })
   .nth(2)
   .click();
-await click("Saltbridge");
+await walk(590, 355);
 await click("Deliver 5 rations");
 assert.equal((await state()).completed, 2);
 await page.reload();
@@ -116,6 +173,24 @@ assert.equal((await state()).party.length, 5);
 await page.screenshot({ path: "/tmp/pixel-tales-desktop.png", fullPage: true });
 await page.setViewportSize({ width: 390, height: 844 });
 await page.screenshot({ path: "/tmp/pixel-tales-mobile.png", fullPage: true });
+const mobileStart = (await state()).position;
+await walk(mobileStart.x - 15, mobileStart.y - 5);
+assert.ok(
+  (await state()).position.x < mobileStart.x,
+  "mobile map click moves party",
+);
+const screenParty = await page.locator("canvas").evaluate((c) => {
+  const s = JSON.parse(localStorage.getItem("pixel-tales"));
+  const r = c.getBoundingClientRect();
+  return {
+    y: r.y + (s.position.y - Number(c.dataset.viewY)) * Number(c.dataset.scale),
+  };
+});
+const controls = await page.locator("#actions").boundingBox();
+assert.ok(
+  screenParty.y + 22 < controls.y,
+  "party remains visible above mobile controls",
+);
 assert.ok(
   await page.evaluate(
     () => document.documentElement.scrollWidth <= window.innerWidth,
@@ -124,7 +199,7 @@ assert.ok(
 );
 assert.deepEqual(errors, []);
 console.log(
-  "PASS: startup, browser-driven combat victory, exploration, research, crafting, roadside choice, recruitment, delivery, save/reload, mobile layout; no JS errors.",
+  "PASS: free walking, redirection, stop/reload, browser-driven combat victory, exploration, research, crafting, roadside choice, recruitment, delivery, save/reload, mobile layout; no JS errors.",
 );
 // Exercise startup with no network and no usable origin/storage (download-style runtime).
 const offlineContext = await browser.newContext({ offline: true });
@@ -145,7 +220,7 @@ offlineHTML = offlineHTML
       "</script>",
   );
 await offlinePage.setContent(offlineHTML);
-assert.equal(await offlinePage.locator("#tabs button").count(), 5);
+assert.equal(await offlinePage.locator("#tabs button").count(), 6);
 await offlinePage
   .getByRole("button", { name: "Contracts", exact: true })
   .click();

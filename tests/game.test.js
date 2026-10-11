@@ -83,7 +83,7 @@ test("old saves migrate and malformed saves recover", () => {
   s.gold = 99;
   const migrated = restore(s);
   assert.equal(migrated.gold, 99);
-  assert.equal(migrated.version, 2);
+  assert.equal(migrated.version, 3);
   assert.equal(migrated.inventory.medicine, 1);
   assert.equal(restore({ version: 1 }).party.length, 4);
   assert.equal(restore(null).day, 1);
@@ -171,4 +171,87 @@ test("market, healing, and training validate costs and targets", () => {
   assert.ok(train(s, 0, "vitality"));
   assert.equal(s.party[0].max, 33);
   assert.equal(train(s, 0, "strength"), false);
+});
+
+import {
+  moveTo,
+  advanceMovement,
+  stopMovement,
+  partyPositions,
+  nearbyPlace,
+} from "../src/game.js";
+test("party walks to arbitrary wilderness coordinates and leaves town services", () => {
+  const s = fresh();
+  assert.ok(moveTo(s, 280, 300));
+  assert.equal(s.position.x, 170);
+  advanceMovement(s, 0.5);
+  assert.ok(s.position.x > 170 && s.position.x < 280);
+  assert.equal(s.location, -1);
+  advanceMovement(s, 10);
+  assert.equal(s.position.x, 280);
+  assert.equal(s.position.y, 300);
+  assert.equal(s.destination, null);
+  assert.equal(buy(s, "food"), false);
+  assert.equal(explore(s), false);
+  assert.equal(s.food, 24);
+});
+test("redirecting changes route, followers trace it, and stopping freezes position", () => {
+  const s = fresh();
+  moveTo(s, 300, 280);
+  advanceMovement(s, 1);
+  const before = { ...s.position };
+  moveTo(s, 240, 350);
+  advanceMovement(s, 0.5);
+  assert.ok(s.position.y > before.y);
+  const followers = partyPositions(s);
+  assert.equal(followers.length, 4);
+  assert.notDeepEqual(followers[0], followers[1]);
+  stopMovement(s);
+  const pos = { ...s.position };
+  advanceMovement(s, 5);
+  assert.deepEqual(s.position, pos);
+});
+test("distance costs persist across short clicks, research lowers upkeep", () => {
+  const s = fresh();
+  for (let i = 0; i < 4; i++) {
+    moveTo(s, s.position.x + 40, s.position.y);
+    advanceMovement(s, 1);
+  }
+  assert.equal(s.food, 20);
+  assert.equal(s.day, 2);
+  const r = fresh();
+  r.research = ["rations"];
+  moveTo(r, 340, 280);
+  advanceMovement(r, 3);
+  assert.equal(r.food, 21);
+  assert.equal(r.day, 2);
+});
+test("movement clamps boundaries, pauses for encounters, and stops when out of food", () => {
+  const s = fresh();
+  assert.equal(moveTo(s, NaN, 5), false);
+  moveTo(s, -300, 900);
+  assert.deepEqual(s.destination, { x: 12, y: 414 });
+  s.event = { title: "Pause" };
+  const pos = { ...s.position };
+  advanceMovement(s, 9);
+  assert.deepEqual(s.position, pos);
+  s.event = null;
+  s.food = 0;
+  moveTo(s, 756, 280);
+  advanceMovement(s, 20);
+  assert.equal(s.destination, null);
+  assert.equal(s.food, 0);
+  assert.equal(s.day, 1);
+  assert.ok(s.log[0].includes("Provisions exhausted"));
+});
+test("wilderness saves restore exact position, mileage, and a stopped party", () => {
+  const s = fresh();
+  moveTo(s, 280, 300);
+  advanceMovement(s, 1);
+  const saved = restore(JSON.parse(JSON.stringify(s)));
+  assert.deepEqual(saved.position, s.position);
+  assert.equal(saved.walked, s.walked);
+  assert.equal(saved.location, -1);
+  assert.equal(saved.destination, null);
+  assert.equal(nearbyPlace({ x: 170, y: 280 }), 0);
 });

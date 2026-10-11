@@ -4,7 +4,11 @@ import {
   places,
   studies,
   note,
-  travel,
+  moveTo,
+  stopMovement,
+  advanceMovement,
+  partyPositions,
+  terrainAt,
   camp,
   research,
   startBattle,
@@ -29,6 +33,7 @@ let s = fresh();
 try {
   s = restore(JSON.parse(localStorage.getItem("pixel-tales")));
 } catch {}
+let drawerOpen = false;
 let tab = "Company",
   selected = 0,
   craftTarget = 0;
@@ -41,6 +46,7 @@ function button(text, fn, disabled = false, primary = false) {
   b.disabled = disabled;
   b.className = primary ? "primary" : "";
   b.onclick = () => {
+    if (s.destination) stopMovement(s);
     fn();
     render();
   };
@@ -66,10 +72,18 @@ function objective() {
     return `Round ${s.battle.turn} · ${p.name}: ${u?.moved ? "movement used" : "move up to 2 tiles"} · ${u?.acted ? "action used" : "attack or brace"}. Move and attack in the same round. Bows reach 4 tiles; spears 2; other weapons 1.`;
   }
   if (s.contract)
-    return `Active: ${s.contract.name}. ${s.location === s.contract.target ? "Use the gold button below to complete your objective." : `Travel to ${places[s.contract.target].name} using the map or destination buttons.`}`;
-  return "Begin here: open Contracts and accept work. Visit wilderness sites for materials and knowledge, then craft equipment and unlock research.";
+    return `Active: ${s.contract.name}. ${s.location === s.contract.target ? "Use the gold button below to complete your objective." : `Travel to ${places[s.contract.target].name} by clicking any point on the map.`}`;
+  return s.destination
+    ? "Walking · click or tap anywhere to change direction. Companions follow your route."
+    : "Click or tap anywhere to walk. Visit towns for contracts and trade, or venture into the wilderness.";
 }
 function render() {
+  document.body.classList.toggle("drawer-open", drawerOpen);
+  document.body.classList.toggle("encounter", !!s.event);
+  document.body.classList.toggle("in-battle", !!s.battle);
+  $("drawer").hidden = !drawerOpen;
+  $("journal").hidden = tab !== "Journal";
+  $("panel").hidden = tab === "Journal";
   if (
     s.battle &&
     !s.battle.units.some((u) => u.id === selected && s.party[u.id].hp > 0)
@@ -86,11 +100,16 @@ function render() {
     `<span>◈ ${s.gold} crowns</span><span>▧ ${s.food} rations</span><span>✦ ${s.knowledge} knowledge</span><span>☀ Day ${s.day}</span>`;
   $("objective").textContent = objective();
   $("tabs").replaceChildren(
-    ...["Company", "Contracts", "Research", "Workshop", "Town"].map((t) => {
-      const b = button(t, () => (tab = t));
-      b.classList.toggle("active", tab === t);
-      return b;
-    }),
+    ...["Company", "Contracts", "Research", "Workshop", "Town", "Journal"].map(
+      (t) => {
+        const b = button(t, () => {
+          drawerOpen = tab === t ? !drawerOpen : true;
+          tab = t;
+        });
+        b.classList.toggle("active", drawerOpen && tab === t);
+        return b;
+      },
+    ),
   );
   const panel = $("panel");
   panel.replaceChildren();
@@ -150,7 +169,7 @@ function render() {
           button(
             "Accept contract",
             () => accept(s, i),
-            !!s.battle || !!s.event || places[s.location].type !== "town",
+            !!s.battle || !!s.event || places[s.location]?.type !== "town",
             true,
           ),
         );
@@ -217,7 +236,7 @@ function render() {
     });
   }
   if (tab === "Town") {
-    if (places[s.location].type !== "town")
+    if (places[s.location]?.type !== "town")
       panel.append(
         card(
           "Far from home",
@@ -264,7 +283,6 @@ function render() {
   }
   const a = $("actions");
   a.replaceChildren();
-  $("destinations").replaceChildren();
   if (s.event) {
     const c = card(s.event.title, `<p>${s.event.text}</p>`);
     c.id = "event";
@@ -316,7 +334,18 @@ function render() {
       ),
       button("Forage · +6 rations / 1 day", () => forage(s)),
     );
-    if (places[s.location].type !== "town")
+    if (places[s.location]?.type === "town")
+      a.append(
+        button(`Enter ${places[s.location].name}`, () => {
+          drawerOpen = true;
+          tab = "Town";
+        }),
+        button("Contract board", () => {
+          drawerOpen = true;
+          tab = "Contracts";
+        }),
+      );
+    if (s.location >= 0 && places[s.location]?.type !== "town")
       a.append(
         button(
           s.explored.includes(s.location)
@@ -337,17 +366,10 @@ function render() {
           true,
         ),
       );
-    $("destinations").append(
-      ...places.map((p, i) =>
-        button(
-          `${i === s.location ? "● " : ""}${p.name}`,
-          () => travel(s, i),
-          i === s.location,
-        ),
-      ),
-    );
+    if (s.destination)
+      a.prepend(button("Stop walking", () => stopMovement(s), false, true));
     $("map-label").textContent =
-      `${places[s.location].name} · Choose a destination`;
+      `${places[s.location]?.name || terrainAt(s.position).toUpperCase()} · ${Math.round(s.position.x)}, ${Math.round(s.position.y)}`;
   }
   $("log").replaceChildren(
     ...s.log.slice(0, 6).map((t) => {
@@ -367,15 +389,62 @@ function tree(x, y) {
   rect(x, y + 6, 15, 12, "#2c4433");
   rect(x + 3, y, 9, 12, "#37523c");
 }
-function person(x, y, c) {
+function person(x, y, c, step = 0, role = "") {
+  rect(x - 8, y + 15, 18, 4, "#364b35");
   rect(x - 5, y - 11, 10, 9, "#c4aa78");
   rect(x - 7, y - 2, 14, 13, c);
-  rect(x - 6, y + 11, 4, 6, "#202729");
-  rect(x + 2, y + 11, 4, 6, "#202729");
+  rect(x - 6, y + 11 + step, 4, 6, "#202729");
+  rect(x + 2, y + 11 - step, 4, 6, "#202729");
+  if (role === "Shieldbearer") rect(x - 11, y, 5, 12, "#a0a09a");
+  if (role === "Spearman") rect(x + 10, y - 17, 2, 29, "#c5bb89");
+  if (role === "Archer") {
+    rect(x + 9, y - 4, 2, 14, "#bd9560");
+    rect(x + 11, y - 1, 2, 8, "#bd9560");
+  }
   rect(x - 5, y - 13, 10, 4, "#4c4639");
 }
+const view = { x: 0, y: 0, scale: 1 };
 function draw() {
-  rect(0, 0, 768, 432, "#657454");
+  const bounds = canvas.getBoundingClientRect();
+  const w = Math.max(1, Math.round(bounds.width)),
+    h = Math.max(1, Math.round(bounds.height));
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+  }
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = "#25362a";
+  ctx.fillRect(0, 0, w, h);
+  view.scale = s.battle
+    ? Math.min(w / 768, h / 432)
+    : Math.max(w / 768, Math.max(160, h - 180) / 432);
+  view.x = s.battle
+    ? (768 - w / view.scale) / 2
+    : Math.max(
+        0,
+        Math.min(768 - w / view.scale, s.position.x - w / view.scale / 2),
+      );
+  view.y = s.battle
+    ? (432 - h / view.scale) / 2
+    : Math.max(
+        0,
+        Math.min(
+          432 - (h - 180) / view.scale,
+          s.position.y - (h - 180) / view.scale / 2,
+        ),
+      );
+  canvas.dataset.viewX = view.x;
+  canvas.dataset.viewY = view.y;
+  canvas.dataset.scale = view.scale;
+  ctx.setTransform(
+    view.scale,
+    0,
+    0,
+    view.scale,
+    -view.x * view.scale,
+    -view.y * view.scale,
+  );
+  rect(-768, -432, 2304, 1296, "#657454");
   for (let i = 0; i < 450; i++) {
     const x = (i * 137 + 31) % 768,
       y = (i * 83 + 17) % 432;
@@ -447,16 +516,12 @@ function draw() {
   ctx.strokeStyle = "#456775";
   ctx.lineWidth = 24;
   ctx.beginPath();
-  ctx.moveTo(475, 0);
-  ctx.bezierCurveTo(390, 180, 700, 190, 490, 432);
+  for (let y = 0; y <= 432; y += 4) {
+    const x = 475 + Math.sin(y / 65) * 38;
+    if (y === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
   ctx.stroke();
-  ctx.strokeStyle = "#b5a477";
-  ctx.lineWidth = 9;
-  ctx.setLineDash([5, 4]);
-  ctx.beginPath();
-  places.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
-  ctx.stroke();
-  ctx.setLineDash([]);
   for (let i = 0; i < 65; i++) {
     let x = (i * 71 + 50) % 740,
       y = (i * 43 + 25) % 380;
@@ -491,13 +556,40 @@ function draw() {
       ctx.fillText("⚑ CONTRACT", p.x, p.y - 35);
     }
   });
-  const p = places[s.location];
-  person(p.x + 28, p.y, "#e0c47f");
+  if (s.destination) {
+    const goal = s.destination;
+    ctx.strokeStyle = "#e2cd8e";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(goal.x, goal.y, 9, 0, Math.PI * 2);
+    ctx.stroke();
+    rect(goal.x - 1, goal.y - 14, 2, 6, "#e2cd8e");
+    rect(goal.x - 1, goal.y + 9, 2, 6, "#e2cd8e");
+  }
+  const colors = [
+    "#e0c47f",
+    "#8e9b98",
+    "#8ca46e",
+    "#ab8265",
+    "#9d88ac",
+    "#b6aa8a",
+  ];
+  partyPositions(s)
+    .map((point, i) => ({ ...point, i }))
+    .sort((a, b) => a.y - b.y)
+    .forEach((p) => {
+      const step = s.destination
+        ? Math.sin(performance.now() / 100 + p.i * 1.7) > 0
+          ? 2
+          : -2
+        : 0;
+      person(p.x, p.y, colors[p.i], step, s.party[p.i].role);
+    });
 }
 canvas.onclick = (e) => {
   const r = canvas.getBoundingClientRect(),
-    x = ((e.clientX - r.left) * 768) / r.width,
-    y = ((e.clientY - r.top) * 432) / r.height;
+    x = view.x + (e.clientX - r.left) / view.scale,
+    y = view.y + (e.clientY - r.top) / view.scale;
   if (s.battle) {
     const tx = Math.floor((x - 105) / 62),
       ty = Math.floor(y / 60),
@@ -507,8 +599,9 @@ canvas.onclick = (e) => {
     if (ally) selected = ally.id;
     else act(s, selected, tx, ty);
   } else {
-    const i = places.findIndex((p) => Math.hypot(p.x - x, p.y - y) < 45);
-    if (i >= 0) travel(s, i);
+    heldKeys.clear();
+    moveTo(s, x, y);
+    drawerOpen = false;
   }
   render();
 };
@@ -522,3 +615,93 @@ $("reset").onclick = () => {
   }
 };
 render();
+
+$("close-drawer").onclick = () => {
+  drawerOpen = false;
+  render();
+};
+const heldKeys = new Set();
+let previousFrame = 0,
+  lastSave = 0;
+function animate(time) {
+  if (heldKeys.size && !s.battle && !s.event && !drawerOpen) {
+    const x =
+      (heldKeys.has("d") || heldKeys.has("ArrowRight") ? 1 : 0) -
+      (heldKeys.has("a") || heldKeys.has("ArrowLeft") ? 1 : 0);
+    const y =
+      (heldKeys.has("s") || heldKeys.has("ArrowDown") ? 1 : 0) -
+      (heldKeys.has("w") || heldKeys.has("ArrowUp") ? 1 : 0);
+    if (x || y) moveTo(s, s.position.x + x * 100, s.position.y + y * 100);
+  }
+  const seconds = previousFrame
+    ? Math.min((time - previousFrame) / 1000, 0.1)
+    : 0;
+  previousFrame = time;
+  if (s.destination) {
+    const before = {
+      day: s.day,
+      location: s.location,
+      moving: !!s.destination,
+    };
+    advanceMovement(s, seconds);
+    if (
+      before.day !== s.day ||
+      before.location !== s.location ||
+      !s.destination
+    )
+      render();
+    else {
+      draw();
+      $("map-label").textContent =
+        `${places[s.location]?.name || terrainAt(s.position).toUpperCase()} · ${Math.round(s.position.x)}, ${Math.round(s.position.y)} · walking`;
+    }
+    if (time - lastSave > 750) {
+      try {
+        localStorage.setItem("pixel-tales", JSON.stringify(s));
+      } catch {}
+      lastSave = time;
+    }
+  }
+  requestAnimationFrame(animate);
+}
+requestAnimationFrame(animate);
+
+window.addEventListener("resize", () => draw());
+
+const walkingKeys = [
+  "w",
+  "a",
+  "s",
+  "d",
+  "ArrowUp",
+  "ArrowDown",
+  "ArrowLeft",
+  "ArrowRight",
+];
+window.addEventListener("keydown", (event) => {
+  if (
+    !walkingKeys.includes(event.key) ||
+    s.battle ||
+    s.event ||
+    drawerOpen ||
+    event.ctrlKey ||
+    event.metaKey ||
+    event.altKey
+  )
+    return;
+  event.preventDefault();
+  heldKeys.add(event.key);
+});
+window.addEventListener("keyup", (event) => {
+  if (heldKeys.delete(event.key) && !heldKeys.size) {
+    stopMovement(s);
+    render();
+  }
+});
+window.addEventListener("blur", () => {
+  if (heldKeys.size) {
+    heldKeys.clear();
+    stopMovement(s);
+    render();
+  }
+});

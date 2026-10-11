@@ -11,7 +11,7 @@ export const studies = [
     id: "rations",
     name: "Trailcraft",
     cost: 2,
-    desc: "Travel consumes one fewer ration.",
+    desc: "Each 160 pixels of travel uses 3 rations instead of 4.",
   },
   {
     id: "medicine",
@@ -28,7 +28,7 @@ export const studies = [
 ];
 export function fresh() {
   return {
-    version: 2,
+    version: 3,
     inventory: { ore: 0, wood: 0, herbs: 0, medicine: 1 },
     explored: [],
     event: null,
@@ -39,6 +39,10 @@ export function fresh() {
     morale: 75,
     knowledge: 0,
     location: 0,
+    position: { x: 170, y: 280 },
+    destination: null,
+    walked: 0,
+    trail: [{ x: 170, y: 280 }],
     research: [],
     contract: null,
     completed: 0,
@@ -90,6 +94,9 @@ export function travel(s, to) {
   s.food -= cost;
   s.day++;
   s.location = to;
+  s.position = { x: places[to].x, y: places[to].y };
+  s.trail = [{ ...s.position }];
+  s.destination = null;
   s.morale = Math.max(0, s.morale - 2);
   note(s, `Reached ${places[to].name}. Used ${cost} rations.`);
   if (s.day % 3 === 0)
@@ -276,6 +283,8 @@ export function endTurn(s) {
     s.contract = null;
     s.gold = Math.max(0, s.gold - 20);
     s.location = 0;
+    s.position = { x: places[0].x, y: places[0].y };
+    s.trail = [{ ...s.position }];
     for (const p of s.party) {
       p.hp = 1;
       p.injury = true;
@@ -300,14 +309,14 @@ export function restore(raw) {
   const base = fresh();
   if (
     !raw ||
-    ![1, 2].includes(raw.version) ||
+    ![1, 2, 3].includes(raw.version) ||
     !Array.isArray(raw.party) ||
     raw.party.length < 1 ||
     raw.party.length > 6 ||
     !Array.isArray(raw.log) ||
     !Array.isArray(raw.research) ||
     !Number.isInteger(raw.location) ||
-    !places[raw.location]
+    !(raw.location === -1 || places[raw.location])
   )
     return base;
   for (const key of ["day", "gold", "food", "morale", "knowledge", "completed"])
@@ -326,11 +335,35 @@ export function restore(raw) {
   const result = {
     ...base,
     ...raw,
-    version: 2,
+    version: 3,
     inventory: { ...base.inventory, ...raw.inventory },
     explored: raw.explored || [],
     event: raw.event || null,
   };
+  const validPosition =
+    raw.position &&
+    Number.isFinite(raw.position.x) &&
+    Number.isFinite(raw.position.y) &&
+    raw.position.x >= 12 &&
+    raw.position.x <= 756 &&
+    raw.position.y >= 18 &&
+    raw.position.y <= 414;
+  result.position = validPosition
+    ? { ...raw.position }
+    : {
+        x: (places[raw.location] || places[0]).x,
+        y: (places[raw.location] || places[0]).y,
+      };
+  result.walked =
+    Number.isFinite(raw.walked) && raw.walked >= 0 ? raw.walked % 160 : 0;
+  result.destination = null; // Reloads resume at the saved position, safely stopped.
+  result.trail = Array.isArray(raw.trail)
+    ? raw.trail
+        .filter((p) => p && Number.isFinite(p.x) && Number.isFinite(p.y))
+        .slice(-128)
+    : [];
+  if (!result.trail.length) result.trail = [{ ...result.position }];
+  result.location = nearbyPlace(result.position);
   result.party = result.party.map((p, id) => ({
     ...base.party[0],
     ...p,
@@ -383,7 +416,7 @@ export function recruit(s) {
   if (
     s.battle ||
     s.event ||
-    places[s.location].type !== "town" ||
+    places[s.location]?.type !== "town" ||
     s.gold < 60 ||
     s.party.length >= 6
   )
@@ -490,13 +523,14 @@ export function heal(s, id) {
 }
 export function explore(s) {
   if (
+    s.location < 0 ||
     s.battle ||
     s.event ||
-    places[s.location].type === "town" ||
+    places[s.location]?.type === "town" ||
     s.explored.includes(s.location)
   )
     return false;
-  const type = places[s.location].type;
+  const type = places[s.location]?.type;
   s.explored.push(s.location);
   s.knowledge++;
   s.inventory.ore += type === "mine" ? 6 : 2;
@@ -558,7 +592,7 @@ export function accept(s, index) {
     s.contract ||
     s.battle ||
     s.event ||
-    places[s.location].type !== "town"
+    places[s.location]?.type !== "town"
   )
     return false;
   s.contract = { ...c };
@@ -599,7 +633,7 @@ export function buy(s, item) {
     !o ||
     s.battle ||
     s.event ||
-    places[s.location].type !== "town" ||
+    places[s.location]?.type !== "town" ||
     s.gold < o[0]
   )
     return false;
@@ -608,4 +642,121 @@ export function buy(s, item) {
   else s.inventory[item] += o[1];
   note(s, `Bought ${o[1]} ${item} for ${o[0]} crowns.`);
   return true;
+}
+
+// Continuous overworld navigation. Landmarks grant services within 28 world pixels;
+// they do not constrain the player's route or destination.
+export function nearbyPlace(position) {
+  return places.findIndex(
+    (p) => Math.hypot(p.x - position.x, p.y - position.y) <= 28,
+  );
+}
+export function moveTo(s, x, y) {
+  if (s.battle || s.event || !Number.isFinite(x) || !Number.isFinite(y))
+    return false;
+  const point = {
+    x: Math.max(12, Math.min(756, x)),
+    y: Math.max(18, Math.min(414, y)),
+  };
+  if (Math.hypot(point.x - s.position.x, point.y - s.position.y) < 1)
+    return false;
+  s.destination = point;
+  return true;
+}
+export function stopMovement(s) {
+  s.destination = null;
+}
+export function terrainAt(p) {
+  const riverX = 475 + Math.sin(p.y / 65) * 38;
+  if (Math.abs(p.x - riverX) < 14) return "shallows";
+  if (p.y < 110 && p.x < 370) return "highlands";
+  if (p.x > 275 && p.x < 395 && p.y < 230) return "forest";
+  return "grassland";
+}
+export function advanceMovement(s, seconds) {
+  if (
+    !s.destination ||
+    s.battle ||
+    s.event ||
+    !Number.isFinite(seconds) ||
+    seconds <= 0
+  )
+    return { changed: false, arrived: false };
+  let budget = seconds * (terrainAt(s.position) === "shallows" ? 36 : 70),
+    changed = false,
+    arrived = false;
+  while (budget > 0 && s.destination) {
+    const dx = s.destination.x - s.position.x,
+      dy = s.destination.y - s.position.y,
+      length = Math.hypot(dx, dy);
+    if (length < 0.01) {
+      s.destination = null;
+      arrived = true;
+      break;
+    }
+    const amount = Math.min(budget, length, 160 - s.walked);
+    s.position.x += (dx / length) * amount;
+    s.position.y += (dy / length) * amount;
+    s.walked += amount;
+    budget -= amount;
+    changed = true;
+    // Keep sufficient history for followers to trace turns rather than teleport.
+    const previous = s.trail.at(-1);
+    if (
+      !previous ||
+      Math.hypot(previous.x - s.position.x, previous.y - s.position.y) >= 3
+    )
+      s.trail.push({ ...s.position });
+    s.trail = s.trail.slice(-128);
+    const old = s.location;
+    s.location = nearbyPlace(s.position);
+    if (old !== s.location && s.location >= 0)
+      note(s, `Reached ${places[s.location].name}.`);
+    if (s.walked >= 160 - 0.001) {
+      const cost = s.research.includes("rations") ? 3 : 4;
+      if (s.food < cost) {
+        s.walked = 159.999;
+        s.destination = null;
+        note(s, "Provisions exhausted. Stop to forage before continuing.");
+        break;
+      }
+      s.food -= cost;
+      s.walked = 0;
+      s.day++;
+      s.morale = Math.max(0, s.morale - 2);
+      note(s, `A day on the road. Used ${cost} rations.`);
+      if (s.day % 3 === 0) {
+        s.event = {
+          title: "Strangers in the wilderness",
+          text: "A wounded courier asks for medicine. A merchant offers to buy your silence and leave him behind.",
+        };
+        s.destination = null;
+        break;
+      }
+    }
+    if (amount >= length - 0.001) {
+      s.destination = null;
+      arrived = true;
+    }
+  }
+  return { changed, arrived };
+}
+export function partyPositions(s) {
+  return s.party.map((p, index) => {
+    if (index === 0) return { ...s.position };
+    let remaining = index * 17,
+      current = s.position;
+    for (let i = s.trail.length - 1; i >= 0; i--) {
+      const next = s.trail[i],
+        distance = Math.hypot(current.x - next.x, current.y - next.y);
+      if (distance >= remaining && distance > 0)
+        return {
+          x: current.x + ((next.x - current.x) * remaining) / distance,
+          y: current.y + ((next.y - current.y) * remaining) / distance,
+        };
+      remaining -= distance;
+      current = next;
+    }
+    return { x: Math.max(12, current.x - remaining), y: current.y };
+  });
 }

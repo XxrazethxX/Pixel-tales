@@ -16,19 +16,25 @@ Open the server on port 3000. If that port is already in use, reuse the existing
 
 **GitHub Pages:** The included workflow tests, builds, and deploys the game when pushed to `main`. The repository owner must enable **Settings → Pages → Build and deployment → Source: GitHub Actions**. Then rerun **Actions → Test and deploy game** if necessary. The Actions deployment reports the actual playable URL. Viewing `index.html` on github.com shows its source, not the game.
 
+## Free exploration
+
+The map fills the game screen. **Click or tap any ground** to set your own destination; the party walks there with animated companions following the route you actually took. Click again to redirect, use **Stop walking** to halt, or hold **WASD / arrow keys** to steer. There are no preset travel paths or destination buttons. The camera follows the company on narrow screens, keeping sprite proportions intact.
+
+Towns and other sites offer actions only when you are within 28 world pixels. Management menus are overlays opened from the bottom toolbar; opening one pauses walking. Close the panel to return to exploration. You can forage and camp anywhere. Each 160 world pixels walked costs a day and four rations (three with Trailcraft); partial distance carries between destinations. Shallows slow travel. Encounters pause the party for your decision. Saves retain your exact position and distance, and reload safely stopped.
+
 ## Your first expedition
 
 1. Open **Contracts** in Greyhaven and accept _Wolves in human clothing_.
-2. Click **Pinewatch** below the map or click its map marker.
+2. Close the panel and click toward **Pinewatch** on the map. You can take any route and stop anywhere along the way.
 3. **Explore** to collect knowledge, ore, wood, and herbs, then **Engage raiders**.
 4. Select a companion using their button or sprite. Outlined green tiles are movement options; outlined red enemies are attack targets. Each companion can move up to two Manhattan tiles **and** attack once per round. Bows reach four tiles, spears two, other weapons one. **Brace** trades your attack for damage reduction. End the round for enemy actions.
 5. Victory awards crowns, knowledge, salvage, and XP. Train leveled companions in **Company**, unlock permanent upgrades in **Research**, and equip crafted weapons and armor in **Workshop**.
 6. Return to town for the **Town** market and recruit up to six companions. Buy medicine, heal injured allies, or camp to restore health and morale. Camp costs four rations and two crowns per companion.
-7. Visit Iron Hollow and the Watchtower, take additional contracts, and respond to roadside choices. Delivery contracts offer a noncombat source of income and knowledge.
+7. Walk to Iron Hollow and the Watchtower, take additional contracts, and respond to roadside choices. Delivery contracts offer a noncombat source of income and knowledge.
 
 Morale at 85+ grants +1 attack. Injuries impose −1 attack. Armor absorbs damage. Professions earn practice from exploration and crafting; practice is tracked, but profession tiers are not yet implemented. Explorable sites have one-time rewards. Contracts are repeatable. Defeat rescues the company in Greyhaven at a cost; there is no permadeath yet.
 
-Progress automatically saves in browser local storage. **New company** asks before replacing it. Old version-one saves migrate; invalid saves fall back to a fresh company. Browser storage is specific to your browser and origin; moving from a local file to a hosted site does not transfer progress.
+Progress automatically saves in browser local storage. **New company** asks before replacing it. Old version-one and version-two saves migrate; invalid saves fall back to a fresh company. Browser storage is specific to your browser and origin; moving from a local file to a hosted site does not transfer progress.
 
 ## Validate and develop
 
@@ -48,4 +54,4 @@ PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node
 
 It uses `/usr/bin/chromium` by default; override `CHROMIUM_PATH` or `GAME_URL` as needed. Desktop and mobile screenshots are written under `/tmp`.
 
-Next development areas: deeper skills and professions, terrain/pathfinding, varied enemy behaviors, equipment inventories, regional factions, procedural encounters, and Android packaging.
+Next development areas: deeper skills and professions, a larger world, impassable terrain and pathfinding, varied enemy behaviors, equipment inventories, regional factions, procedural encounters, and Android packaging.

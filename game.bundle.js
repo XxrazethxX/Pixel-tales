@@ -13,7 +13,7 @@ const studies = [
     id: "rations",
     name: "Trailcraft",
     cost: 2,
-    desc: "Travel consumes one fewer ration.",
+    desc: "Each 160 pixels of travel uses 3 rations instead of 4.",
   },
   {
     id: "medicine",
@@ -30,7 +30,7 @@ const studies = [
 ];
 function fresh() {
   return {
-    version: 2,
+    version: 3,
     inventory: { ore: 0, wood: 0, herbs: 0, medicine: 1 },
     explored: [],
     event: null,
@@ -41,6 +41,10 @@ function fresh() {
     morale: 75,
     knowledge: 0,
     location: 0,
+    position: { x: 170, y: 280 },
+    destination: null,
+    walked: 0,
+    trail: [{ x: 170, y: 280 }],
     research: [],
     contract: null,
     completed: 0,
@@ -92,6 +96,9 @@ function travel(s, to) {
   s.food -= cost;
   s.day++;
   s.location = to;
+  s.position = { x: places[to].x, y: places[to].y };
+  s.trail = [{ ...s.position }];
+  s.destination = null;
   s.morale = Math.max(0, s.morale - 2);
   note(s, `Reached ${places[to].name}. Used ${cost} rations.`);
   if (s.day % 3 === 0)
@@ -278,6 +285,8 @@ function endTurn(s) {
     s.contract = null;
     s.gold = Math.max(0, s.gold - 20);
     s.location = 0;
+    s.position = { x: places[0].x, y: places[0].y };
+    s.trail = [{ ...s.position }];
     for (const p of s.party) {
       p.hp = 1;
       p.injury = true;
@@ -302,14 +311,14 @@ function restore(raw) {
   const base = fresh();
   if (
     !raw ||
-    ![1, 2].includes(raw.version) ||
+    ![1, 2, 3].includes(raw.version) ||
     !Array.isArray(raw.party) ||
     raw.party.length < 1 ||
     raw.party.length > 6 ||
     !Array.isArray(raw.log) ||
     !Array.isArray(raw.research) ||
     !Number.isInteger(raw.location) ||
-    !places[raw.location]
+    !(raw.location === -1 || places[raw.location])
   )
     return base;
   for (const key of ["day", "gold", "food", "morale", "knowledge", "completed"])
@@ -328,11 +337,35 @@ function restore(raw) {
   const result = {
     ...base,
     ...raw,
-    version: 2,
+    version: 3,
     inventory: { ...base.inventory, ...raw.inventory },
     explored: raw.explored || [],
     event: raw.event || null,
   };
+  const validPosition =
+    raw.position &&
+    Number.isFinite(raw.position.x) &&
+    Number.isFinite(raw.position.y) &&
+    raw.position.x >= 12 &&
+    raw.position.x <= 756 &&
+    raw.position.y >= 18 &&
+    raw.position.y <= 414;
+  result.position = validPosition
+    ? { ...raw.position }
+    : {
+        x: (places[raw.location] || places[0]).x,
+        y: (places[raw.location] || places[0]).y,
+      };
+  result.walked =
+    Number.isFinite(raw.walked) && raw.walked >= 0 ? raw.walked % 160 : 0;
+  result.destination = null; // Reloads resume at the saved position, safely stopped.
+  result.trail = Array.isArray(raw.trail)
+    ? raw.trail
+        .filter((p) => p && Number.isFinite(p.x) && Number.isFinite(p.y))
+        .slice(-128)
+    : [];
+  if (!result.trail.length) result.trail = [{ ...result.position }];
+  result.location = nearbyPlace(result.position);
   result.party = result.party.map((p, id) => ({
     ...base.party[0],
     ...p,
@@ -385,7 +418,7 @@ function recruit(s) {
   if (
     s.battle ||
     s.event ||
-    places[s.location].type !== "town" ||
+    places[s.location]?.type !== "town" ||
     s.gold < 60 ||
     s.party.length >= 6
   )
@@ -492,13 +525,14 @@ function heal(s, id) {
 }
 function explore(s) {
   if (
+    s.location < 0 ||
     s.battle ||
     s.event ||
-    places[s.location].type === "town" ||
+    places[s.location]?.type === "town" ||
     s.explored.includes(s.location)
   )
     return false;
-  const type = places[s.location].type;
+  const type = places[s.location]?.type;
   s.explored.push(s.location);
   s.knowledge++;
   s.inventory.ore += type === "mine" ? 6 : 2;
@@ -560,7 +594,7 @@ function accept(s, index) {
     s.contract ||
     s.battle ||
     s.event ||
-    places[s.location].type !== "town"
+    places[s.location]?.type !== "town"
   )
     return false;
   s.contract = { ...c };
@@ -601,7 +635,7 @@ function buy(s, item) {
     !o ||
     s.battle ||
     s.event ||
-    places[s.location].type !== "town" ||
+    places[s.location]?.type !== "town" ||
     s.gold < o[0]
   )
     return false;
@@ -612,10 +646,128 @@ function buy(s, item) {
   return true;
 }
 
+// Continuous overworld navigation. Landmarks grant services within 28 world pixels;
+// they do not constrain the player's route or destination.
+function nearbyPlace(position) {
+  return places.findIndex(
+    (p) => Math.hypot(p.x - position.x, p.y - position.y) <= 28,
+  );
+}
+function moveTo(s, x, y) {
+  if (s.battle || s.event || !Number.isFinite(x) || !Number.isFinite(y))
+    return false;
+  const point = {
+    x: Math.max(12, Math.min(756, x)),
+    y: Math.max(18, Math.min(414, y)),
+  };
+  if (Math.hypot(point.x - s.position.x, point.y - s.position.y) < 1)
+    return false;
+  s.destination = point;
+  return true;
+}
+function stopMovement(s) {
+  s.destination = null;
+}
+function terrainAt(p) {
+  const riverX = 475 + Math.sin(p.y / 65) * 38;
+  if (Math.abs(p.x - riverX) < 14) return "shallows";
+  if (p.y < 110 && p.x < 370) return "highlands";
+  if (p.x > 275 && p.x < 395 && p.y < 230) return "forest";
+  return "grassland";
+}
+function advanceMovement(s, seconds) {
+  if (
+    !s.destination ||
+    s.battle ||
+    s.event ||
+    !Number.isFinite(seconds) ||
+    seconds <= 0
+  )
+    return { changed: false, arrived: false };
+  let budget = seconds * (terrainAt(s.position) === "shallows" ? 36 : 70),
+    changed = false,
+    arrived = false;
+  while (budget > 0 && s.destination) {
+    const dx = s.destination.x - s.position.x,
+      dy = s.destination.y - s.position.y,
+      length = Math.hypot(dx, dy);
+    if (length < 0.01) {
+      s.destination = null;
+      arrived = true;
+      break;
+    }
+    const amount = Math.min(budget, length, 160 - s.walked);
+    s.position.x += (dx / length) * amount;
+    s.position.y += (dy / length) * amount;
+    s.walked += amount;
+    budget -= amount;
+    changed = true;
+    // Keep sufficient history for followers to trace turns rather than teleport.
+    const previous = s.trail.at(-1);
+    if (
+      !previous ||
+      Math.hypot(previous.x - s.position.x, previous.y - s.position.y) >= 3
+    )
+      s.trail.push({ ...s.position });
+    s.trail = s.trail.slice(-128);
+    const old = s.location;
+    s.location = nearbyPlace(s.position);
+    if (old !== s.location && s.location >= 0)
+      note(s, `Reached ${places[s.location].name}.`);
+    if (s.walked >= 160 - 0.001) {
+      const cost = s.research.includes("rations") ? 3 : 4;
+      if (s.food < cost) {
+        s.walked = 159.999;
+        s.destination = null;
+        note(s, "Provisions exhausted. Stop to forage before continuing.");
+        break;
+      }
+      s.food -= cost;
+      s.walked = 0;
+      s.day++;
+      s.morale = Math.max(0, s.morale - 2);
+      note(s, `A day on the road. Used ${cost} rations.`);
+      if (s.day % 3 === 0) {
+        s.event = {
+          title: "Strangers in the wilderness",
+          text: "A wounded courier asks for medicine. A merchant offers to buy your silence and leave him behind.",
+        };
+        s.destination = null;
+        break;
+      }
+    }
+    if (amount >= length - 0.001) {
+      s.destination = null;
+      arrived = true;
+    }
+  }
+  return { changed, arrived };
+}
+function partyPositions(s) {
+  return s.party.map((p, index) => {
+    if (index === 0) return { ...s.position };
+    let remaining = index * 17,
+      current = s.position;
+    for (let i = s.trail.length - 1; i >= 0; i--) {
+      const next = s.trail[i],
+        distance = Math.hypot(current.x - next.x, current.y - next.y);
+      if (distance >= remaining && distance > 0)
+        return {
+          x: current.x + ((next.x - current.x) * remaining) / distance,
+          y: current.y + ((next.y - current.y) * remaining) / distance,
+        };
+      remaining -= distance;
+      current = next;
+    }
+    return { x: Math.max(12, current.x - remaining), y: current.y };
+  });
+}
+
 let s = fresh();
 try {
   s = restore(JSON.parse(localStorage.getItem("pixel-tales")));
 } catch {}
+let drawerOpen = false;
 let tab = "Company",
   selected = 0,
   craftTarget = 0;
@@ -628,6 +780,7 @@ function button(text, fn, disabled = false, primary = false) {
   b.disabled = disabled;
   b.className = primary ? "primary" : "";
   b.onclick = () => {
+    if (s.destination) stopMovement(s);
     fn();
     render();
   };
@@ -653,10 +806,18 @@ function objective() {
     return `Round ${s.battle.turn} · ${p.name}: ${u?.moved ? "movement used" : "move up to 2 tiles"} · ${u?.acted ? "action used" : "attack or brace"}. Move and attack in the same round. Bows reach 4 tiles; spears 2; other weapons 1.`;
   }
   if (s.contract)
-    return `Active: ${s.contract.name}. ${s.location === s.contract.target ? "Use the gold button below to complete your objective." : `Travel to ${places[s.contract.target].name} using the map or destination buttons.`}`;
-  return "Begin here: open Contracts and accept work. Visit wilderness sites for materials and knowledge, then craft equipment and unlock research.";
+    return `Active: ${s.contract.name}. ${s.location === s.contract.target ? "Use the gold button below to complete your objective." : `Travel to ${places[s.contract.target].name} by clicking any point on the map.`}`;
+  return s.destination
+    ? "Walking · click or tap anywhere to change direction. Companions follow your route."
+    : "Click or tap anywhere to walk. Visit towns for contracts and trade, or venture into the wilderness.";
 }
 function render() {
+  document.body.classList.toggle("drawer-open", drawerOpen);
+  document.body.classList.toggle("encounter", !!s.event);
+  document.body.classList.toggle("in-battle", !!s.battle);
+  $("drawer").hidden = !drawerOpen;
+  $("journal").hidden = tab !== "Journal";
+  $("panel").hidden = tab === "Journal";
   if (
     s.battle &&
     !s.battle.units.some((u) => u.id === selected && s.party[u.id].hp > 0)
@@ -673,11 +834,16 @@ function render() {
     `<span>◈ ${s.gold} crowns</span><span>▧ ${s.food} rations</span><span>✦ ${s.knowledge} knowledge</span><span>☀ Day ${s.day}</span>`;
   $("objective").textContent = objective();
   $("tabs").replaceChildren(
-    ...["Company", "Contracts", "Research", "Workshop", "Town"].map((t) => {
-      const b = button(t, () => (tab = t));
-      b.classList.toggle("active", tab === t);
-      return b;
-    }),
+    ...["Company", "Contracts", "Research", "Workshop", "Town", "Journal"].map(
+      (t) => {
+        const b = button(t, () => {
+          drawerOpen = tab === t ? !drawerOpen : true;
+          tab = t;
+        });
+        b.classList.toggle("active", drawerOpen && tab === t);
+        return b;
+      },
+    ),
   );
   const panel = $("panel");
   panel.replaceChildren();
@@ -737,7 +903,7 @@ function render() {
           button(
             "Accept contract",
             () => accept(s, i),
-            !!s.battle || !!s.event || places[s.location].type !== "town",
+            !!s.battle || !!s.event || places[s.location]?.type !== "town",
             true,
           ),
         );
@@ -804,7 +970,7 @@ function render() {
     });
   }
   if (tab === "Town") {
-    if (places[s.location].type !== "town")
+    if (places[s.location]?.type !== "town")
       panel.append(
         card(
           "Far from home",
@@ -851,7 +1017,6 @@ function render() {
   }
   const a = $("actions");
   a.replaceChildren();
-  $("destinations").replaceChildren();
   if (s.event) {
     const c = card(s.event.title, `<p>${s.event.text}</p>`);
     c.id = "event";
@@ -903,7 +1068,18 @@ function render() {
       ),
       button("Forage · +6 rations / 1 day", () => forage(s)),
     );
-    if (places[s.location].type !== "town")
+    if (places[s.location]?.type === "town")
+      a.append(
+        button(`Enter ${places[s.location].name}`, () => {
+          drawerOpen = true;
+          tab = "Town";
+        }),
+        button("Contract board", () => {
+          drawerOpen = true;
+          tab = "Contracts";
+        }),
+      );
+    if (s.location >= 0 && places[s.location]?.type !== "town")
       a.append(
         button(
           s.explored.includes(s.location)
@@ -924,17 +1100,10 @@ function render() {
           true,
         ),
       );
-    $("destinations").append(
-      ...places.map((p, i) =>
-        button(
-          `${i === s.location ? "● " : ""}${p.name}`,
-          () => travel(s, i),
-          i === s.location,
-        ),
-      ),
-    );
+    if (s.destination)
+      a.prepend(button("Stop walking", () => stopMovement(s), false, true));
     $("map-label").textContent =
-      `${places[s.location].name} · Choose a destination`;
+      `${places[s.location]?.name || terrainAt(s.position).toUpperCase()} · ${Math.round(s.position.x)}, ${Math.round(s.position.y)}`;
   }
   $("log").replaceChildren(
     ...s.log.slice(0, 6).map((t) => {
@@ -954,15 +1123,62 @@ function tree(x, y) {
   rect(x, y + 6, 15, 12, "#2c4433");
   rect(x + 3, y, 9, 12, "#37523c");
 }
-function person(x, y, c) {
+function person(x, y, c, step = 0, role = "") {
+  rect(x - 8, y + 15, 18, 4, "#364b35");
   rect(x - 5, y - 11, 10, 9, "#c4aa78");
   rect(x - 7, y - 2, 14, 13, c);
-  rect(x - 6, y + 11, 4, 6, "#202729");
-  rect(x + 2, y + 11, 4, 6, "#202729");
+  rect(x - 6, y + 11 + step, 4, 6, "#202729");
+  rect(x + 2, y + 11 - step, 4, 6, "#202729");
+  if (role === "Shieldbearer") rect(x - 11, y, 5, 12, "#a0a09a");
+  if (role === "Spearman") rect(x + 10, y - 17, 2, 29, "#c5bb89");
+  if (role === "Archer") {
+    rect(x + 9, y - 4, 2, 14, "#bd9560");
+    rect(x + 11, y - 1, 2, 8, "#bd9560");
+  }
   rect(x - 5, y - 13, 10, 4, "#4c4639");
 }
+const view = { x: 0, y: 0, scale: 1 };
 function draw() {
-  rect(0, 0, 768, 432, "#657454");
+  const bounds = canvas.getBoundingClientRect();
+  const w = Math.max(1, Math.round(bounds.width)),
+    h = Math.max(1, Math.round(bounds.height));
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+  }
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = "#25362a";
+  ctx.fillRect(0, 0, w, h);
+  view.scale = s.battle
+    ? Math.min(w / 768, h / 432)
+    : Math.max(w / 768, Math.max(160, h - 180) / 432);
+  view.x = s.battle
+    ? (768 - w / view.scale) / 2
+    : Math.max(
+        0,
+        Math.min(768 - w / view.scale, s.position.x - w / view.scale / 2),
+      );
+  view.y = s.battle
+    ? (432 - h / view.scale) / 2
+    : Math.max(
+        0,
+        Math.min(
+          432 - (h - 180) / view.scale,
+          s.position.y - (h - 180) / view.scale / 2,
+        ),
+      );
+  canvas.dataset.viewX = view.x;
+  canvas.dataset.viewY = view.y;
+  canvas.dataset.scale = view.scale;
+  ctx.setTransform(
+    view.scale,
+    0,
+    0,
+    view.scale,
+    -view.x * view.scale,
+    -view.y * view.scale,
+  );
+  rect(-768, -432, 2304, 1296, "#657454");
   for (let i = 0; i < 450; i++) {
     const x = (i * 137 + 31) % 768,
       y = (i * 83 + 17) % 432;
@@ -1034,16 +1250,12 @@ function draw() {
   ctx.strokeStyle = "#456775";
   ctx.lineWidth = 24;
   ctx.beginPath();
-  ctx.moveTo(475, 0);
-  ctx.bezierCurveTo(390, 180, 700, 190, 490, 432);
+  for (let y = 0; y <= 432; y += 4) {
+    const x = 475 + Math.sin(y / 65) * 38;
+    if (y === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
   ctx.stroke();
-  ctx.strokeStyle = "#b5a477";
-  ctx.lineWidth = 9;
-  ctx.setLineDash([5, 4]);
-  ctx.beginPath();
-  places.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
-  ctx.stroke();
-  ctx.setLineDash([]);
   for (let i = 0; i < 65; i++) {
     let x = (i * 71 + 50) % 740,
       y = (i * 43 + 25) % 380;
@@ -1078,13 +1290,40 @@ function draw() {
       ctx.fillText("⚑ CONTRACT", p.x, p.y - 35);
     }
   });
-  const p = places[s.location];
-  person(p.x + 28, p.y, "#e0c47f");
+  if (s.destination) {
+    const goal = s.destination;
+    ctx.strokeStyle = "#e2cd8e";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(goal.x, goal.y, 9, 0, Math.PI * 2);
+    ctx.stroke();
+    rect(goal.x - 1, goal.y - 14, 2, 6, "#e2cd8e");
+    rect(goal.x - 1, goal.y + 9, 2, 6, "#e2cd8e");
+  }
+  const colors = [
+    "#e0c47f",
+    "#8e9b98",
+    "#8ca46e",
+    "#ab8265",
+    "#9d88ac",
+    "#b6aa8a",
+  ];
+  partyPositions(s)
+    .map((point, i) => ({ ...point, i }))
+    .sort((a, b) => a.y - b.y)
+    .forEach((p) => {
+      const step = s.destination
+        ? Math.sin(performance.now() / 100 + p.i * 1.7) > 0
+          ? 2
+          : -2
+        : 0;
+      person(p.x, p.y, colors[p.i], step, s.party[p.i].role);
+    });
 }
 canvas.onclick = (e) => {
   const r = canvas.getBoundingClientRect(),
-    x = ((e.clientX - r.left) * 768) / r.width,
-    y = ((e.clientY - r.top) * 432) / r.height;
+    x = view.x + (e.clientX - r.left) / view.scale,
+    y = view.y + (e.clientY - r.top) / view.scale;
   if (s.battle) {
     const tx = Math.floor((x - 105) / 62),
       ty = Math.floor(y / 60),
@@ -1094,8 +1333,9 @@ canvas.onclick = (e) => {
     if (ally) selected = ally.id;
     else act(s, selected, tx, ty);
   } else {
-    const i = places.findIndex((p) => Math.hypot(p.x - x, p.y - y) < 45);
-    if (i >= 0) travel(s, i);
+    heldKeys.clear();
+    moveTo(s, x, y);
+    drawerOpen = false;
   }
   render();
 };
@@ -1109,5 +1349,95 @@ $("reset").onclick = () => {
   }
 };
 render();
+
+$("close-drawer").onclick = () => {
+  drawerOpen = false;
+  render();
+};
+const heldKeys = new Set();
+let previousFrame = 0,
+  lastSave = 0;
+function animate(time) {
+  if (heldKeys.size && !s.battle && !s.event && !drawerOpen) {
+    const x =
+      (heldKeys.has("d") || heldKeys.has("ArrowRight") ? 1 : 0) -
+      (heldKeys.has("a") || heldKeys.has("ArrowLeft") ? 1 : 0);
+    const y =
+      (heldKeys.has("s") || heldKeys.has("ArrowDown") ? 1 : 0) -
+      (heldKeys.has("w") || heldKeys.has("ArrowUp") ? 1 : 0);
+    if (x || y) moveTo(s, s.position.x + x * 100, s.position.y + y * 100);
+  }
+  const seconds = previousFrame
+    ? Math.min((time - previousFrame) / 1000, 0.1)
+    : 0;
+  previousFrame = time;
+  if (s.destination) {
+    const before = {
+      day: s.day,
+      location: s.location,
+      moving: !!s.destination,
+    };
+    advanceMovement(s, seconds);
+    if (
+      before.day !== s.day ||
+      before.location !== s.location ||
+      !s.destination
+    )
+      render();
+    else {
+      draw();
+      $("map-label").textContent =
+        `${places[s.location]?.name || terrainAt(s.position).toUpperCase()} · ${Math.round(s.position.x)}, ${Math.round(s.position.y)} · walking`;
+    }
+    if (time - lastSave > 750) {
+      try {
+        localStorage.setItem("pixel-tales", JSON.stringify(s));
+      } catch {}
+      lastSave = time;
+    }
+  }
+  requestAnimationFrame(animate);
+}
+requestAnimationFrame(animate);
+
+window.addEventListener("resize", () => draw());
+
+const walkingKeys = [
+  "w",
+  "a",
+  "s",
+  "d",
+  "ArrowUp",
+  "ArrowDown",
+  "ArrowLeft",
+  "ArrowRight",
+];
+window.addEventListener("keydown", (event) => {
+  if (
+    !walkingKeys.includes(event.key) ||
+    s.battle ||
+    s.event ||
+    drawerOpen ||
+    event.ctrlKey ||
+    event.metaKey ||
+    event.altKey
+  )
+    return;
+  event.preventDefault();
+  heldKeys.add(event.key);
+});
+window.addEventListener("keyup", (event) => {
+  if (heldKeys.delete(event.key) && !heldKeys.size) {
+    stopMovement(s);
+    render();
+  }
+});
+window.addEventListener("blur", () => {
+  if (heldKeys.size) {
+    heldKeys.clear();
+    stopMovement(s);
+    render();
+  }
+});
 
 })();
