@@ -225,6 +225,19 @@ Each companion has separate **weapon, armor, shield, and helmet** slots in **Equ
 
 Fine gear can be bought at five renown or with ten Warden reputation. Research the armorer's craft and assign a Smith to craft fine equipment; a staffed camp forge reduces its ore cost further. Ordinary round shields, iron caps, and iron greatswords are also available.
 
+## Equipment wear and repair
+
+[Camp repairs on mobile](docs/screenshots/repairs-mobile.png)
+
+Named equipment has **100 condition** when bought, crafted, looted, or migrated from an older save. Wear applies once when a battle ends, to equipment worn by companions who entered that battle. Spare items and newly awarded loot stay intact. Victory costs **15 weapon condition** and **10 defensive condition**; retreat costs **10** for every equipped item; defeat costs **20**. Walking, ordinary upkeep, and exploring do not damage gear. Permanent improvements and company-issue equipment do not wear.
+
+At **25 condition or less**, the equipment bonus is halved and rounded down, with a minimum of one. At **zero**, it supplies no equipment bonus and its uncommon perk stops working. Broken equipment remains in the company, keeps its ownership and slot restrictions, and can be repaired. Class skills, specialization, and permanent improvements still work. Equipment cards show actual bonuses, condition bars, and repair quotes. Resale prices decrease with condition.
+
+- **Village blacksmith:** repair individual items in **Blacksmith → Equipment repairs** or **Equipment** for the displayed crown price. Repair costs scale with the item price and missing condition. Equipped items can be repaired, but battles and encounters block repairs.
+- **Camp forge:** build the forge, assign a conscious Smith in **Camp duties**, then choose **Open camp repairs**. Repairs consume ore and, for weapons and shields, one wood; each item takes two hours. Higher Smith ranks reduce the ore requirement. The worker gains one Smith practice per completed repair. Normal time and upkeep rules apply.
+
+Repairs restore full condition and all equipment effects. Insufficient crowns, missing materials, and an absent or unconscious worker leave the item and stores unchanged. Repaired items and damaged gear persist in existing saves.
+
 ## Regional stories and factions
 
 Regional stories are accepted **only at village contract boards**, using the same active-contract slot as ordinary work. Investigate the marked site, choose a branch, complete any required battle, and return to the issuing village for the final reward. Peaceful choices have real resource or reputation requirements. Completed choices remain visible in **Company**, and rewards cannot be claimed twice.
@@ -270,6 +283,7 @@ PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node
 PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/companions-smoke.mjs
 PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/complete-systems-smoke.mjs
 PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/advanced-skills-smoke.mjs
+PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/durability-smoke.mjs
 ```
 
 It uses `/usr/bin/chromium` by default; override `CHROMIUM_PATH` or `GAME_URL` as needed. Desktop and mobile screenshots are written under `/tmp`. The village smoke test checks regional offers, renown locks and unlocks, resale, inn recovery, save persistence, and dangerous encounters. The equipment smoke test covers purchases, class restrictions, assignment and transfer, resale, research and crafting, combat restrictions, reloads, mobile layout, and new-company reset.
@@ -284,4 +298,6 @@ The complete-systems smoke test checks regional stock depletion, trading routes 
 
 The advanced-skills smoke test covers prerequisites, training costs, permanent choices, save persistence, mobile menus, upgraded combat actions, armor/cover piercing, specialization compatibility, and cooldowns.
 
-Further development includes durability, procedural encounters, and Android packaging.
+The durability smoke test verifies broken-gear stats, village and staffed camp repairs, material costs, Smith practice, mobile menus, persistence, and retreat wear.
+
+Further development includes procedural encounters, and Android packaging.

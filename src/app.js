@@ -67,6 +67,11 @@ import {
   contractDifficulty,
   equipmentCatalog,
   gearItem,
+  equipmentCondition,
+  equipmentSalePrice,
+  repairQuote,
+  repairEquipment,
+  retreatBattle,
   gearOwner,
   equippedItem,
   armorPower,
@@ -202,6 +207,18 @@ function equipmentCard(item) {
     item.name,
     `<p class="gear-quality quality-${item.tier}">${item.rarity} · ${item.role || (item.slot === "shield" ? "Melee companions" : "All companions")} · ${item.slot}</p><p>+${item.bonus} ${item.slot === "weapon" ? "attack" : "armor"} when equipped</p>${item.twoHanded ? "<p>Two-handed: returns your shield to stores.</p>" : ""}${item.perk ? `<p class="gear-perk">${equipmentPerks[item.perk]}</p>` : ""}`,
   );
+  if (item.instanceId) {
+    const condition = document.createElement("p");
+    condition.className = item.durability <= 25 ? "gear-worn" : "hint";
+    condition.textContent = `${equipmentCondition(item)} · Condition ${item.durability}/100${item.durability === 0 ? " · no gear bonus or perk until repaired" : item.durability <= 25 ? " · reduced gear bonus" : ""}`;
+    c.append(condition);
+    const bar = document.createElement("div");
+    bar.className = "bar condition-bar";
+    const fill = document.createElement("i");
+    fill.style.width = `${item.durability}%`;
+    bar.append(fill);
+    c.append(bar);
+  }
   c.classList.add("gear-card");
   c.dataset.quality = item.tier;
   c.querySelector(".pixel-icon").replaceWith(
@@ -219,6 +236,28 @@ function equipmentCard(item) {
     ),
   );
   return c;
+}
+function repairButton(item) {
+  const quote = repairQuote(s, item.instanceId);
+  const cost =
+    quote.mode === "camp"
+      ? `${quote.ore} ore · ${quote.wood} wood · 2 hours`
+      : `${quote.gold} crowns`;
+  const b = button(
+    `Repair ${item.name} · ${cost}`,
+    () => repairEquipment(s, item.instanceId),
+    !!quote.locked ||
+      !quote.missing ||
+      (quote.mode === "camp"
+        ? s.inventory.ore < quote.ore || s.inventory.wood < quote.wood
+        : s.gold < quote.gold),
+  );
+  b.title =
+    quote.locked ||
+    (quote.mode === "camp"
+      ? `${quote.smith.name} restores this item and gains one Smith practice.`
+      : "Restore condition, bonuses and perks to full strength.");
+  return b;
 }
 function objective() {
   if (s.event)
@@ -635,6 +674,16 @@ function render() {
       duties.append(row);
     }
     panel.append(duties);
+    const maintenance = card(
+      "Camp equipment maintenance",
+      "<p>A staffed forge repairs worn gear with ore, wood and two hours of work per item. Higher Smith ranks reduce ore costs. View condition and repair quotes in Equipment.</p>",
+    );
+    maintenance.append(
+      button("Open camp repairs", () => {
+        tab = "Equipment";
+      }),
+    );
+    panel.append(maintenance);
     for (const building of campStructures) {
       const plan = campBuildPlan(s, building.id);
       const done = plan.level >= plan.max;
@@ -673,7 +722,7 @@ function render() {
     panel.append(
       card(
         "Company equipment",
-        "<p>Choose a companion to equip or transfer gear. Weapons fit their class; armor fits anyone. Bonuses add to permanent improvements. Gear stays locked during combat and encounters.</p>",
+        "<p>Choose a companion to equip or transfer gear. Weapons fit their class; armor fits anyone. Bonuses add to permanent improvements. Battles wear equipped gear: at 25 condition bonuses are reduced; at zero gear bonuses and perks stop working. Repair here at a village or staffed camp forge. Gear stays locked during combat and encounters.</p>",
       ),
     );
     const selector = document.createElement("select");
@@ -718,6 +767,7 @@ function render() {
       const item = gearItem(s, entry.id),
         owner = gearOwner(s, entry.id);
       const c = equipmentCard(item);
+      if (item.durability < 100) c.append(repairButton(item));
       const ownership = document.createElement("p");
       ownership.textContent = owner
         ? `Equipped by ${owner.name}`
@@ -743,7 +793,7 @@ function render() {
       if (places[s.location]?.type === "town")
         c.append(
           button(
-            `Sell ${item.name} · ${Math.floor(item.price * 0.4)} crowns`,
+            `Sell ${item.name} · ${equipmentSalePrice(item)} crowns`,
             () => sellEquipment(s, entry.id),
             !!owner || !!s.battle || !!s.event,
           ),
@@ -1131,6 +1181,25 @@ function render() {
     }
   }
   if (inVillage && tab === "Blacksmith") {
+    const repairs = card(
+      "Equipment repairs",
+      "<p>Restore damaged equipment to full condition. Equipped items can be repaired outside combat. Camp repairs require a staffed forge and materials instead of crowns.</p>",
+    );
+    for (const entry of s.gear) {
+      const item = gearItem(s, entry.id);
+      if (item.durability < 100) {
+        const row = equipmentCard(item);
+        row.append(repairButton(item));
+        repairs.append(row);
+      }
+    }
+    if (!s.gear.some((entry) => gearItem(s, entry.id).durability < 100))
+      repairs.append(
+        document.createTextNode(
+          "All company equipment is serviceable at full condition.",
+        ),
+      );
+    panel.append(repairs);
     panel.append(
       card(
         "Equipment for sale",
@@ -1293,12 +1362,7 @@ function render() {
         () => guard(s, selected),
         s.battle.units.find((u) => u.id === selected)?.acted,
       ),
-      button("Retreat · lose 15 crowns", () => {
-        s.gold = Math.max(0, s.gold - 15);
-        s.battle = null;
-        s.morale = Math.max(0, s.morale - 10);
-        note(s, "Retreated. The company lives to fight another day.");
-      }),
+      button("Retreat · lose 15 crowns", () => retreatBattle(s)),
     );
     const actor = s.party[selected],
       unit = s.battle.units.find((u) => u.id === selected),

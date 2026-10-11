@@ -747,3 +747,11 @@ nav button[data-count]::after {
   max-height: calc(100vh - 235px);
   overflow-y: auto;
 }
+
+.condition-bar i {
+  background: #92966a;
+}
+.gear-worn {
+  color: #815d36;
+  font-weight: bold;
+}
