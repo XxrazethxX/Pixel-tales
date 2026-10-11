@@ -1,3 +1,4 @@
+import { enterGame } from "./smoke-menu.mjs";
 import assert from "node:assert/strict";
 import { fresh, startBattle } from "../src/game.js";
 const { chromium } = await import(
@@ -24,9 +25,11 @@ try {
       s,
     );
     await page.reload();
+    await enterGame(page);
     await page.waitForSelector("#tabs button");
   };
   await page.goto(process.env.GAME_URL || "http://127.0.0.1:3000/");
+  await enterGame(page);
   const s = fresh();
   s.gold = 500;
   await seed(s);
@@ -64,11 +67,9 @@ try {
     true,
   );
   await click("Company");
-  const veyra = page
-    .locator(".companion-card")
-    .filter({
-      has: page.getByRole("heading", { name: "Veyra · Level 1", exact: true }),
-    });
+  const veyra = page.locator(".companion-card").filter({
+    has: page.getByRole("heading", { name: "Veyra · Level 1", exact: true }),
+  });
   assert.ok((await veyra.textContent()).includes("Daily wages: 3 crowns"));
   assert.ok((await veyra.textContent()).includes("Resolve 65/100"));
   await veyra.getByText("Relationships", { exact: true }).click();
@@ -113,6 +114,7 @@ try {
   );
   await click("Break camp");
   await page.reload();
+  await enterGame(page);
   assert.equal((await state()).bonds["0:3"], 5);
   assert.ok((await state()).hiredRecruits.includes("0-veteran"));
   await click("Visit The Crooked Lantern");

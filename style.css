@@ -755,3 +755,136 @@ nav button[data-count]::after {
   color: #815d36;
   font-weight: bold;
 }
+
+.front-menu {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  overflow: auto;
+  padding: 40px 16px;
+  background:
+    linear-gradient(#35392dd9, #35392df5),
+    repeating-linear-gradient(45deg, #566344 0 24px, #46563c 24px 48px);
+}
+.front-menu[hidden] {
+  display: none;
+}
+.menu-open > header,
+.menu-open > main,
+.menu-open > footer {
+  visibility: hidden;
+}
+.menu-content {
+  max-width: 680px;
+  margin: auto;
+  background: #e4d6b2;
+  border: 4px double #96825e;
+  padding: 30px;
+  box-shadow: 0 16px 60px #1118;
+}
+.menu-content h1 {
+  color: #655a36;
+  font-size: 36px;
+  letter-spacing: 5px;
+  margin: 12px 0;
+}
+.menu-content h2 {
+  font-size: 20px;
+  font-weight: normal;
+}
+.menu-content p {
+  line-height: 1.8;
+}
+.menu-controls {
+  display: grid;
+  gap: 12px;
+  margin: 24px 0;
+}
+.menu-controls button {
+  padding: 16px;
+  font-size: 15px;
+}
+.save-preview,
+.banner-preview {
+  padding: 14px;
+  background: #d4c59e;
+  border: 1px solid #b4a17b;
+}
+.banner-preview {
+  color: #fff1c9;
+  font-size: 20px;
+  text-align: center;
+  margin: 14px 0;
+}
+.menu-footnote {
+  color: #70684f;
+  font-size: 11px;
+}
+.menu-save-card,
+.founder-card {
+  border: 1px solid #b4a17b;
+  padding: 16px;
+  margin: 16px 0;
+  background: #ecdfbd;
+}
+.menu-save-card button,
+.founder-card button {
+  margin: 4px;
+}
+.creator-field {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  align-items: center;
+  margin: 12px 0;
+}
+.creator-field input,
+.creator-field select {
+  width: 100%;
+  min-width: 0;
+  padding: 10px;
+  font: inherit;
+  background: #f1e5c7;
+  border: 1px solid #96825e;
+  color: #433f30;
+}
+.setting-row {
+  display: block;
+  margin: 20px 0;
+  padding: 14px;
+  border: 1px solid #b4a17b;
+}
+.setting-row input {
+  margin-right: 12px;
+}
+.menu-message {
+  color: #843b2e;
+}
+.large-text .card p,
+.large-text .menu-content p,
+.large-text button,
+.large-text select,
+.large-text input,
+.large-text label {
+  font-size: 14px;
+}
+.reduce-motion * {
+  transition: none !important;
+  animation: none !important;
+}
+@media (max-width: 600px) {
+  .front-menu {
+    padding: 12px;
+  }
+  .menu-content {
+    padding: 18px;
+  }
+  .menu-content h1 {
+    font-size: 27px;
+    letter-spacing: 3px;
+  }
+  .creator-field {
+    grid-template-columns: 1fr;
+    gap: 5px;
+  }
+}

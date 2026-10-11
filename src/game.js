@@ -113,6 +113,9 @@ export function researchLock(s, id) {
 export function fresh() {
   return {
     version: 11,
+    companyName: "The Ashen Company",
+    banner: "ashen",
+    origin: "wanderers",
     inventory: { ore: 0, wood: 0, herbs: 0, medicine: 1, pelts: 0 },
     gear: [],
     nextGearId: 1,
@@ -749,6 +752,13 @@ export function restore(raw) {
     if (Number.isInteger(day) && day >= 1 && day <= result.day)
       result.lessonLedger[id] = day;
   }
+  result.companyName = safeCompanyName(raw.companyName);
+  result.banner = companyBanners.some((b) => b.id === raw.banner)
+    ? raw.banner
+    : "ashen";
+  result.origin = companyOrigins.some((o) => o.id === raw.origin)
+    ? raw.origin
+    : "wanderers";
   const validPosition =
     raw.position &&
     Number.isFinite(raw.position.x) &&
@@ -859,6 +869,8 @@ export function restore(raw) {
     fatigue: Number.isFinite(p.fatigue)
       ? Math.max(0, Math.min(100, p.fatigue))
       : 0,
+    name: safeCompanyName(p.name, `Companion ${id + 1}`, 18),
+    coat: /^#[0-9a-f]{6}$/i.test(p.coat || "") ? p.coat : undefined,
     profession: p.profession || "Cook",
     professionXP: p.professionXP || 0,
     professionXPBy: Object.fromEntries(
@@ -5435,4 +5447,147 @@ export function resolveRumors(s) {
         .join(", ")}.`,
     );
   }
+}
+
+export const companyBanners = [
+  { id: "ashen", name: "Ashen sun", color: "#ad8057", symbol: "☀" },
+  { id: "pine", name: "Pine wardens", color: "#72825a", symbol: "♠" },
+  { id: "iron", name: "Iron tower", color: "#85948c", symbol: "▥" },
+  { id: "wine", name: "Crimson star", color: "#986267", symbol: "✦" },
+];
+export const companyOrigins = [
+  {
+    id: "wanderers",
+    name: "Road wanderers",
+    desc: "120 crowns, 24 rations. A balanced start with four novice companions.",
+    gold: 120,
+    food: 24,
+  },
+  {
+    id: "traders",
+    name: "Caravan survivors",
+    desc: "180 crowns, 18 rations and 4 grain. More trading capital, fewer provisions.",
+    gold: 180,
+    food: 18,
+    grain: 4,
+  },
+  {
+    id: "settlers",
+    name: "Frontier settlers",
+    desc: "80 crowns, 32 rations, 6 wood and 4 herbs. Supplies for building camp, less spending money.",
+    gold: 80,
+    food: 32,
+    wood: 6,
+    herbs: 4,
+  },
+  {
+    id: "veterans",
+    name: "Disbanded soldiers",
+    desc: "70 crowns, 20 rations and 5 renown. Each founder starts at level 2 with one training point.",
+    gold: 70,
+    food: 20,
+    renown: 5,
+    veteran: true,
+  },
+];
+export const founderRoles = {
+  Swordswoman: { max: 28, damage: 7 },
+  Shieldbearer: { max: 34, damage: 5 },
+  Archer: { max: 22, damage: 6 },
+  Spearman: { max: 26, damage: 6 },
+};
+export function safeCompanyName(
+  value,
+  fallback = "The Ashen Company",
+  max = 30,
+) {
+  return typeof value === "string"
+    ? value
+        .replace(/[<>\x00-\x1f]/g, "")
+        .trim()
+        .slice(0, max) || fallback
+    : fallback;
+}
+export function createCompany(options) {
+  if (
+    !options ||
+    !companyBanners.some((b) => b.id === options.banner) ||
+    !companyOrigins.some((o) => o.id === options.origin) ||
+    !Array.isArray(options.founders) ||
+    options.founders.length !== 4
+  )
+    return null;
+  if (
+    typeof options.name !== "string" ||
+    !options.name.trim() ||
+    options.name.trim().length > 30
+  )
+    return null;
+  for (const p of options.founders)
+    if (
+      !p ||
+      typeof p.name !== "string" ||
+      !p.name.trim() ||
+      p.name.trim().length > 18 ||
+      !Object.hasOwn(founderRoles, p.role) ||
+      !professions.includes(p.profession) ||
+      !companionTraits.some((t) => t.id === p.trait)
+    )
+      return null;
+  const s = fresh(),
+    origin = companyOrigins.find((o) => o.id === options.origin);
+  s.companyName = safeCompanyName(options.name);
+  s.banner = options.banner;
+  s.origin = origin.id;
+  s.gold = origin.gold;
+  s.food = origin.food;
+  s.renown = origin.renown || 0;
+  s.cargo.grain = origin.grain || 0;
+  s.inventory.wood = origin.wood || 0;
+  s.inventory.herbs = origin.herbs || 0;
+  s.party = options.founders.map((p, id) => {
+    const stats = founderRoles[p.role],
+      hearty = p.trait === "hearty";
+    return {
+      ...s.party[id],
+      name: safeCompanyName(p.name, `Companion ${id + 1}`, 18),
+      role: p.role,
+      max: hearty ? 32 : stats.max,
+      hp: hearty ? 32 : stats.max,
+      damage: stats.damage + (p.trait === "mercenary" ? 1 : 0),
+      profession: p.profession,
+      traits: [p.trait],
+      level: origin.veteran ? 2 : 1,
+      points: origin.veteran ? 1 : 0,
+      coat: companyBanners.find((b) => b.id === options.banner).color,
+    };
+  });
+  s.log = [
+    `${s.companyName} arrives at Greyhaven. ${origin.name}: find work, trade, or make camp.`,
+  ];
+  return s;
+}
+export function isCompanySave(raw) {
+  return (
+    !!raw &&
+    Array.isArray(raw.party) &&
+    raw.party.length > 0 &&
+    raw.party.length <= 6 &&
+    Array.isArray(raw.research) &&
+    Number.isInteger(raw.location) &&
+    (raw.location === -1 || !!places[raw.location]) &&
+    ["day", "gold", "food", "morale", "knowledge", "completed"].every(
+      (k) => Number.isFinite(raw[k]) && raw[k] >= 0,
+    ) &&
+    raw.party.every(
+      (p) =>
+        p &&
+        typeof p.name === "string" &&
+        Number.isFinite(p.hp) &&
+        Number.isFinite(p.max) &&
+        p.max > 0 &&
+        p.hp >= 0 &&
+        p.hp <= p.max,
+    )
+  );
 }

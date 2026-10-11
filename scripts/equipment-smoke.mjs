@@ -1,3 +1,4 @@
+import { enterGame } from "./smoke-menu.mjs";
 import assert from "node:assert/strict";
 import { fresh, places } from "../src/game.js";
 const { chromium } = await import(
@@ -24,9 +25,11 @@ try {
       s,
     );
     await page.reload();
+    await enterGame(page);
     await page.waitForSelector("#tabs button");
   };
   await page.goto(process.env.GAME_URL || "http://127.0.0.1:3000/");
+  await enterGame(page);
   const fixture = fresh();
   fixture.gold = 240;
   fixture.renown = 5;
@@ -127,6 +130,7 @@ try {
   await click("Close panel");
   await click("Retreat · lose 15 crowns");
   await page.reload();
+  await enterGame(page);
   await page.waitForSelector("#tabs button");
   s = await state();
   assert.equal(s.party[0].equipment.weapon, 3);
@@ -149,7 +153,9 @@ try {
     true,
   );
   page.once("dialog", (dialog) => dialog.accept());
-  await click("New company");
+  await click("Main menu");
+  await click("New Company");
+  await click("Begin adventure");
   await click("Equipment");
   assert.ok(
     (await page.locator("#panel").textContent()).includes("No spare gear yet"),

@@ -1,4 +1,9 @@
 import {
+  createCompany,
+  companyBanners,
+  companyOrigins,
+  founderRoles,
+  isCompanySave,
   campCost,
   healAmount,
   craftPlan,
@@ -169,6 +174,14 @@ import {
   drawLighting,
   drawLoadout,
 } from "./art.js";
+let gameActive = false;
+let hasSessionCompany = false;
+let menuSettings = { largeText: false, reduceMotion: false, slowDays: false };
+try {
+  const saved = JSON.parse(localStorage.getItem("pixel-tales-settings"));
+  for (const key of Object.keys(menuSettings))
+    menuSettings[key] = saved?.[key] === true;
+} catch {}
 let s = fresh();
 try {
   s = restore(JSON.parse(localStorage.getItem("pixel-tales")));
@@ -298,6 +311,10 @@ function objective() {
     : "Click or tap anywhere to walk. Visit towns for contracts and trade, or venture into the wilderness.";
 }
 function render() {
+  document.querySelector(".brand small").textContent =
+    s.companyName.toUpperCase();
+  document.querySelector(".brand-mark").textContent =
+    companyBanners.find((b) => b.id === s.banner)?.symbol || "✦";
   if (companyLost(s)) {
     tab = "Company";
     drawerOpen = true;
@@ -392,7 +409,7 @@ function render() {
     tab === "Town"
       ? places[s.location].name
       : {
-          Company: "The Ashen Company",
+          Company: s.companyName,
           Equipment: "Equipment & loot",
           Camp: "The company camp",
           Market: "Market square",
@@ -415,14 +432,14 @@ function render() {
       "Training",
     ].includes(tab)
       ? `${places[s.location].name} · SETTLEMENT`
-      : "THE ASHEN COMPANY";
+      : s.companyName.toUpperCase();
   const panel = $("panel");
   panel.replaceChildren();
   if (tab === "Company") {
     const standing = companyStanding(s);
     panel.append(
       card(
-        "The Ashen Company",
+        s.companyName,
         `<div class="row"><span class="hint">${s.completed} contracts · ${s.skirmishes} skirmishes · ${s.renown} renown</span><span class="badge">Morale ${s.morale}%</span></div><div class="bar"><i style="width:${s.morale}%"></i></div><p>${standing.name}${standing.next ? ` · ${standing.next.renown - s.renown} more renown to become ${standing.next.name}` : " · Highest standing achieved"}. Complete contracts to unlock tougher work.</p><p>Map: ${s.discovered.length}/${places.length} locations discovered.</p><p>Wages: ${dailyWages(s)} crowns per day. At 85 morale, all attacks gain +1 damage. Injuries reduce attack by 1. Skilled cooks reduce camp supplies to ${campCost(s)} rations.</p>`,
       ),
     );
@@ -1454,7 +1471,7 @@ function render() {
           tab = "Company";
         }),
       );
-    $("map-label").textContent = "The Ashen Company · camp";
+    $("map-label").textContent = `${s.companyName} · camp`;
   } else if (s.event) {
     const c = card(s.event.title, `<p>${s.event.text}</p>`);
     c.id = "event";
@@ -1916,7 +1933,7 @@ function draw() {
         person(
           136 + u.x * 62,
           28 + u.y * 60,
-          u.acted ? "#889079" : partyCoats[u.id],
+          u.acted ? "#889079" : s.party[u.id].coat || partyCoats[u.id],
           0,
           s.party[u.id].role,
           u.id,
@@ -2008,12 +2025,20 @@ function draw() {
     .filter((p) => !s.party[p.i].dead)
     .sort((a, b) => a.y - b.y)
     .forEach((p) => {
-      const step = s.destination
-        ? Math.sin(performance.now() / 100 + p.i * 1.7) > 0
-          ? 2
-          : -2
-        : 0;
-      person(p.x, p.y, partyCoats[p.i], step, s.party[p.i].role, p.i);
+      const step =
+        s.destination && !menuSettings.reduceMotion
+          ? Math.sin(performance.now() / 100 + p.i * 1.7) > 0
+            ? 2
+            : -2
+          : 0;
+      person(
+        p.x,
+        p.y,
+        s.party[p.i].coat || partyCoats[p.i],
+        step,
+        s.party[p.i].role,
+        p.i,
+      );
       drawLoadout(ctx, s, s.party[p.i], p.x, p.y);
     });
   drawLighting(ctx, s, canvas.width, canvas.height);
@@ -2050,16 +2075,13 @@ canvas.onclick = (e) => {
   render();
 };
 $("reset").onclick = () => {
-  if (
-    confirm("Start a new company? Your current local save will be replaced.")
-  ) {
-    s = fresh();
-    observedLocation = null;
-    selected = 0;
-    render();
-  }
+  stopMovement(s);
+  heldKeys.clear();
+  render();
+  gameActive = false;
+  showFrontMenu();
 };
-render();
+showFrontMenu();
 
 $("close-drawer").onclick = () => {
   if (s.campOpen) {
@@ -2087,6 +2109,11 @@ function updateClockUI() {
     `${s.hungerDays ? `STARVING · day ${s.hungerDays}. Find food before the next meal. ` : ""}${s.wageDebt ? `${s.wageDebt} crowns in unpaid wages. ` : ""}${exhausted.length ? `${exhausted.length} exhausted · camp to recover. ` : ""}${disheartened.length ? `${disheartened.length} disheartened · share a meal and rest.` : ""}`;
 }
 function animate(time) {
+  if (!gameActive) {
+    previousFrame = time;
+    requestAnimationFrame(animate);
+    return;
+  }
   if (
     heldKeys.size &&
     !s.battle &&
@@ -2143,7 +2170,7 @@ function animate(time) {
     !document.hidden
   ) {
     const dayBefore = s.day;
-    advanceClock(s, seconds);
+    advanceClock(s, seconds * (menuSettings.slowDays ? 0.5 : 1));
     if (dayBefore !== s.day || s.event || companyLost(s)) render();
     updateClockUI();
     const nearbyBefore = nearbyPatrols(s)
@@ -2182,6 +2209,7 @@ const walkingKeys = [
   "ArrowRight",
 ];
 window.addEventListener("keydown", (event) => {
+  if (!gameActive) return;
   if (
     !walkingKeys.includes(event.key) ||
     s.battle ||
@@ -2280,3 +2308,400 @@ canvas.addEventListener("pointermove", (event) => {
     $("map-label").textContent =
       `${enemy.name || enemy.kind || "raider"} · HP ${enemy.hp}/${enemy.max} · Armor ${enemy.armor || 0} · Range ${enemy.kind === "archer" ? 4 : 1}${enemy.kind === "wolf" ? ` · Rush ${enemy.bossId === "ashfang" ? 3 : 2} · pack hunter` : enemy.kind === "archer" ? " · Keeps distance" : " · Melee flanking +2"}${enemy.stun ? " · Stunned" : ""}${enemy.bleed ? " · Bleeding" : ""}${enemy.bossId ? ` · ${namedAdversaries.find((boss) => boss.id === enemy.bossId)?.mechanic || "Named adversary"}` : ""}`;
 });
+
+function menuRead(key, fallback = null) {
+  try {
+    return JSON.parse(localStorage.getItem(key)) ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+function menuWrite(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+    return true;
+  } catch {
+    return false;
+  }
+}
+function menuElement(tag, text, className) {
+  const e = document.createElement(tag);
+  if (text) e.textContent = text;
+  if (className) e.className = className;
+  return e;
+}
+function menuButton(text, fn, disabled = false) {
+  const b = menuElement("button", text);
+  b.type = "button";
+  b.disabled = disabled;
+  b.onclick = fn;
+  return b;
+}
+function menuMessage(text) {
+  let e = $("menu-message");
+  if (!e) {
+    e = menuElement("p", "", "menu-message");
+    e.id = "menu-message";
+    e.setAttribute("role", "status");
+    $("menu-content").append(e);
+  }
+  e.textContent = text;
+}
+function menuShell(title) {
+  gameActive = false;
+  heldKeys.clear();
+  document.body.classList.add("menu-open");
+  $("front-menu").hidden = false;
+  for (const e of document.querySelectorAll(
+    "body > header, body > main, body > footer",
+  ))
+    e.inert = true;
+  applyMenuSettings();
+  const root = $("menu-content");
+  root.replaceChildren();
+  root.append(
+    menuElement("div", "THE BORDERLANDS AWAIT", "eyebrow"),
+    menuElement("h1", "PIXEL TALES"),
+    menuElement("h2", title),
+  );
+  return root;
+}
+function applyMenuSettings() {
+  document.body.classList.toggle("large-text", menuSettings.largeText);
+  document.body.classList.toggle("reduce-motion", menuSettings.reduceMotion);
+}
+function beginPlaying(company) {
+  hasSessionCompany = true;
+  s = company;
+  gameActive = true;
+  observedLocation = null;
+  pendingVillage = null;
+  selected = 0;
+  abilityMode = false;
+  drawerOpen = false;
+  tab = "Company";
+  heldKeys.clear();
+  $("front-menu").hidden = true;
+  document.body.classList.remove("menu-open");
+  for (const e of document.querySelectorAll(
+    "body > header, body > main, body > footer",
+  ))
+    e.inert = false;
+  render();
+}
+function showFrontMenu() {
+  const root = menuShell("A company of your own"),
+    saved = hasSessionCompany ? s : menuRead("pixel-tales"),
+    valid = isCompanySave(saved);
+  root.append(
+    menuElement(
+      "p",
+      "Walk the open map. Build your camp. Decide what kind of company survives.",
+      "menu-intro",
+    ),
+  );
+  if (valid)
+    root.append(
+      menuElement(
+        "p",
+        `${saved.companyName || "The Ashen Company"} · Day ${saved.day} · ${saved.party.filter((p) => !p.dead).length} companions`,
+        "save-preview",
+      ),
+    );
+  else if (saved)
+    root.append(
+      menuElement(
+        "p",
+        "The autosave could not be read. It has been kept; you can load a manual save.",
+        "menu-message",
+      ),
+    );
+  const controls = menuElement("div", "", "menu-controls");
+  controls.append(
+    menuButton("Continue", () => beginPlaying(restore(saved)), !valid),
+    menuButton("New Company", showCompanyCreator),
+    menuButton("Load", showLoadMenu),
+    menuButton("Settings", showSettingsMenu),
+  );
+  root.append(controls);
+  root.append(
+    menuElement(
+      "p",
+      "Progress saves in this browser. Manual slots keep separate snapshots.",
+      "menu-footnote",
+    ),
+  );
+}
+function showLoadMenu() {
+  const root = menuShell("Saved companies");
+  root.append(
+    menuElement(
+      "p",
+      "Continue uses the latest autosave. Save a snapshot in one of three slots before trying a different company.",
+      "menu-intro",
+    ),
+  );
+  const entries = menuRead("pixel-tales-slots", []),
+    slots = Array.isArray(entries) ? entries.slice(0, 3) : [];
+  const current = hasSessionCompany ? s : menuRead("pixel-tales");
+  for (let i = 0; i < 3; i++) {
+    const entry = slots[i],
+      valid = isCompanySave(entry?.state),
+      c = menuElement("section", "", "menu-save-card");
+    c.append(menuElement("h3", `Slot ${i + 1}`));
+    c.append(
+      menuElement(
+        "p",
+        valid
+          ? `${entry.state.companyName || "The Ashen Company"} · Day ${entry.state.day} · ${entry.state.gold} crowns · ${entry.state.party.filter((p) => !p.dead).length} companions`
+          : entry
+            ? "Unreadable save; not loaded."
+            : "Empty slot",
+      ),
+    );
+    c.append(
+      menuButton(
+        `Load slot ${i + 1}`,
+        () => {
+          if (
+            !confirm(
+              "Load this snapshot? It will replace the current autosave. Other manual slots remain saved.",
+            )
+          )
+            return;
+          beginPlaying(restore(entry.state));
+        },
+        !valid,
+      ),
+    );
+    c.append(
+      menuButton(
+        `Save to slot ${i + 1}`,
+        () => {
+          if (entry && !confirm(`Replace the snapshot in slot ${i + 1}?`))
+            return;
+          slots[i] = { state: current };
+          if (!menuWrite("pixel-tales-slots", slots)) {
+            menuMessage(
+              "Storage is unavailable or full. The slot was not saved.",
+            );
+            return;
+          }
+          showLoadMenu();
+        },
+        !isCompanySave(current),
+      ),
+    );
+    root.append(c);
+  }
+  root.append(menuButton("Back", showFrontMenu));
+}
+function showSettingsMenu() {
+  const root = menuShell("Settings");
+  for (const [key, label, desc] of [
+    [
+      "largeText",
+      "Larger interface text",
+      "Larger text in menus, cards and controls.",
+    ],
+    [
+      "reduceMotion",
+      "Reduced motion",
+      "Disable interface transitions and walking bob animation.",
+    ],
+    [
+      "slowDays",
+      "Longer exploration days",
+      "Eight minutes per exploration day instead of four. Lessons, rest and other timed actions keep their stated duration.",
+    ],
+  ]) {
+    const row = menuElement("label", "", "setting-row"),
+      input = document.createElement("input");
+    input.type = "checkbox";
+    input.setAttribute("aria-label", label);
+    input.checked = menuSettings[key];
+    input.onchange = () => {
+      menuSettings[key] = input.checked;
+      applyMenuSettings();
+      if (!menuWrite("pixel-tales-settings", menuSettings))
+        menuMessage(
+          "Settings apply for this session; browser storage is unavailable.",
+        );
+    };
+    row.append(input, menuElement("strong", label), menuElement("p", desc));
+    root.append(row);
+  }
+  root.append(menuButton("Back", showFrontMenu));
+}
+function creatorField(parent, label, value, options, maxLength) {
+  const row = menuElement("label", "", "creator-field");
+  row.append(menuElement("span", label));
+  const input = document.createElement(options ? "select" : "input");
+  input.setAttribute("aria-label", label);
+  if (options)
+    for (const [id, text] of options) {
+      const option = menuElement("option", text);
+      option.value = id;
+      input.append(option);
+    }
+  else {
+    input.type = "text";
+    input.required = true;
+    input.maxLength = maxLength || 30;
+  }
+  input.value = value;
+  row.append(input);
+  parent.append(row);
+  return input;
+}
+function showCompanyCreator() {
+  const root = menuShell("Found your company"),
+    form = document.createElement("form");
+  form.id = "company-creator";
+  const name = creatorField(
+    form,
+    "Company name",
+    "The Ashen Company",
+    null,
+    30,
+  );
+  const banner = creatorField(
+    form,
+    "Company banner",
+    "ashen",
+    companyBanners.map((b) => [b.id, `${b.symbol} ${b.name}`]),
+  );
+  const preview = menuElement("div", "", "banner-preview");
+  form.append(preview);
+  const updateBanner = () => {
+    const b = companyBanners.find((b) => b.id === banner.value);
+    preview.textContent = `${b.symbol}  ${name.value || "Your company"}`;
+    preview.style.background = b.color;
+  };
+  banner.onchange = updateBanner;
+  name.oninput = updateBanner;
+  updateBanner();
+  const origin = creatorField(
+    form,
+    "Starting background",
+    "wanderers",
+    companyOrigins.map((o) => [o.id, o.name]),
+  );
+  const originDesc = menuElement("p", "", "save-preview");
+  const updateOrigin = () =>
+    (originDesc.textContent = companyOrigins.find(
+      (o) => o.id === origin.value,
+    ).desc);
+  origin.onchange = updateOrigin;
+  updateOrigin();
+  form.append(originDesc);
+  form.append(
+    menuElement("h3", "Your founding companions"),
+    menuElement(
+      "p",
+      "Choose four founders. Classes can repeat. Traits affect upkeep, resolve, hunger and combat; professions determine camp jobs and fieldwork.",
+    ),
+  );
+  const defaults = fresh().party,
+    fields = [],
+    portraitUpdates = [];
+  defaults.forEach((p, i) => {
+    const c = menuElement("fieldset", "", "founder-card");
+    c.append(menuElement("legend", `Founder ${i + 1}`));
+    const f = {
+      name: creatorField(c, `Founder ${i + 1} name`, p.name, null, 18),
+      role: creatorField(
+        c,
+        `Founder ${i + 1} class`,
+        p.role,
+        Object.keys(founderRoles).map((r) => [r, r]),
+      ),
+      profession: creatorField(
+        c,
+        `Founder ${i + 1} profession`,
+        p.profession,
+        professions.map((r) => [r, r]),
+      ),
+      trait: creatorField(
+        c,
+        `Founder ${i + 1} trait`,
+        p.traits[0],
+        companionTraits.map((t) => [t.id, t.name]),
+      ),
+    };
+    const portrait = document.createElement("div"),
+      desc = menuElement("p");
+    const update = () => {
+      const stats = founderRoles[f.role.value],
+        t = companionTraits.find((t) => t.id === f.trait.value);
+      desc.textContent = `${f.trait.value === "hearty" ? 32 : stats.max} health · ${stats.damage + (f.trait.value === "mercenary" ? 1 : 0)} attack · ${f.trait.value === "mercenary" ? 3 : 2} crowns per day. ${t.desc}`;
+      portrait.replaceChildren(
+        portraitArtwork({
+          ...p,
+          role: f.role.value,
+          coat: companyBanners.find((b) => b.id === banner.value).color,
+        }),
+      );
+    };
+    portraitUpdates.push(update);
+    f.role.onchange = update;
+    f.trait.onchange = update;
+    update();
+    c.prepend(portrait);
+    c.append(desc);
+    fields.push(f);
+    form.append(c);
+  });
+  banner.onchange = () => {
+    updateBanner();
+    portraitUpdates.forEach((update) => update());
+  };
+  const cost = menuElement("p", "", "save-preview");
+  form.append(cost);
+  const updateCosts = () => {
+    const wages = fields.reduce(
+        (n, f) => n + (f.trait.value === "mercenary" ? 3 : 2),
+        0,
+      ),
+      rations = 4 + fields.filter((f) => f.trait.value === "hearty").length;
+    cost.textContent = `Starting daily upkeep: ${wages} crowns and ${rations} rations. Skilled cooks and camp improvements can reduce food use.`;
+  };
+  for (const f of fields) {
+    const previous = f.trait.onchange;
+    f.trait.onchange = () => {
+      previous();
+      updateCosts();
+    };
+  }
+  updateCosts();
+  const submit = menuElement("button", "Begin adventure");
+  submit.type = "submit";
+  submit.className = "primary";
+  form.append(submit, menuButton("Cancel", showFrontMenu));
+  form.onsubmit = (event) => {
+    event.preventDefault();
+    const company = createCompany({
+      name: name.value,
+      banner: banner.value,
+      origin: origin.value,
+      founders: fields.map((f) =>
+        Object.fromEntries(
+          Object.entries(f).map(([k, input]) => [k, input.value]),
+        ),
+      ),
+    });
+    if (!company) {
+      menuMessage("Enter a company name and a name for every founder.");
+      return;
+    }
+    if (
+      (hasSessionCompany || isCompanySave(menuRead("pixel-tales"))) &&
+      !confirm(
+        "Begin a new company? This replaces the autosave. Manual save slots are kept.",
+      )
+    )
+      return;
+    beginPlaying(company);
+  };
+  root.append(form);
+}

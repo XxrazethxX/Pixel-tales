@@ -1,3 +1,4 @@
+import { enterGame } from "./smoke-menu.mjs";
 import assert from "node:assert/strict";
 import {
   fresh,
@@ -30,6 +31,7 @@ try {
       s,
     );
     await page.reload();
+    await enterGame(page);
     await page.waitForSelector("#tabs button");
   };
   const arrive = (s, i) => {
@@ -65,6 +67,7 @@ try {
     return s;
   };
   await page.goto(process.env.GAME_URL || "http://127.0.0.1:3000/");
+  await enterGame(page);
   const s = fresh();
   s.renown = 5;
   await seed(s);
@@ -98,6 +101,7 @@ try {
     true,
   );
   await page.reload();
+  await enterGame(page);
   assert.ok((await state()).bounties.rook);
   await seed(fight("ashfang"));
   assert.equal(
@@ -121,6 +125,7 @@ try {
   assert.match(await page.locator("#objective").textContent(), /FIRE INCOMING/);
   const marked = await state();
   await page.reload();
+  await enterGame(page);
   assert.ok((await state()).battle.danger);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: "/tmp/pixel-bounty-fire-mobile.png" });

@@ -1,3 +1,4 @@
+import { enterGame } from "./smoke-menu.mjs";
 import assert from "node:assert/strict";
 import { fresh, places } from "../src/game.js";
 const { chromium } = await import(
@@ -24,9 +25,11 @@ try {
       s,
     );
     await page.reload();
+    await enterGame(page);
     await page.waitForSelector("#tabs button");
   };
   await page.goto(process.env.GAME_URL || "http://127.0.0.1:3000/");
+  await enterGame(page);
   const fixture = fresh();
   fixture.inventory.ore = 6;
   fixture.party[0].hp = 0;

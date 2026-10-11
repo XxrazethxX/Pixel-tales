@@ -416,7 +416,12 @@ export function portraitArtwork(p) {
   pixel(c, 4, 4, 40, 40, "#b6b38a");
   c.imageSmoothingEnabled = false;
   c.drawImage(
-    characterImage(p.role, partyCoats[p.id] || partyCoats[0], 0, p.id),
+    characterImage(
+      p.role,
+      p.coat || partyCoats[p.id] || partyCoats[0],
+      0,
+      p.id,
+    ),
     6,
     1,
     39,
@@ -1038,7 +1043,15 @@ export function drawCampScene(c, s) {
       const point = duty
         ? stations[duty.id]
         : { x: 286 + (i % 3) * 32, y: 280 + Math.floor(i / 3) * 30 };
-      drawCharacter(c, point.x, point.y, partyCoats[p.id], 0, p.role, p.id);
+      drawCharacter(
+        c,
+        point.x,
+        point.y,
+        p.coat || partyCoats[p.id],
+        0,
+        p.role,
+        p.id,
+      );
       drawLoadout(c, s, p, point.x, point.y);
       if (duty)
         drawMapLabel(

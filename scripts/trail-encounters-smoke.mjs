@@ -1,3 +1,4 @@
+import { enterGame } from "./smoke-menu.mjs";
 import assert from "node:assert/strict";
 import { fresh, beginTrailEncounter, trailEncounters } from "../src/game.js";
 const { chromium } = await import(
@@ -24,6 +25,7 @@ try {
       s,
     );
     await page.reload();
+    await enterGame(page);
     await page.waitForSelector("#tabs button");
   };
   const fixture = (id) => {
@@ -36,6 +38,7 @@ try {
     return s;
   };
   await page.goto(process.env.GAME_URL || "http://127.0.0.1:3000/");
+  await enterGame(page);
   await seed(fresh());
   assert.equal(
     await page
@@ -69,6 +72,7 @@ try {
     false,
   );
   await page.reload();
+  await enterGame(page);
   assert.equal((await state()).event.templateId, "snares");
   await click("Gather the clearing's herbs");
   s = await state();

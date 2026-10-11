@@ -1,3 +1,4 @@
+import { enterGame } from "./smoke-menu.mjs";
 import assert from "node:assert/strict";
 import {
   fresh,
@@ -47,6 +48,7 @@ try {
       s,
     );
     await page.reload();
+    await enterGame(page);
     await page.waitForSelector("#tabs button");
   };
   const arrive = async (s, id) => {
@@ -55,6 +57,7 @@ try {
     await seed(s);
   };
   await page.goto(process.env.GAME_URL || "http://127.0.0.1:3000/");
+  await enterGame(page);
   const merchant = fresh();
   merchant.gold = 500;
   merchant.food = 50;
@@ -110,6 +113,7 @@ try {
   await page.getByLabel("Equipment companion").selectOption("1");
   await click("Equip Round shield");
   await page.reload();
+  await enterGame(page);
   assert.ok((await state()).party[1].equipment.shield);
   const story = fresh();
   story.gold = 500;

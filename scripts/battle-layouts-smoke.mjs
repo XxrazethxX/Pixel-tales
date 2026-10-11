@@ -1,3 +1,4 @@
+import { enterGame } from "./smoke-menu.mjs";
 import assert from "node:assert/strict";
 import { fresh, places, startBattle } from "../src/game.js";
 const { chromium } = await import(
@@ -24,6 +25,7 @@ try {
       s,
     );
     await page.reload();
+    await enterGame(page);
     await page.waitForSelector("#tabs button");
   };
   const point = async (x, y) =>
@@ -54,6 +56,7 @@ try {
     return s;
   };
   await page.goto(process.env.GAME_URL || "http://127.0.0.1:3000/");
+  await enterGame(page);
   const ruin = fight(2);
   Object.assign(ruin.battle.units[2], { x: 3, y: 3 });
   Object.assign(ruin.battle.enemies[0], { x: 5, y: 3, hp: 30, max: 30 });
@@ -80,6 +83,7 @@ try {
   );
   await page.screenshot({ path: "/tmp/pixel-ruin-field.png" });
   await page.reload();
+  await enterGame(page);
   assert.equal((await state()).battle.layoutId, "ruin-court");
   assert.equal((await state()).battle.units[2].x, 3);
   const move = fight(2);

@@ -26,9 +26,26 @@ Open the server on port 3000. If that port is already in use, reuse the existing
 
 **GitHub Pages:** The included workflow tests, builds, and deploys the game when pushed to `main`. The repository owner must enable **Settings → Pages → Build and deployment → Source: GitHub Actions**. Then rerun **Actions → Test and deploy game** if necessary. The Actions deployment reports the actual playable URL. Viewing `index.html` on github.com shows its source, not the game.
 
+## Title menu and founding a company
+
+The game opens on a title menu. **Continue** resumes the autosave; it is disabled when there is no readable company. **New Company** opens a creator without touching your current save. **Load** manages three manual save slots. **Settings** offers larger interface text, reduced motion, and eight-minute exploration days instead of four. Timed actions retain their stated durations. Title and creation menus pause the game.
+
+Name the company, choose one of four banners, and customize all four founders: name, class, profession, and personality trait. You can repeat classes. Portraits and stat previews update as you choose; the creator shows the resulting daily food and wage costs. Banner colors carry into founder portraits, map sprites, camp, and combat. Trait tradeoffs apply to actual gameplay: mercenaries gain attack and demand higher wages, while hearty founders start with 32 health and consume extra food.
+
+| Background | Starting company |
+| --- | --- |
+| Road wanderers | 120 crowns, 24 rations; balanced novice company |
+| Caravan survivors | 180 crowns, 18 rations, 4 grain; trading capital |
+| Frontier settlers | 80 crowns, 32 rations, 6 wood, 4 herbs; camp supplies |
+| Disbanded soldiers | 70 crowns, 20 rations, 5 renown; level-two founders with one training point each |
+
+Choose **Begin adventure** to start in Greyhaven. If you already have a company, the game asks before replacing its autosave. Cancelling creation keeps your save. Use **Main menu** during play to pause, change settings, or save a manual snapshot under **Load**. Loading a slot asks before replacing the autosave; the other slots remain intact. Manual saves and settings stay in this browser and origin. When storage is blocked, the company remains playable for the session and Continue works until the page is closed or reloaded.
+
+![Company creation on mobile](docs/screenshots/company-creator-mobile.png)
+
 ## Free exploration
 
-The map fills the game screen. **Click or tap any ground** to set your own destination; the party walks there with animated companions following the route you actually took. Click again to redirect, use **Stop walking** to halt, or hold **WASD / arrow keys** to steer. There are no preset travel paths or destination buttons. The camera follows the company on narrow screens, keeping sprite proportions intact.
+The map fills the game screen. **Click or tap any ground** to set your own destination; the party walks there with animated companions following the route you actually took. Click again to redirect, use **Stop walking** to halt, or hold **WASD / arrow keys** to steer. There are no preset travel paths. Optional journal travel controls set a destination that you can redirect freely. The camera follows the company on narrow screens, keeping sprite proportions intact.
 
 Towns and other sites offer actions only when you are within 28 world pixels. Arriving at a village stops the party and opens its places menu: visit the market for supplies, the blacksmith to buy and equip weapons or armor, the tavern to recruit companions, or the contract board for paid work. Available contracts appear only at village boards; your accepted objective remains visible during exploration. Management menus are overlays opened from the bottom toolbar; opening one pauses walking. Close the panel to return to exploration. You can forage and pitch camp anywhere. A full day takes **four minutes of active exploration**, independent of walking distance. Shallows slow travel. Menus, pitched camps, battles, encounters, and hidden browser tabs pause the exploration clock. Foraging and fieldwork advance six in-game hours; construction takes two hours. Saves retain your exact position and time, and reload safely stopped.
 
@@ -327,7 +344,7 @@ These unique items cannot be bought or crafted. Each bounty pays once and record
 
 ## Your first expedition
 
-1. Choose **Visit Contract board** in Greyhaven’s arrival menu and accept _Wolves in human clothing_.
+1. Create your company from **New Company → Begin adventure**, then choose **Visit Contract board** in Greyhaven’s arrival menu and accept _Wolves in human clothing_.
 2. Close the panel and click toward **Pinewatch** on the map. You can take any route and stop anywhere along the way.
 3. **Explore** to collect knowledge, ore, wood, and herbs, then **Engage raiders**.
 4. Select a companion using their button or sprite. Outlined green tiles are movement options; outlined red enemies are attack targets. Each companion can move up to two movement points along unoccupied tiles **and** attack once per round. Bows reach four tiles, spears two, other weapons one. **Brace** trades your attack for damage reduction. End the round for enemy actions.
@@ -337,7 +354,7 @@ These unique items cannot be bought or crafted. Each bounty pays once and record
 
 Morale at 85+ grants +1 attack. Injuries impose −1 attack. Armor absorbs damage. Profession practice now unlocks ranks and company bonuses. Explorable sites have one-time rewards. Contracts are repeatable. Defeat rescues the company in Greyhaven at a cost; starvation deaths are permanent and cannot be reversed by medicine or resting. Fallen companions leave company equipment in stores and can be replaced at taverns while survivors remain. If everyone starves, start a new company.
 
-Progress automatically saves in browser local storage. **New company** asks before replacing it. Version-one through version-ten saves migrate, preserving permanent equipment improvements; invalid saves fall back to a fresh company. Browser storage is specific to your browser and origin; moving from a local file to a hosted site does not transfer progress.
+Progress automatically saves in browser local storage during play. **New Company** asks before replacing the autosave when you begin the adventure. Version-one through version-ten saves migrate, preserving permanent equipment improvements; an unreadable autosave disables Continue and is kept until you choose a replacement. Browser storage is specific to your browser and origin; moving from a local file to a hosted site does not transfer progress.
 
 ## Validate and develop
 
@@ -367,6 +384,7 @@ PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node
 PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/advanced-research-smoke.mjs
 PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/training-halls-smoke.mjs
 PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/tavern-rumors-smoke.mjs
+PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/company-menu-smoke.mjs
 ```
 
 It uses `/usr/bin/chromium` by default; override `CHROMIUM_PATH` or `GAME_URL` as needed. Desktop and mobile screenshots are written under `/tmp`. The village smoke test checks regional offers, renown locks and unlocks, resale, inn recovery, save persistence, and dangerous encounters. The equipment smoke test covers purchases, class restrictions, assignment and transfer, resale, research and crafting, combat restrictions, reloads, mobile layout, and new-company reset.
@@ -396,3 +414,5 @@ The advanced-research smoke test checks prerequisite and renown locks, knowledge
 The training-hall smoke test checks regional tutors, lesson costs and practice, daily locks, persistence, village navigation, mobile controls, and wilderness restrictions.
 
 The tavern-rumor smoke test checks local leads, landmark discovery without terrain reveal, unchanged active contracts, journal travel, one-time finds, reloads, renown locks, and mobile controls.
+
+The company-menu smoke test checks the title screen, customization and starting tradeoffs, paused time, manual slots, cancellation, replacement and loading, Continue, persisted settings, corrupt saves, blocked storage, and mobile controls. Existing gameplay smoke tests enter through the title menu using the shared helper.

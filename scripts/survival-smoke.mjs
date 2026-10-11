@@ -1,3 +1,4 @@
+import { enterGame } from "./smoke-menu.mjs";
 import assert from "node:assert/strict";
 import { fresh } from "../src/game.js";
 const { chromium } = await import(
@@ -24,9 +25,11 @@ try {
       s,
     );
     await page.reload();
+    await enterGame(page);
     await page.waitForSelector("#tabs button");
   };
   await page.goto(process.env.GAME_URL || "http://127.0.0.1:3000/");
+  await enterGame(page);
   const s = fresh();
   s.location = -1;
   s.position = { x: 600, y: 480 };
@@ -72,6 +75,7 @@ try {
   await click("Break camp");
   assert.equal((await state()).campOpen, false);
   await page.reload();
+  await enterGame(page);
   assert.equal((await state()).campUpgrades.forge, 1);
   await page.setViewportSize({ width: 1440, height: 1000 });
   const light = async (hour) => {
@@ -121,6 +125,7 @@ try {
     (await page.locator("#panel").textContent()).includes("Died of starvation"),
   );
   await page.reload();
+  await enterGame(page);
   assert.equal((await state()).party[0].dead, true);
   const wolves = fresh();
   wolves.location = -1;

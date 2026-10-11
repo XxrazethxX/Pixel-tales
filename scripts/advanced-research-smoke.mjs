@@ -1,3 +1,4 @@
+import { enterGame } from "./smoke-menu.mjs";
 import assert from "node:assert/strict";
 import { fresh } from "../src/game.js";
 const { chromium } = await import(
@@ -24,6 +25,7 @@ try {
       s,
     );
     await page.reload();
+    await enterGame(page);
     await page.waitForSelector("#tabs button");
     await click("Research");
   };
@@ -32,6 +34,7 @@ try {
       .locator(".card")
       .filter({ has: page.getByRole("heading", { name, exact: true }) });
   await page.goto(process.env.GAME_URL || "http://127.0.0.1:3000/");
+  await enterGame(page);
   const s = fresh();
   s.knowledge = 100;
   await seed(s);
@@ -76,6 +79,7 @@ try {
   const purchased = await state();
   assert.equal(purchased.knowledge, 63);
   await page.reload();
+  await enterGame(page);
   await click("Research");
   assert.equal((await state()).research.length, 10);
   await page.setViewportSize({ width: 390, height: 844 });

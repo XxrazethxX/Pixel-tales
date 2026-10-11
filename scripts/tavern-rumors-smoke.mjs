@@ -1,3 +1,4 @@
+import { enterGame } from "./smoke-menu.mjs";
 import assert from "node:assert/strict";
 import { fresh, places } from "../src/game.js";
 const { chromium } = await import(
@@ -24,6 +25,7 @@ try {
       s,
     );
     await page.reload();
+    await enterGame(page);
     await page.waitForSelector("#tabs button");
   };
   const arrive = (s, i) => {
@@ -31,6 +33,7 @@ try {
     s.position = { x: places[i].x, y: places[i].y };
   };
   await page.goto(process.env.GAME_URL || "http://127.0.0.1:3000/");
+  await enterGame(page);
   const s = fresh();
   s.gold = 500;
   s.contract = { name: "Existing work", target: 1, reward: 65 };
@@ -60,6 +63,7 @@ try {
   await click("Walk to Forgotten Stash");
   assert.ok((await state()).destination);
   await page.reload();
+  await enterGame(page);
   await click("Journal");
   assert.equal(
     await page
@@ -97,6 +101,7 @@ try {
     true,
   );
   await page.reload();
+  await enterGame(page);
   assert.equal((await state()).gold, 542);
   assert.equal((await state()).rumors["hidden-compartment"].resolvedDay, 1);
   const coast = fresh();

@@ -1,3 +1,4 @@
+import { enterGame } from "./smoke-menu.mjs";
 import assert from "node:assert/strict";
 import {
   fresh,
@@ -29,9 +30,11 @@ try {
       s,
     );
     await page.reload();
+    await enterGame(page);
     await page.waitForSelector("#tabs button");
   };
   await page.goto(process.env.GAME_URL || "http://127.0.0.1:3000/");
+  await enterGame(page);
   const s = fresh();
   const id = grantEquipment(s, "greatsword-2");
   equipEquipment(s, id, 0);
@@ -95,6 +98,7 @@ try {
   assert.equal(saved.party[0].professionXP, 1);
   assert.equal(saved.gear[0].durability, 100);
   await page.reload();
+  await enterGame(page);
   assert.equal((await state()).gear[0].durability, 100);
   const combat = await state();
   combat.location = 1;

@@ -1,3 +1,4 @@
+import { enterGame } from "./smoke-menu.mjs";
 import { readFileSync } from "node:fs";
 const { chromium } = await import(
   process.env.PLAYWRIGHT_MODULE || "playwright-core"
@@ -61,6 +62,7 @@ const walk = async (x, y) => {
   throw Error("Could not finish walking");
 };
 await page.goto(process.env.GAME_URL || "http://127.0.0.1:3000/");
+await enterGame(page);
 await page.waitForSelector("#tabs button");
 assert.equal(await page.locator("#tabs button").count(), 5);
 assert.equal(await page.locator("#drawer").isVisible(), true);
@@ -93,6 +95,7 @@ const stopped = (await state()).position;
 await page.waitForTimeout(200);
 assert.deepEqual((await state()).position, stopped);
 await page.reload();
+await enterGame(page);
 assert.deepEqual((await state()).position, stopped);
 await page.keyboard.down("d");
 await page.waitForTimeout(300);
@@ -102,8 +105,10 @@ assert.ok(
   "keyboard steering moves the party",
 );
 // Approach an independently moving caravan and trade through its proximity action.
+await click("Main menu");
 await page.evaluate(() => localStorage.removeItem("pixel-tales"));
 await page.reload();
+await enterGame(page);
 await worldClick(285, 355);
 await page
   .getByRole("button", { name: "Trade · 10 rations / 12 crowns", exact: true })
@@ -127,8 +132,10 @@ assert.equal(
   0,
 );
 // Begin the full contract smoke run with independent state.
+await click("Main menu");
 await page.evaluate(() => localStorage.removeItem("pixel-tales"));
 await page.reload();
+await enterGame(page);
 await click("Visit Contract board");
 await page
   .getByRole("button", { name: "Accept contract", exact: true })
@@ -250,6 +257,7 @@ await click("Close panel");
 await click("Deliver 5 rations");
 assert.equal((await state()).completed, 2);
 await page.reload();
+await enterGame(page);
 assert.equal((await state()).party.length, 5);
 await page.screenshot({ path: "/tmp/pixel-tales-desktop.png", fullPage: true });
 await page.setViewportSize({ width: 390, height: 844 });
@@ -318,6 +326,7 @@ await click("Explore · knowledge & materials");
 assert.equal((await state()).gold, goldBeforeStash + 30);
 const charted = (await state()).charted;
 await page.reload();
+await enterGame(page);
 assert.deepEqual((await state()).charted, charted);
 await page.screenshot({ path: "/tmp/pixel-tales-mobile.png", fullPage: true });
 await page.setViewportSize({ width: 1440, height: 1000 });
@@ -345,6 +354,7 @@ offlineHTML = offlineHTML
       "</script>",
   );
 await offlinePage.setContent(offlineHTML);
+await enterGame(offlinePage);
 assert.equal(await offlinePage.locator("#tabs button").count(), 5);
 await offlinePage
   .getByRole("button", { name: "Visit Contract board", exact: true })

@@ -1,3 +1,4 @@
+import { enterGame } from "./smoke-menu.mjs";
 import assert from "node:assert/strict";
 import { fresh } from "../src/game.js";
 const { chromium } = await import(
@@ -24,9 +25,11 @@ try {
       s,
     );
     await page.reload();
+    await enterGame(page);
     await page.waitForSelector("#tabs button");
   };
   await page.goto(process.env.GAME_URL || "http://127.0.0.1:3000/");
+  await enterGame(page);
   const s = fresh();
   s.location = -1;
   s.position = { x: 600, y: 480 };
@@ -90,6 +93,7 @@ try {
   assert.equal((await state()).campJobs.guard, undefined);
   await click("Break camp");
   await page.reload();
+  await enterGame(page);
   saved = await state();
   assert.equal(saved.campJobs.cook, 3);
   assert.ok(
