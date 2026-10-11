@@ -758,3 +758,200 @@ export function fogArtwork(charted) {
     }
   return fogImage;
 }
+
+export function drawWolf(c, x, y, step = 0) {
+  x = Math.round(x);
+  y = Math.round(y);
+  steppedOval(c, x - 14, y + 10, 30, 6, "#58634877");
+  pixel(c, x - 11, y - 3, 20, 12, "#494e40");
+  pixel(c, x - 10, y - 5, 18, 12, "#939588");
+  pixel(c, x - 9, y - 5, 16, 3, "#b5b5a0");
+  pixel(c, x - 13, y - 6, 5, 4, "#838777");
+  pixel(c, x - 16, y - 9, 4, 3, "#a7aa93");
+  for (const dx of [-9, 3]) {
+    pixel(c, x + dx, y + 5, 3, 8 + step, "#626957");
+    pixel(c, x + dx + 4, y + 5, 3, 7 - step, "#929582");
+    pixel(c, x + dx - 1, y + 12 + step, 4, 2, "#414e3e");
+  }
+  pixel(c, x + 6, y - 10, 9, 10, "#b0b09a");
+  pixel(c, x + 7, y - 14, 3, 7, "#747b69");
+  pixel(c, x + 12, y - 12, 3, 4, "#757b68");
+  pixel(c, x + 12, y - 4, 8, 5, "#c5c2a9");
+  pixel(c, x + 19, y - 4, 2, 3, "#384b3d");
+  pixel(c, x + 13, y - 7, 1, 1, "#352f26");
+  pixel(c, x + 10, y - 1, 3, 4, "#808773");
+}
+function lanternGlow(c, x, y, radius, strength = 0.2) {
+  for (let i = 4; i >= 1; i--) {
+    c.fillStyle = `rgba(238,185,90,${strength / 5})`;
+    c.beginPath();
+    c.arc(x, y, (radius * i) / 4, 0, Math.PI * 2);
+    c.fill();
+  }
+}
+export function drawLighting(c, s, width, height) {
+  const hour = s.timeOfDay;
+  const night =
+    hour < 5 || hour >= 20
+      ? 0.5
+      : hour < 8
+        ? ((8 - hour) / 3) * 0.5
+        : hour >= 17
+          ? ((hour - 17) / 3) * 0.5
+          : 0;
+  if (night <= 0) return;
+  c.save();
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.fillStyle = `rgba(21,34,57,${night})`;
+  c.fillRect(0, 0, width, height);
+  c.restore();
+  if (s.battle) return;
+  if (s.campOpen) {
+    lanternGlow(c, 325, 250, 86, night * 0.8);
+    return;
+  }
+  for (const [i, p] of places.entries()) {
+    if (p.type !== "town" || !s.discovered.includes(i)) continue;
+    lanternGlow(c, p.x + 5, p.y + 8, 42, night * 0.6);
+    pixel(c, p.x - 28, p.y - 14, 3, 3, "#e4bb76");
+    pixel(c, p.x + 10, p.y - 9, 3, 3, "#e4bb76");
+  }
+  lanternGlow(c, s.position.x, s.position.y, 24, night * 0.35);
+}
+let campGround;
+export function drawCampScene(c, s) {
+  if (!campGround) {
+    campGround = surface(768, 432);
+    const g = campGround.getContext("2d");
+    pixel(g, 0, 0, 768, 432, "#8d9b6e");
+    steppedOval(g, 126, 54, 446, 352, "#a5a579");
+    steppedOval(g, 156, 82, 396, 288, "#b7b080");
+    for (let i = 0; i < 600; i++) {
+      const x = Math.floor(noise(i, 7) * 768),
+        y = Math.floor(noise(i, 8) * 432);
+      pixel(g, x, y, 2, 1, i % 2 ? "#c0bc8e" : "#8d9869");
+    }
+    const trees = [];
+    for (let i = 0; i < 70; i++) {
+      const x = Math.floor(noise(i, 9) * 768),
+        y = Math.floor(noise(i, 10) * 432);
+      if (Math.hypot((x - 335) / 245, (y - 225) / 180) > 1.02)
+        trees.push({ x, y, i });
+    }
+    trees.sort((a, b) => a.y - b.y).forEach((p) => drawTree(g, p.x, p.y, p.i));
+    for (let i = 0; i < 8; i++) rock(g, 230 + i * 27, 353 + (i % 2) * 5);
+  }
+  c.imageSmoothingEnabled = false;
+  c.drawImage(campGround, 0, 0);
+  const tents = s.campUpgrades.tents || 0;
+  function tent(x, y, color = "#b8b088", medical = false) {
+    pixel(c, x - 5, y + 14, 54, 9, "#899065");
+    for (let row = 0; row < 29; row++) {
+      const half = Math.floor(row * 0.8);
+      pixel(c, x + 20 - half, y - 16 + row, half * 2 + 1, 1, color);
+      pixel(c, x + 20, y - 16 + row, Math.max(1, half), 1, "#938b65");
+    }
+    pixel(c, x + 16, y + 1, 10, 15, "#5b5f44");
+    pixel(c, x + 20, y - 17, 2, 33, "#807449");
+    pixel(c, x - 4, y + 13, 3, 7, "#75663f");
+    pixel(c, x + 44, y + 13, 3, 7, "#75663f");
+    if (medical) {
+      pixel(c, x + 10, y - 4, 12, 3, "#a3644d");
+      pixel(c, x + 14, y - 8, 4, 11, "#a3644d");
+    }
+  }
+  if (tents) {
+    tent(172, 123);
+    tent(222, 151, "#b3a678");
+    if (tents > 1) {
+      tent(170, 173, "#a9936a");
+      tent(223, 111, "#b4ac82");
+    }
+  } else
+    for (let i = 0; i < 4; i++) {
+      pixel(
+        c,
+        171 + (i % 2) * 31,
+        118 + Math.floor(i / 2) * 32,
+        20,
+        26,
+        "#7b815c",
+      );
+      pixel(
+        c,
+        173 + (i % 2) * 31,
+        121 + Math.floor(i / 2) * 32,
+        16,
+        20,
+        "#b4a578",
+      );
+      pixel(
+        c,
+        173 + (i % 2) * 31,
+        120 + Math.floor(i / 2) * 32,
+        16,
+        5,
+        "#dbcc98",
+      );
+    }
+  drawMapLabel(c, tents ? `Sleeping tents · ${tents}/2` : "Bedrolls", 205, 94);
+  // Supplies and a portable cart are present before the first upgrade.
+  drawWagon(c, 393, 329);
+  for (let i = 0; i < 3; i++) {
+    pixel(c, 187 + i * 19, 275, 16, 13, "#917348");
+    pixel(c, 188 + i * 19, 276, 14, 3, "#b79a60");
+    pixel(c, 190 + i * 19, 276, 2, 12, "#6c6240");
+  }
+  drawMapLabel(c, "Company stores", 213, 300);
+  if (s.campUpgrades.forge) {
+    pixel(c, 435, 276, 45, 18, "#8a8b6c");
+    pixel(c, 441, 277, 33, 10, "#515b47");
+    pixel(c, 449, 282, 12, 4, "#d28d50");
+    pixel(c, 453, 296, 6, 14, "#655c3f");
+    pixel(c, 443, 293, 27, 5, "#747b68");
+    pixel(c, 443, 292, 27, 2, "#b3b79c");
+    drawMapLabel(c, "Portable forge", 459, 325);
+  }
+  if (s.campUpgrades.watchpost) {
+    fence(c, 460, 118, 39);
+    pixel(c, 470, 88, 3, 32, "#796846");
+    pixel(c, 473, 89, 15, 10, "#b7a16e");
+    pixel(c, 475, 91, 10, 2, "#d7c58b");
+    drawCharacter(c, 460, 111, partyCoats[1], 0, "Shieldbearer", 1);
+    drawMapLabel(c, "Watch post", 478, 153);
+  }
+  if (s.campUpgrades.infirmary) {
+    tent(463, 213, "#d3cab0", true);
+    drawMapLabel(c, "Medicine tent", 484, 247);
+  }
+  steppedOval(c, 309, 240, 32, 16, "#747b5b");
+  for (let i = 0; i < 6; i++) rock(c, 314 + i * 4, 248 + (i % 2) * 7);
+  pixel(c, 313, 250, 23, 4, "#705739");
+  pixel(c, 321, 239, 5, 18, "#805e3c");
+  if (s.campUpgrades.cookpot) {
+    pixel(c, 313, 224, 2, 22, "#514e39");
+    pixel(c, 335, 224, 2, 22, "#514e39");
+    pixel(c, 313, 224, 24, 2, "#716a4f");
+    pixel(c, 324, 226, 1, 8, "#55563c");
+    steppedOval(c, 318, 232, 15, 10, "#535b4e");
+    pixel(c, 319, 233, 12, 2, "#9b9f82");
+  }
+  s.party
+    .filter((p) => !p.dead)
+    .forEach((p, i) =>
+      drawCharacter(
+        c,
+        286 + (i % 3) * 32,
+        280 + Math.floor(i / 3) * 30,
+        partyCoats[p.id],
+        0,
+        p.role,
+        p.id,
+      ),
+    );
+  drawLighting(c, s, c.canvas.width, c.canvas.height);
+  // The campfire remains bright after the night overlay.
+  pixel(c, 319, 240, 11, 13, "#c8773d");
+  pixel(c, 322, 236, 6, 15, "#e5aa54");
+  pixel(c, 324, 241, 3, 10, "#f1d389");
+}

@@ -30,7 +30,7 @@ Open the server on port 3000. If that port is already in use, reuse the existing
 
 The map fills the game screen. **Click or tap any ground** to set your own destination; the party walks there with animated companions following the route you actually took. Click again to redirect, use **Stop walking** to halt, or hold **WASD / arrow keys** to steer. There are no preset travel paths or destination buttons. The camera follows the company on narrow screens, keeping sprite proportions intact.
 
-Towns and other sites offer actions only when you are within 28 world pixels. Arriving at a village stops the party and opens its places menu: visit the market for supplies, the blacksmith to buy and equip weapons or armor, the tavern to recruit companions, or the contract board for paid work. Available contracts appear only at village boards; your accepted objective remains visible during exploration. Management menus are overlays opened from the bottom toolbar; opening one pauses walking. Close the panel to return to exploration. You can forage and camp anywhere. Each 160 world pixels walked costs a day and four rations (three with Trailcraft); partial distance carries between destinations. Shallows slow travel. Encounters pause the party for your decision. Saves retain your exact position and distance, and reload safely stopped.
+Towns and other sites offer actions only when you are within 28 world pixels. Arriving at a village stops the party and opens its places menu: visit the market for supplies, the blacksmith to buy and equip weapons or armor, the tavern to recruit companions, or the contract board for paid work. Available contracts appear only at village boards; your accepted objective remains visible during exploration. Management menus are overlays opened from the bottom toolbar; opening one pauses walking. Close the panel to return to exploration. You can forage and pitch camp anywhere. A full day takes **four minutes of active exploration**, independent of walking distance. Shallows slow travel. Menus, pitched camps, battles, encounters, and hidden browser tabs pause the exploration clock. Foraging and fieldwork advance six in-game hours; construction takes two hours. Saves retain your exact position and time, and reload safely stopped.
 
 ## The living borderlands
 
@@ -38,9 +38,29 @@ The world is now **1536 × 864**: four times the original area, with twelve loca
 
 The small **world navigator** in the top right shows your charted terrain, known landmarks, current viewport, and destination. Click any point there to start a long journey; supplies and encounters still apply. It selects a coordinate, not a predetermined path.
 
-A caravan and two bandit patrols roam independently while exploration is active. They pause during menus, battles, and encounters. Within 48 pixels, buy provisions from the caravan, attack its guards, or confront a bandit group. Attacking peaceful traders costs 10 morale and up to 5 renown once, and permanently ends trade with that caravan, even after retreat. Winning a caravan raid grants 60 crowns, 10 rations, knowledge, salvage, and XP; it grants no renown. Combat is optional: steer away if the company is unprepared. Patrol victories award 40 crowns, knowledge, salvage, and XP without completing or clearing your contract. Defeated patrols stay defeated after reload.
+A caravan, three bandit groups, and two forest wolf packs roam independently while exploration is active. Hostiles approach nearby companions; wolves pursue only within forests. They pause during menus, battles, and encounters. Within 48 pixels, buy provisions from the caravan, attack its guards, or confront a bandit group. Attacking peaceful traders costs 10 morale and up to 5 renown once, and permanently ends trade with that caravan, even after retreat. Winning a caravan raid grants 60 crowns, 10 rations, knowledge, salvage, and XP; it grants no renown. Combat is optional: steer away if the company is unprepared. Patrol victories award 40 crowns, knowledge, salvage, and XP without completing or clearing your contract. Defeated patrols stay defeated after reload. Wolf battles use actual wolf sprites and enemies, awarding six rations, two pelts, one knowledge, two renown, and 20 XP per survivor; they do not drop human equipment. Sell pelts for three crowns each at village markets.
 
 Research **Watchful eyes** for a 210-pixel discovery radius, **A fair bargain** for cheaper purchases, and **Borderlands charts** (requires Watchful eyes) to reveal landmark locations without exploring their terrain. Hidden stashes offer one-time crowns and medicine. Road events now include wounded travellers, abandoned camps, and storms with different choices and costs.
+
+## Camp, upkeep, and daylight
+
+**Make camp** opens a separate campsite with visible bedrolls, a campfire, supply crates, and companions. Build portable improvements in the Camp menu, use the workshop, forage, or rest until the next 08:00. **View camp** shows the scene; **Break camp** resumes the overworld. Planning costs no time. Improvements travel with the company and persist after saving.
+
+| Improvement    | Initial cost               | Effect                                                            |
+| -------------- | -------------------------- | ----------------------------------------------------------------- |
+| Sleeping tents | 20 crowns, 6 wood          | +5 rest healing per level; two levels, second costs twice as much |
+| Cookpot        | 15 crowns, 3 wood, 2 ore   | Reduce daily rations by one                                       |
+| Portable forge | 30 crowns, 4 wood, 6 ore   | Fine gear recipes use one less ore while camping                  |
+| Watch post     | 20 crowns, 5 wood, 2 ore   | +40 discovery radius and +1 starting battle valor                 |
+| Medicine tent  | 25 crowns, 4 wood, 8 herbs | +6 rest healing; cure injuries when recovery reaches half health  |
+
+At midnight, the company consumes **one ration and pays two crowns per living companion**. Cook ranks reduce rations by up to two, Trailcraft reduces them by one, and a cookpot reduces them by one, with a minimum of one ration for a surviving company. Unpaid wages accumulate as debt and lower morale; settle them in Company or Camp. Inn prices include overdue wages.
+
+Missing food causes increasing health loss each hungry day, starting at three damage and rising to eight. Partial meals reduce damage; a fully supplied daily meal resets hunger. Hungry rest does not heal. Running out of rations allows continued travel so you can seek food, but prolonged starvation kills companions permanently. Warnings show hunger and wage debt.
+
+The visible time scale tracks midnight, dawn, daylight, dusk, and night. The map dims gradually at sunset and brightens at dawn, with warm lanterns and campfire light at night.
+
+![An expanded company camp](docs/screenshots/camp.png)
 
 ## Village services and company standing
 
@@ -49,24 +69,24 @@ Each village has four local contracts. Greyhaven introduces mercenary work aroun
 Company standing advances at **5 renown** (Proven company), **15** (Veterans), and **30** (Famed company). Boards show each job’s requirement and lock acceptance until you qualify. Combat contracts have real difficulty and reward differences:
 
 | Difficulty | Enemies | Extra health / damage per enemy | Knowledge | XP per survivor | Renown |
-| --- | --- | --- | --- | --- | --- |
-| Standard | 3 | None | 2 | 35 | 5 |
-| Dangerous | 4 | +4 / +1 | 3 | 45 | 10 |
-| Elite | 5 | +8 / +2 | 4 | 55 | 15 |
+| ---------- | ------- | ------------------------------- | --------- | --------------- | ------ |
+| Standard   | 3       | None                            | 2         | 35              | 5      |
+| Dangerous  | 4       | +4 / +1                         | 3         | 45              | 10     |
+| Elite      | 5       | +8 / +2                         | 4         | 55              | 15     |
 
 Each combat victory also grants 2–4 ore and wood according to difficulty. Patrols and caravan raids retain their existing rewards. Peaceful caravan attacks reduce renown, which can close access to advanced work until you rebuild your standing.
 
-At the **Market square**, sell spare ore (2 crowns each), wood or herbs (1), and medicine (4), individually or as a whole stack. Purchase prices exceed resale prices. At **The Crooked Lantern**, resting costs **6 crowns per companion**, including beds, meals, and wages. It takes one day, uses no rations, restores everyone to full health, cures injuries, and adds 15 morale up to 100. Recruitment remains a separate service.
+At the **Market square**, sell spare ore (2 crowns each), wood or herbs (1), and medicine (4), individually or as a whole stack. Purchase prices exceed resale prices. At **The Crooked Lantern**, resting costs **6 crowns per companion**, including beds, meals, and wages, plus any overdue wages. It takes one day, uses no rations, restores living companions to full health, cures injuries, and adds 15 morale up to 100. Recruitment remains a separate service.
 
 ## Equipment and battle loot
 
-Open **Equipment** from the bottom toolbar to manage your company’s named weapons and armor. Each combat victory adds one item to company stores: Standard encounters and patrols drop Common gear, Dangerous contracts drop Fine gear, and Elite contracts drop Rare gear. Loot stays unequipped until you assign it.
+Open **Equipment** from the bottom toolbar to manage your company’s named weapons and armor. Each victory over human enemies adds one item to company stores: Standard encounters and patrols drop Common gear, Dangerous contracts drop Fine gear, and Elite contracts drop Rare gear. Loot stays unequipped until you assign it.
 
-| Quality | Weapon bonus | Armor bonus | How to acquire |
-| --- | --- | --- | --- |
-| Common | +2 attack | +1 armor | Standard fights or village blacksmiths |
-| Fine | +3 attack | +2 armor | Dangerous fights, blacksmiths at 5 renown, or crafting |
-| Rare | +4 attack | +3 armor | Elite contracts |
+| Quality | Weapon bonus | Armor bonus | How to acquire                                         |
+| ------- | ------------ | ----------- | ------------------------------------------------------ |
+| Common  | +2 attack    | +1 armor    | Standard fights or village blacksmiths                 |
+| Fine    | +3 attack    | +2 armor    | Dangerous fights, blacksmiths at 5 renown, or crafting |
+| Rare    | +4 attack    | +3 armor    | Elite contracts                                        |
 
 Swords fit swordswomen, maces fit shieldbearers, bows fit archers, and spears fit spearmen. Armor fits everyone. Each companion wears one weapon and one armor item. Equipping a replacement returns the previous item to company stores; transferring an item removes it from its previous wearer. Comparison text shows the change for your selected companion. Gear bonuses add to permanent workshop improvements, research, and talents, and equipped armor actually reduces incoming damage.
 
@@ -105,9 +125,9 @@ Each profession ranks up at **3, 8, and 15 practice**: Apprentice, Journeyman, a
 | Smith      | Crafting weapons and armor                                        | Reduce ore costs by one per rank, minimum one                                                              |
 | Miner      | Exploring and working mines                                       | +2 ore per rank when exploring or working                                                                  |
 | Herbalist  | Exploring forests, fieldwork, foraging, making and using medicine | Better herb yields, +3 medicine healing and +2 camp healing per rank; two medicine per craft at Journeyman |
-| Cook       | Camping and cooking provisions                                    | Lower camp food costs (minimum two), better camp morale, +2 crafted rations per rank                       |
+| Cook       | Camping and cooking provisions                                    | Lower daily food costs (minimum one), better camp morale, +2 crafted rations per rank                      |
 
-Near a mine or forest, **Work mine / Gather herbs** is repeatable: it costs two rations and a day and awards two practice to the worker. Exploring remains a one-time reward. Crafting medicine requires a conscious Herbalist; cooking requires a Cook; weapon and armor work requires a Smith.
+Near a mine or forest, **Work mine / Gather herbs** is repeatable: it costs two rations and six hours and awards two practice to the worker. Exploring remains a one-time reward. Crafting medicine requires a conscious Herbalist; cooking requires a Cook; weapon and armor work requires a Smith.
 
 ## Your first expedition
 
@@ -116,12 +136,12 @@ Near a mine or forest, **Work mine / Gather herbs** is repeatable: it costs two 
 3. **Explore** to collect knowledge, ore, wood, and herbs, then **Engage raiders**.
 4. Select a companion using their button or sprite. Outlined green tiles are movement options; outlined red enemies are attack targets. Each companion can move up to two Manhattan tiles **and** attack once per round. Bows reach four tiles, spears two, other weapons one. **Brace** trades your attack for damage reduction. End the round for enemy actions.
 5. Victory awards crowns, knowledge, salvage, and XP. Train leveled companions in **Company**, unlock permanent upgrades in **Research**, make permanent improvements in **Workshop**, and assign battle loot in **Equipment**.
-6. Return to a village, visit its **Market square** for supplies and its **Crooked Lantern** tavern to recruit up to six companions. Buy medicine, heal injured allies, or camp to restore health and morale. Camp costs up to four rations (less with a skilled Cook) and two crowns per companion.
+6. Return to a village, visit its **Market square** for supplies and its **Crooked Lantern** tavern to recruit up to six companions. Buy medicine, heal injured allies, or camp to restore health and morale. Use **Make camp** to open the camp, build improvements, and rest until the next 08:00. Daily upkeep applies at midnight.
 7. Walk to Iron Hollow and the Watchtower, take additional contracts, and respond to roadside choices. Delivery contracts offer a noncombat source of income and knowledge.
 
-Morale at 85+ grants +1 attack. Injuries impose −1 attack. Armor absorbs damage. Profession practice now unlocks ranks and company bonuses. Explorable sites have one-time rewards. Contracts are repeatable. Defeat rescues the company in Greyhaven at a cost; there is no permadeath yet.
+Morale at 85+ grants +1 attack. Injuries impose −1 attack. Armor absorbs damage. Profession practice now unlocks ranks and company bonuses. Explorable sites have one-time rewards. Contracts are repeatable. Defeat rescues the company in Greyhaven at a cost; starvation deaths are permanent and cannot be reversed by medicine or resting. Fallen companions leave company equipment in stores and can be replaced at taverns while survivors remain. If everyone starves, start a new company.
 
-Progress automatically saves in browser local storage. **New company** asks before replacing it. Version-one through version-six saves migrate, preserving permanent equipment improvements; invalid saves fall back to a fresh company. Browser storage is specific to your browser and origin; moving from a local file to a hosted site does not transfer progress.
+Progress automatically saves in browser local storage. **New company** asks before replacing it. Version-one through version-seven saves migrate, preserving permanent equipment improvements; invalid saves fall back to a fresh company. Browser storage is specific to your browser and origin; moving from a local file to a hosted site does not transfer progress.
 
 ## Validate and develop
 
@@ -139,8 +159,11 @@ npm install --prefix /tmp/pixel-browser --cache /tmp/pixel-npm-cache playwright-
 PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/browser-smoke.mjs
 PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/village-smoke.mjs
 PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/equipment-smoke.mjs
+PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/survival-smoke.mjs
 ```
 
 It uses `/usr/bin/chromium` by default; override `CHROMIUM_PATH` or `GAME_URL` as needed. Desktop and mobile screenshots are written under `/tmp`. The village smoke test checks regional offers, renown locks and unlocks, resale, inn recovery, save persistence, and dangerous encounters. The equipment smoke test covers purchases, class restrictions, assignment and transfer, resale, research and crafting, combat restrictions, reloads, mobile layout, and new-company reset.
+
+The survival smoke test covers camp construction and recovery, saved improvements, mobile camp controls, daylight brightness, starvation warnings and permanent deaths, and wolf combat.
 
 Next development areas: advanced skill tiers, impassable terrain and pathfinding, varied enemy behaviors, equipment perks and durability, regional factions, procedural encounters, and Android packaging.

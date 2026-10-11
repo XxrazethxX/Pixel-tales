@@ -25,6 +25,24 @@
             aria-label="Borderlands map and tactical battlefield"
           ></canvas>
           <div id="map-label"></div>
+          <div id="day-clock" class="day-clock">
+            <span id="clock-label"></span>
+            <div
+              id="day-scale"
+              role="meter"
+              aria-label="Time of day"
+              aria-valuemin="0"
+              aria-valuemax="24"
+              aria-valuenow="8"
+            >
+              <i id="day-marker"></i>
+            </div>
+            <div class="day-ticks" aria-hidden="true">
+              <span>00</span><span>06</span><span>12</span><span>18</span
+              ><span>24</span>
+            </div>
+          </div>
+          <div id="survival-warning" hidden></div>
           <div class="atlas-frame">
             <canvas
               id="atlas"

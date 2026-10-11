@@ -213,8 +213,8 @@ await page
   .getByRole("combobox", { name: "Profession for Mara", exact: true })
   .selectOption("Smith");
 await click("Close panel");
-await click("Gather herbs · 2 rations / 1 day");
-await click("Gather herbs · 2 rations / 1 day");
+await click("Gather herbs · 2 rations / 6 hours");
+await click("Gather herbs · 2 rations / 6 hours");
 assert.ok((await state()).party[2].professionXP >= 5);
 
 await click("Research");
@@ -279,7 +279,7 @@ assert.ok(
   "mobile overflow",
 );
 // Travel beyond the original map using the navigator, handle encounters, and find a hidden stash.
-while ((await state()).food < 15) await click("Forage · +6 rations / 1 day");
+while ((await state()).food < 15) await click("Forage · +6 rations / 6 hours");
 const atlasClick = async (x, y) => {
   const r = await page.locator("#atlas").boundingBox();
   await page.mouse.click(

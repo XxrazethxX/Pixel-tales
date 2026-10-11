@@ -56,8 +56,8 @@ studies.push(
 );
 export function fresh() {
   return {
-    version: 7,
-    inventory: { ore: 0, wood: 0, herbs: 0, medicine: 1 },
+    version: 8,
+    inventory: { ore: 0, wood: 0, herbs: 0, medicine: 1, pelts: 0 },
     gear: [],
     nextGearId: 1,
     explored: [],
@@ -68,6 +68,11 @@ export function fresh() {
     charted: initialChart(),
     patrols: initialPatrols(),
     day: 1,
+    timeOfDay: 8,
+    hungerDays: 0,
+    wageDebt: 0,
+    campOpen: false,
+    campUpgrades: {},
     gold: 120,
     food: 24,
     morale: 75,
@@ -100,6 +105,7 @@ export function fresh() {
       xp: 0,
       points: 0,
       injury: false,
+      dead: false,
       armor: 0,
       weapon: 0,
       profession:
@@ -123,47 +129,45 @@ export function note(s, t) {
 }
 export function travel(s, to) {
   if (s.battle || s.event || to === s.location || !places[to]) return false;
-  const cost = s.research.includes("rations") ? 3 : 4;
-  if (s.food < cost) {
-    note(s, "Not enough provisions to travel. Buy supplies or forage.");
-    return false;
-  }
-  s.food -= cost;
-  s.day++;
+  if (companyLost(s) || s.campOpen) return false;
+  spendHours(s, 24);
+  if (companyLost(s)) return false;
   s.location = to;
   s.position = { x: places[to].x, y: places[to].y };
   s.trail = [{ ...s.position }];
   s.destination = null;
   s.morale = Math.max(0, s.morale - 2);
-  note(s, `Reached ${places[to].name}. Used ${cost} rations.`);
+  note(s, `Reached ${places[to].name}. Daily upkeep settled.`);
   if (s.day % 3 === 0) s.event = roadEvent(s);
   return true;
 }
 export function camp(s) {
-  if (s.battle || s.event) return false;
-  const wages = s.party.length * 2,
-    foodCost = campCost(s),
-    cook = professional(s, "Cook"),
-    recovery =
-      (s.research.includes("medicine") ? 18 : 10) +
-      professionBonus(s, "Herbalist") * 2;
-  if (s.food < foodCost || s.gold < wages) {
+  if (s.battle || s.event || companyLost(s)) return false;
+  s.destination = null;
+  const cook = professional(s, "Cook");
+  const recovery =
+    (s.research.includes("medicine") ? 18 : 10) +
+    professionBonus(s, "Herbalist") * 2 +
+    (s.campUpgrades.tents || 0) * 5 +
+    (s.campUpgrades.infirmary || 0) * 6;
+  spendHours(s, (8 - s.timeOfDay + 24) % 24 || 24);
+  if (s.hungerDays === 0 && !companyLost(s)) {
+    s.morale = Math.min(100, s.morale + 12 + professionBonus(s, "Cook"));
+    for (const p of livingParty(s)) {
+      p.hp = Math.min(p.max, p.hp + recovery);
+      if (p.hp === p.max || (s.campUpgrades.infirmary && p.hp >= p.max / 2))
+        p.injury = false;
+    }
+    if (cook && !cook.dead) practice(s, cook, 1);
     note(
       s,
-      `Camp needs ${foodCost} rations and 2 crowns per companion for wages.`,
+      "Rested until dawn. Fed companions recover; camp improvements help tend their wounds.",
     );
-    return false;
-  }
-  s.food -= foodCost;
-  s.gold -= wages;
-  s.day++;
-  s.morale = Math.min(100, s.morale + 10 + professionBonus(s, "Cook"));
-  for (const p of s.party) {
-    p.hp = Math.min(p.max, p.hp + recovery);
-    if (p.hp === p.max) p.injury = false;
-  }
-  if (cook) practice(s, cook, 1);
-  note(s, "Campfires lit. Wages paid, wounds tended, spirits lifted.");
+  } else
+    note(
+      s,
+      "An empty cookpot. Hunger prevents recovery; find food before the next daily meal.",
+    );
   return true;
 }
 export function research(s, id) {
@@ -197,6 +201,8 @@ export function startBattle(s, patrolId = null) {
   if (
     s.battle ||
     s.event ||
+    s.campOpen ||
+    companyLost(s) ||
     (!patrol &&
       (!s.contract ||
         s.contract.kind === "delivery" ||
@@ -218,8 +224,9 @@ export function startBattle(s, patrolId = null) {
     kind: patrol ? "patrol" : "contract",
     patrolId: patrol?.id || null,
     caravanRaid: patrol?.kind === "merchant",
+    wildlife: patrol?.kind === "wolves",
     turn: 1,
-    valor: 3,
+    valor: 3 + (s.campUpgrades.watchpost || 0),
     units: s.party
       .filter((p) => p.hp > 0)
       .map((p, i) => ({
@@ -264,6 +271,17 @@ export function startBattle(s, patrolId = null) {
       },
     ],
   };
+  if (patrol?.kind === "wolves")
+    s.battle.enemies = [1, 3, 5].map((y, id) => ({
+      id,
+      x: 7,
+      y,
+      hp: 14,
+      max: 14,
+      kind: "wolf",
+      damage: 4,
+      armor: 0,
+    }));
   const difficulty = contractDifficulty(patrol ? null : s.contract);
   for (let i = 0; i < difficulty.tier - 1; i++) {
     s.battle.enemies.push({
@@ -320,8 +338,21 @@ export function act(s, id, x, y) {
 function win(s) {
   const patrolFight = s.battle.kind === "patrol";
   const raid = patrolFight && s.battle.caravanRaid;
-  const difficulty = contractDifficulty(patrolFight ? null : s.contract);
-  const reward = patrolFight ? (raid ? 60 : 40) : s.contract.reward;
+  const wildlife = patrolFight && s.battle.wildlife;
+  const difficulty = wildlife
+    ? { tier: 1, knowledge: 1, xp: 20, salvage: 0, renown: 2 }
+    : contractDifficulty(patrolFight ? null : s.contract);
+  const reward = patrolFight
+    ? wildlife
+      ? 0
+      : raid
+        ? 60
+        : 40
+    : s.contract.reward;
+  if (wildlife) {
+    s.food += 6;
+    s.inventory.pelts += 2;
+  }
   if (raid) s.food += 10;
   s.gold += reward;
   s.knowledge += difficulty.knowledge;
@@ -343,17 +374,19 @@ function win(s) {
   }
   note(
     s,
-    `${raid ? "Caravan plundered · 10 rations seized" : patrolFight ? "Patrol defeated" : "Contract fulfilled"}. Earned ${reward} crowns, ${difficulty.knowledge} knowledge, and ${difficulty.xp} XP per survivor.`,
+    `${wildlife ? "Wolf pack defeated · 6 rations and 2 pelts recovered" : raid ? "Caravan plundered · 10 rations seized" : patrolFight ? "Patrol defeated" : "Contract fulfilled"}. Earned ${reward} crowns, ${difficulty.knowledge} knowledge, and ${difficulty.xp} XP per survivor.`,
   );
-  const lootPool = equipmentCatalog.filter(
-    (item) => item.tier === difficulty.tier,
-  );
-  const loot = lootPool[(s.completed + s.skirmishes - 1) % lootPool.length];
-  grantEquipment(s, loot.id);
-  note(
-    s,
-    `Recovered ${loot.rarity.toLowerCase()} ${loot.name}. Open Equipment to assign the loot.`,
-  );
+  if (!wildlife) {
+    const lootPool = equipmentCatalog.filter(
+      (item) => item.tier === difficulty.tier,
+    );
+    const loot = lootPool[(s.completed + s.skirmishes - 1) % lootPool.length];
+    grantEquipment(s, loot.id);
+    note(
+      s,
+      `Recovered ${loot.rarity.toLowerCase()} ${loot.name}. Open Equipment to assign the loot.`,
+    );
+  }
   if (!patrolFight) s.contract = null;
   s.battle = null;
 }
@@ -453,7 +486,7 @@ export function endTurn(s) {
     s.location = 0;
     s.position = { x: places[0].x, y: places[0].y };
     s.trail = [{ ...s.position }];
-    for (const p of s.party) {
+    for (const p of livingParty(s)) {
       p.hp = 1;
       p.injury = true;
     }
@@ -479,7 +512,7 @@ export function restore(raw) {
   const base = fresh();
   if (
     !raw ||
-    ![1, 2, 3, 4, 5, 6, 7].includes(raw.version) ||
+    ![1, 2, 3, 4, 5, 6, 7, 8].includes(raw.version) ||
     !Array.isArray(raw.party) ||
     raw.party.length < 1 ||
     raw.party.length > 6 ||
@@ -505,7 +538,7 @@ export function restore(raw) {
   const result = {
     ...base,
     ...raw,
-    version: 7,
+    version: 8,
     inventory: { ...base.inventory, ...raw.inventory },
     explored: raw.explored || [],
     event: raw.event || null,
@@ -631,6 +664,34 @@ export function restore(raw) {
     }
   }
   // Old saves retain company progression but return to the map for the new combat rules.
+  result.timeOfDay =
+    Number.isFinite(raw.timeOfDay) && raw.timeOfDay >= 0 && raw.timeOfDay < 24
+      ? raw.timeOfDay
+      : 8;
+  result.hungerDays =
+    Number.isInteger(raw.hungerDays) && raw.hungerDays >= 0
+      ? Math.min(1000, raw.hungerDays)
+      : 0;
+  result.wageDebt =
+    Number.isInteger(raw.wageDebt) && raw.wageDebt >= 0
+      ? Math.min(1e9, raw.wageDebt)
+      : 0;
+  result.campOpen = false;
+  result.campUpgrades = Object.fromEntries(
+    campStructures.map((building) => [
+      building.id,
+      Number.isInteger(raw.campUpgrades?.[building.id])
+        ? Math.max(0, Math.min(building.max, raw.campUpgrades[building.id]))
+        : 0,
+    ]),
+  );
+  for (const p of result.party) {
+    p.dead = !!p.dead;
+    if (p.dead) {
+      p.hp = 0;
+      p.equipment = { weapon: null, armor: null };
+    }
+  }
   if (raw.version === 1) result.battle = null;
   if (result.battle) {
     result.battle.valor = Number.isFinite(result.battle.valor)
@@ -669,6 +730,7 @@ export function train(s, id, kind) {
   const p = s.party[id];
   if (
     !p ||
+    p.dead ||
     s.battle ||
     s.event ||
     p.points < 1 ||
@@ -690,15 +752,17 @@ export function recruit(s) {
     s.event ||
     places[s.location]?.type !== "town" ||
     s.gold < 60 ||
-    s.party.length >= 6
+    livingParty(s).length >= 6
   )
     return false;
-  const id = s.party.length;
+  if (companyLost(s)) return false;
+  const vacancy = s.party.findIndex((p) => p.dead);
+  const id = vacancy >= 0 ? vacancy : s.party.length;
   s.gold -= 60;
-  s.party.push({
+  const recruit = {
     id,
-    name: id === 4 ? "Tamsin" : "Bram",
-    role: id === 4 ? "Archer" : "Shieldbearer",
+    name: id % 2 === 0 ? "Tamsin" : "Bram",
+    role: id % 2 === 0 ? "Archer" : "Shieldbearer",
     max: 26,
     hp: 26,
     damage: 6,
@@ -706,14 +770,17 @@ export function recruit(s) {
     xp: 0,
     points: 0,
     injury: false,
+    dead: false,
     armor: 0,
     weapon: 0,
-    profession: id === 4 ? "Herbalist" : "Miner",
+    profession: id % 2 === 0 ? "Herbalist" : "Miner",
     professionXP: 0,
     professionXPBy: {},
     talent: null,
     equipment: { weapon: null, armor: null },
-  });
+  };
+  if (vacancy >= 0) s.party[id] = recruit;
+  else s.party.push(recruit);
   note(
     s,
     `${s.party[id].name} joins the company. Daily wages increase by 2 crowns.`,
@@ -759,6 +826,7 @@ export function craft(s, id, target = 0) {
   if (
     !r ||
     !p ||
+    p.dead ||
     !plan.maker ||
     s.battle ||
     s.event ||
@@ -784,6 +852,7 @@ export function heal(s, id) {
   const p = s.party[id];
   if (
     !p ||
+    p.dead ||
     s.battle ||
     s.event ||
     s.inventory.medicine < 1 ||
@@ -829,16 +898,16 @@ export function explore(s) {
   return true;
 }
 export function forage(s) {
-  if (s.battle || s.event) return false;
+  if (s.battle || s.event || companyLost(s)) return false;
   s.food += 6;
   const herbalist = professional(s, "Herbalist");
   if (herbalist) {
     s.inventory.herbs += 1 + professionRank(herbalist);
     practice(s, herbalist, 1);
   }
-  s.day++;
+  spendHours(s, 6);
   s.morale = Math.max(0, s.morale - 3);
-  note(s, "Gathered 6 rations. A day passes.");
+  note(s, "Gathered 6 rations in six hours.");
   return true;
 }
 export function resolveEvent(s, choice) {
@@ -864,8 +933,8 @@ export function resolveEvent(s, choice) {
   if (s.event?.kind === "storm") {
     if (!["shelter", "push", "leave"].includes(choice)) return false;
     if (choice === "shelter") {
-      s.day++;
-      note(s, "Waited a day for the storm to pass.");
+      spendHours(s, 24);
+      note(s, "Waited a day for the storm to pass; daily upkeep settled.");
     } else {
       s.morale = Math.max(0, s.morale - 10);
       for (const p of s.party) if (p.hp > 0) p.hp = Math.max(1, p.hp - 3);
@@ -1096,7 +1165,14 @@ export function nearbyPlace(position) {
   );
 }
 export function moveTo(s, x, y) {
-  if (s.battle || s.event || !Number.isFinite(x) || !Number.isFinite(y))
+  if (
+    s.battle ||
+    s.event ||
+    s.campOpen ||
+    companyLost(s) ||
+    !Number.isFinite(x) ||
+    !Number.isFinite(y)
+  )
     return false;
   const point = {
     x: Math.max(12, Math.min(WORLD.width - 12, x)),
@@ -1124,6 +1200,8 @@ export function terrainAt(p) {
 export function advanceMovement(s, seconds) {
   if (
     !s.destination ||
+    s.campOpen ||
+    companyLost(s) ||
     s.battle ||
     s.event ||
     !Number.isFinite(seconds) ||
@@ -1142,10 +1220,10 @@ export function advanceMovement(s, seconds) {
       arrived = true;
       break;
     }
-    const amount = Math.min(budget, length, 160 - s.walked, 12);
+    const amount = Math.min(budget, length, 12);
     s.position.x += (dx / length) * amount;
     s.position.y += (dy / length) * amount;
-    s.walked += amount;
+    s.walked = (s.walked + amount) % 160;
     discoverNearby(s);
     budget -= amount;
     changed = true;
@@ -1161,25 +1239,6 @@ export function advanceMovement(s, seconds) {
     s.location = nearbyPlace(s.position);
     if (old !== s.location && s.location >= 0)
       note(s, `Reached ${places[s.location].name}.`);
-    if (s.walked >= 160 - 0.001) {
-      const cost = s.research.includes("rations") ? 3 : 4;
-      if (s.food < cost) {
-        s.walked = 159.999;
-        s.destination = null;
-        note(s, "Provisions exhausted. Stop to forage before continuing.");
-        break;
-      }
-      s.food -= cost;
-      s.walked = 0;
-      s.day++;
-      s.morale = Math.max(0, s.morale - 2);
-      note(s, `A day on the road. Used ${cost} rations.`);
-      if (s.day % 3 === 0) {
-        s.event = roadEvent(s);
-        s.destination = null;
-        break;
-      }
-    }
     if (amount >= length - 0.001) {
       s.destination = null;
       arrived = true;
@@ -1217,7 +1276,9 @@ export function initialChart() {
   return cells;
 }
 export function discoverNearby(s, reward = true) {
-  const radius = s.research.includes("scouting") ? 210 : 140,
+  const radius =
+      (s.research.includes("scouting") ? 210 : 140) +
+      (s.campUpgrades.watchpost ? 40 : 0),
     known = new Set(s.charted),
     cols = Math.ceil(WORLD.width / 64);
   const cx = Math.floor(s.position.x / 64),
@@ -1296,13 +1357,77 @@ export function initialPatrols() {
       ],
       cleared: false,
     },
+    {
+      id: "pine-wolves",
+      name: "Pinewatch wolf pack",
+      kind: "wolves",
+      x: 365,
+      y: 205,
+      waypoint: 0,
+      route: [
+        { x: 310, y: 210 },
+        { x: 375, y: 175 },
+        { x: 385, y: 220 },
+      ],
+      cleared: false,
+    },
+    {
+      id: "grove-wolves",
+      name: "Grove wolf pack",
+      kind: "wolves",
+      x: 980,
+      y: 275,
+      waypoint: 0,
+      route: [
+        { x: 910, y: 340 },
+        { x: 1080, y: 310 },
+        { x: 1000, y: 190 },
+      ],
+      cleared: false,
+    },
+    {
+      id: "road-bandits",
+      name: "Roadside cutthroats",
+      kind: "bandits",
+      x: 410,
+      y: 440,
+      waypoint: 0,
+      route: [
+        { x: 500, y: 475 },
+        { x: 445, y: 540 },
+        { x: 345, y: 455 },
+      ],
+      cleared: false,
+    },
   ];
 }
 export function advancePatrols(s, seconds) {
-  if (s.battle || s.event || !Number.isFinite(seconds) || seconds <= 0)
+  if (
+    s.battle ||
+    s.event ||
+    s.campOpen ||
+    companyLost(s) ||
+    !Number.isFinite(seconds) ||
+    seconds <= 0
+  )
     return false;
   for (const p of s.patrols.filter((p) => !p.cleared)) {
-    let budget = Math.min(seconds, 5) * (p.kind === "merchant" ? 14 : 20);
+    let budget =
+      Math.min(seconds, 5) *
+      (p.kind === "merchant" ? 14 : p.kind === "wolves" ? 24 : 20);
+    const playerDistance = Math.hypot(s.position.x - p.x, s.position.y - p.y);
+    if (
+      p.kind !== "merchant" &&
+      playerDistance < 90 &&
+      (p.kind !== "wolves" || terrainAt(s.position) === "forest")
+    ) {
+      const chase = Math.min(budget, Math.max(0, playerDistance - 30));
+      if (playerDistance > 0) {
+        p.x += ((s.position.x - p.x) / playerDistance) * chase;
+        p.y += ((s.position.y - p.y) / playerDistance) * chase;
+      }
+      continue;
+    }
     while (budget > 0) {
       const t = p.route[p.waypoint],
         dx = t.x - p.x,
@@ -1394,6 +1519,7 @@ export function assignProfession(s, id, name) {
   const p = s.party[id];
   if (
     !p ||
+    p.dead ||
     s.battle ||
     s.event ||
     !professions.includes(name) ||
@@ -1411,7 +1537,16 @@ export function assignProfession(s, id, name) {
   return true;
 }
 export function campCost(s) {
-  return Math.max(2, 4 - professionBonus(s, "Cook"));
+  const count = livingParty(s).length;
+  return count
+    ? Math.max(
+        1,
+        count -
+          Math.min(2, professionBonus(s, "Cook")) -
+          (s.research.includes("rations") ? 1 : 0) -
+          (s.campUpgrades.cookpot || 0),
+      )
+    : 0;
 }
 export function healAmount(s) {
   return 15 + professionBonus(s, "Herbalist") * 3;
@@ -1440,7 +1575,7 @@ export function workSite(s) {
   if (!maker || s.battle || s.event || s.food < 2) return false;
   s.destination = null;
   s.food -= 2;
-  s.day++;
+  spendHours(s, 6);
   const yieldAmount = 3 + professionRank(maker) * 2;
   if (type === "mine") s.inventory.ore += yieldAmount;
   else {
@@ -1450,7 +1585,7 @@ export function workSite(s) {
   practice(s, maker, 2);
   note(
     s,
-    `${maker.name} worked at ${places[s.location].name}: gained ${yieldAmount} ${type === "mine" ? "ore" : "herbs"} for 2 rations and a day.`,
+    `${maker.name} worked at ${places[s.location].name}: gained ${yieldAmount} ${type === "mine" ? "ore" : "herbs"} for 2 rations and six hours.`,
   );
   return true;
 }
@@ -1540,7 +1675,15 @@ export function talentsFor(p) {
 export function learnTalent(s, id, talent) {
   const p = s.party[id],
     t = p && talentsFor(p).find((t) => t.id === talent);
-  if (!t || s.battle || s.event || p.talent || p.level < 2 || p.points < 1)
+  if (
+    !t ||
+    p.dead ||
+    s.battle ||
+    s.event ||
+    p.talent ||
+    p.level < 2 ||
+    p.points < 1
+  )
     return false;
   p.points--;
   p.talent = talent;
@@ -1579,6 +1722,7 @@ export function useSkill(s, id, x, y) {
     !b ||
     !u ||
     !p ||
+    p.dead ||
     !skill ||
     p.hp <= 0 ||
     u.acted ||
@@ -1613,6 +1757,7 @@ export function buyGear(s, item, target = 0) {
   const offer = { weapon: [35, 2, 4], armor: [30, 1, 3] }[item];
   if (
     !p ||
+    p.dead ||
     !offer ||
     s.battle ||
     s.event ||
@@ -1632,7 +1777,7 @@ export function buyGear(s, item, target = 0) {
   return true;
 }
 
-export const salePrices = { ore: 2, wood: 1, herbs: 1, medicine: 4 };
+export const salePrices = { ore: 2, wood: 1, herbs: 1, medicine: 4, pelts: 3 };
 export function sell(s, item, quantity = 1) {
   const price = salePrices[item];
   if (
@@ -1654,7 +1799,7 @@ export function sell(s, item, quantity = 1) {
   return true;
 }
 export function innCost(s) {
-  return s.party.length * 6;
+  return livingParty(s).length * 6 + s.wageDebt;
 }
 export function restAtInn(s) {
   const price = innCost(s);
@@ -1662,14 +1807,15 @@ export function restAtInn(s) {
     s.battle ||
     s.event ||
     places[s.location]?.type !== "town" ||
+    companyLost(s) ||
     s.gold < price
   )
     return false;
   s.destination = null;
-  s.gold -= price;
-  s.day++;
-  s.morale = Math.min(100, s.morale + 15);
-  for (const p of s.party) {
+  s.gold -= livingParty(s).length * 4;
+  spendHours(s, 24, { mealsProvided: true });
+  s.morale = Math.min(100, s.morale + 17);
+  for (const p of livingParty(s)) {
     p.hp = p.max;
     p.injury = false;
   }
@@ -1748,6 +1894,7 @@ export function equipEquipment(s, id, target) {
   if (
     !item ||
     !p ||
+    p.dead ||
     s.battle ||
     s.event ||
     (item.role && item.role !== p.role) ||
@@ -1768,6 +1915,7 @@ export function unequipEquipment(s, target, slot) {
   const p = s.party[target];
   if (
     !p ||
+    p.dead ||
     !["weapon", "armor"].includes(slot) ||
     !p.equipment?.[slot] ||
     s.battle ||
@@ -1826,7 +1974,9 @@ export function equipmentRecipe(s, templateId) {
     smith,
     ore: Math.max(
       1,
-      (item.slot === "armor" ? 6 : 5) - (smith ? professionRank(smith) : 0),
+      (item.slot === "armor" ? 6 : 5) -
+        (smith ? professionRank(smith) : 0) -
+        (s.campOpen && s.campUpgrades.forge ? 1 : 0),
     ),
     wood: item.slot === "armor" ? 1 : 2,
   };
@@ -1850,6 +2000,240 @@ export function craftEquipment(s, templateId) {
   note(
     s,
     `${plan.smith.name} crafted ${plan.item.name}. Assign it in Equipment.`,
+  );
+  return true;
+}
+
+// One authoritative calendar settles costs for travel, work, rest, and idle exploration.
+export const DAY_SECONDS = 240;
+export function livingParty(s) {
+  return s.party.filter((p) => !p.dead);
+}
+export function companyLost(s) {
+  return livingParty(s).length === 0;
+}
+export function dailyWages(s) {
+  return livingParty(s).length * 2;
+}
+export function starvationDamage(s) {
+  return Math.min(8, 2 + s.hungerDays);
+}
+function settleDay(s, mealsProvided = false) {
+  const wages = dailyWages(s);
+  const cost = campCost(s),
+    supplied = mealsProvided ? cost : Math.min(s.food, cost);
+  if (!mealsProvided) s.food -= supplied;
+  if (supplied < cost) {
+    s.hungerDays++;
+    const damage = Math.max(
+      1,
+      Math.ceil((starvationDamage(s) * (cost - supplied)) / cost),
+    );
+    for (const p of livingParty(s)) {
+      p.hp = Math.max(0, p.hp - damage);
+      p.injury = true;
+      if (p.hp === 0) {
+        p.dead = true;
+        p.equipment = { weapon: null, armor: null };
+        note(
+          s,
+          `${p.name} died of starvation. Their equipment returns to company stores.`,
+        );
+      }
+    }
+    s.morale = Math.max(0, s.morale - 10);
+    note(
+      s,
+      `Not enough rations: ${supplied}/${cost} supplied. Hunger day ${s.hungerDays}; living companions lost ${damage} health. Starvation deaths are permanent.`,
+    );
+  } else {
+    s.hungerDays = 0;
+    s.morale = Math.max(0, s.morale - 2);
+  }
+  const owed = wages + s.wageDebt;
+  const paid = Math.min(s.gold, owed);
+  s.gold -= paid;
+  s.wageDebt = owed - paid;
+  if (s.wageDebt) {
+    s.morale = Math.max(0, s.morale - 8);
+    note(s, `Unpaid wages: ${s.wageDebt} crowns owed. Company morale falls.`);
+  }
+  note(
+    s,
+    `Daily upkeep: ${mealsProvided ? "inn meals" : `${supplied} rations`} and ${paid} crowns paid. ${s.wageDebt ? `${s.wageDebt} crowns still owed.` : "Wages settled."}`,
+  );
+  if (companyLost(s)) {
+    s.destination = null;
+    s.campOpen = false;
+    s.event = null;
+    s.battle = null;
+    note(s, "The company has perished. Start a new company to continue.");
+  }
+}
+export function spendHours(s, hours, options = {}) {
+  if (!Number.isFinite(hours) || hours <= 0 || companyLost(s)) return false;
+  let remaining = Math.min(hours, 24 * 30);
+  while (remaining > 0.000001 && !companyLost(s)) {
+    const untilMidnight = 24 - s.timeOfDay;
+    const amount = Math.min(remaining, untilMidnight);
+    s.timeOfDay += amount;
+    remaining -= amount;
+    if (s.timeOfDay >= 24 - 0.000001) {
+      s.timeOfDay = 0;
+      s.day++;
+      settleDay(s, !!options.mealsProvided);
+    }
+  }
+  return true;
+}
+export function advanceClock(s, seconds) {
+  if (
+    !Number.isFinite(seconds) ||
+    seconds <= 0 ||
+    s.battle ||
+    s.event ||
+    s.campOpen ||
+    companyLost(s)
+  )
+    return false;
+  const before = s.day;
+  spendHours(s, (seconds / DAY_SECONDS) * 24);
+  if (s.day !== before && !companyLost(s) && s.day % 3 === 0) {
+    s.event = roadEvent(s);
+    s.destination = null;
+  }
+  return true;
+}
+export function payWages(s) {
+  if (s.battle || s.event || companyLost(s) || !s.wageDebt || !s.gold)
+    return false;
+  const paid = Math.min(s.gold, s.wageDebt);
+  s.gold -= paid;
+  s.wageDebt -= paid;
+  note(s, `Paid ${paid} crowns in overdue wages. ${s.wageDebt} remain owed.`);
+  return true;
+}
+export function clockInfo(s) {
+  const hours = Math.floor(s.timeOfDay),
+    minutes = Math.floor((s.timeOfDay - hours) * 60);
+  const period =
+    s.timeOfDay < 5 || s.timeOfDay >= 20
+      ? "Night"
+      : s.timeOfDay < 8
+        ? "Dawn"
+        : s.timeOfDay < 17
+          ? "Daylight"
+          : "Dusk";
+  return {
+    period,
+    time: `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`,
+    percent: (s.timeOfDay / 24) * 100,
+  };
+}
+export const campStructures = [
+  {
+    id: "tents",
+    name: "Sleeping tents",
+    max: 2,
+    gold: 20,
+    wood: 6,
+    ore: 0,
+    herbs: 0,
+    desc: "Each level restores 5 more health when resting with food.",
+  },
+  {
+    id: "cookpot",
+    name: "Cookpot",
+    max: 1,
+    gold: 15,
+    wood: 3,
+    ore: 2,
+    herbs: 0,
+    desc: "Reduce the daily ration requirement by 1, down to a minimum of 1.",
+  },
+  {
+    id: "forge",
+    name: "Portable forge",
+    max: 1,
+    gold: 30,
+    wood: 4,
+    ore: 6,
+    herbs: 0,
+    desc: "Fine equipment recipes use 1 less ore while the camp is pitched.",
+  },
+  {
+    id: "watchpost",
+    name: "Watch post",
+    max: 1,
+    gold: 20,
+    wood: 5,
+    ore: 2,
+    herbs: 0,
+    desc: "Increase discovery radius by 40 and begin battles with 1 extra valor.",
+  },
+  {
+    id: "infirmary",
+    name: "Medicine tent",
+    max: 1,
+    gold: 25,
+    wood: 4,
+    ore: 0,
+    herbs: 8,
+    desc: "Rest heals 6 more health and cures injuries above half health.",
+  },
+];
+export function openCamp(s) {
+  if (s.battle || s.event || companyLost(s)) return false;
+  s.destination = null;
+  s.campOpen = true;
+  note(
+    s,
+    "Camp pitched. Build improvements, tend your company, or rest until dawn.",
+  );
+  return true;
+}
+export function leaveCamp(s) {
+  s.campOpen = false;
+}
+export function campBuildPlan(s, id) {
+  const building = campStructures.find((b) => b.id === id);
+  if (!building) return null;
+  const level = s.campUpgrades[id] || 0,
+    multiplier = level + 1;
+  return {
+    ...building,
+    level,
+    gold: building.gold * multiplier,
+    wood: building.wood * multiplier,
+    ore: building.ore * multiplier,
+    herbs: building.herbs * multiplier,
+  };
+}
+export function buildCamp(s, id) {
+  const plan = campBuildPlan(s, id);
+  if (
+    !plan ||
+    !s.campOpen ||
+    s.battle ||
+    s.event ||
+    companyLost(s) ||
+    plan.level >= plan.max ||
+    s.gold < plan.gold ||
+    s.inventory.wood < plan.wood ||
+    s.inventory.ore < plan.ore ||
+    s.inventory.herbs < plan.herbs
+  )
+    return false;
+  s.gold -= plan.gold;
+  s.inventory.wood -= plan.wood;
+  s.inventory.ore -= plan.ore;
+  s.inventory.herbs -= plan.herbs;
+  s.campUpgrades[id] = plan.level + 1;
+  spendHours(s, 2);
+  discoverNearby(s);
+  note(
+    s,
+    `${plan.name} built at level ${plan.level + 1}. Camp improvements travel with the company.`,
   );
   return true;
 }

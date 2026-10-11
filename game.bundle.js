@@ -58,8 +58,8 @@ studies.push(
 );
 function fresh() {
   return {
-    version: 7,
-    inventory: { ore: 0, wood: 0, herbs: 0, medicine: 1 },
+    version: 8,
+    inventory: { ore: 0, wood: 0, herbs: 0, medicine: 1, pelts: 0 },
     gear: [],
     nextGearId: 1,
     explored: [],
@@ -70,6 +70,11 @@ function fresh() {
     charted: initialChart(),
     patrols: initialPatrols(),
     day: 1,
+    timeOfDay: 8,
+    hungerDays: 0,
+    wageDebt: 0,
+    campOpen: false,
+    campUpgrades: {},
     gold: 120,
     food: 24,
     morale: 75,
@@ -102,6 +107,7 @@ function fresh() {
       xp: 0,
       points: 0,
       injury: false,
+      dead: false,
       armor: 0,
       weapon: 0,
       profession:
@@ -125,47 +131,45 @@ function note(s, t) {
 }
 function travel(s, to) {
   if (s.battle || s.event || to === s.location || !places[to]) return false;
-  const cost = s.research.includes("rations") ? 3 : 4;
-  if (s.food < cost) {
-    note(s, "Not enough provisions to travel. Buy supplies or forage.");
-    return false;
-  }
-  s.food -= cost;
-  s.day++;
+  if (companyLost(s) || s.campOpen) return false;
+  spendHours(s, 24);
+  if (companyLost(s)) return false;
   s.location = to;
   s.position = { x: places[to].x, y: places[to].y };
   s.trail = [{ ...s.position }];
   s.destination = null;
   s.morale = Math.max(0, s.morale - 2);
-  note(s, `Reached ${places[to].name}. Used ${cost} rations.`);
+  note(s, `Reached ${places[to].name}. Daily upkeep settled.`);
   if (s.day % 3 === 0) s.event = roadEvent(s);
   return true;
 }
 function camp(s) {
-  if (s.battle || s.event) return false;
-  const wages = s.party.length * 2,
-    foodCost = campCost(s),
-    cook = professional(s, "Cook"),
-    recovery =
-      (s.research.includes("medicine") ? 18 : 10) +
-      professionBonus(s, "Herbalist") * 2;
-  if (s.food < foodCost || s.gold < wages) {
+  if (s.battle || s.event || companyLost(s)) return false;
+  s.destination = null;
+  const cook = professional(s, "Cook");
+  const recovery =
+    (s.research.includes("medicine") ? 18 : 10) +
+    professionBonus(s, "Herbalist") * 2 +
+    (s.campUpgrades.tents || 0) * 5 +
+    (s.campUpgrades.infirmary || 0) * 6;
+  spendHours(s, (8 - s.timeOfDay + 24) % 24 || 24);
+  if (s.hungerDays === 0 && !companyLost(s)) {
+    s.morale = Math.min(100, s.morale + 12 + professionBonus(s, "Cook"));
+    for (const p of livingParty(s)) {
+      p.hp = Math.min(p.max, p.hp + recovery);
+      if (p.hp === p.max || (s.campUpgrades.infirmary && p.hp >= p.max / 2))
+        p.injury = false;
+    }
+    if (cook && !cook.dead) practice(s, cook, 1);
     note(
       s,
-      `Camp needs ${foodCost} rations and 2 crowns per companion for wages.`,
+      "Rested until dawn. Fed companions recover; camp improvements help tend their wounds.",
     );
-    return false;
-  }
-  s.food -= foodCost;
-  s.gold -= wages;
-  s.day++;
-  s.morale = Math.min(100, s.morale + 10 + professionBonus(s, "Cook"));
-  for (const p of s.party) {
-    p.hp = Math.min(p.max, p.hp + recovery);
-    if (p.hp === p.max) p.injury = false;
-  }
-  if (cook) practice(s, cook, 1);
-  note(s, "Campfires lit. Wages paid, wounds tended, spirits lifted.");
+  } else
+    note(
+      s,
+      "An empty cookpot. Hunger prevents recovery; find food before the next daily meal.",
+    );
   return true;
 }
 function research(s, id) {
@@ -199,6 +203,8 @@ function startBattle(s, patrolId = null) {
   if (
     s.battle ||
     s.event ||
+    s.campOpen ||
+    companyLost(s) ||
     (!patrol &&
       (!s.contract ||
         s.contract.kind === "delivery" ||
@@ -220,8 +226,9 @@ function startBattle(s, patrolId = null) {
     kind: patrol ? "patrol" : "contract",
     patrolId: patrol?.id || null,
     caravanRaid: patrol?.kind === "merchant",
+    wildlife: patrol?.kind === "wolves",
     turn: 1,
-    valor: 3,
+    valor: 3 + (s.campUpgrades.watchpost || 0),
     units: s.party
       .filter((p) => p.hp > 0)
       .map((p, i) => ({
@@ -266,6 +273,17 @@ function startBattle(s, patrolId = null) {
       },
     ],
   };
+  if (patrol?.kind === "wolves")
+    s.battle.enemies = [1, 3, 5].map((y, id) => ({
+      id,
+      x: 7,
+      y,
+      hp: 14,
+      max: 14,
+      kind: "wolf",
+      damage: 4,
+      armor: 0,
+    }));
   const difficulty = contractDifficulty(patrol ? null : s.contract);
   for (let i = 0; i < difficulty.tier - 1; i++) {
     s.battle.enemies.push({
@@ -322,8 +340,21 @@ function act(s, id, x, y) {
 function win(s) {
   const patrolFight = s.battle.kind === "patrol";
   const raid = patrolFight && s.battle.caravanRaid;
-  const difficulty = contractDifficulty(patrolFight ? null : s.contract);
-  const reward = patrolFight ? (raid ? 60 : 40) : s.contract.reward;
+  const wildlife = patrolFight && s.battle.wildlife;
+  const difficulty = wildlife
+    ? { tier: 1, knowledge: 1, xp: 20, salvage: 0, renown: 2 }
+    : contractDifficulty(patrolFight ? null : s.contract);
+  const reward = patrolFight
+    ? wildlife
+      ? 0
+      : raid
+        ? 60
+        : 40
+    : s.contract.reward;
+  if (wildlife) {
+    s.food += 6;
+    s.inventory.pelts += 2;
+  }
   if (raid) s.food += 10;
   s.gold += reward;
   s.knowledge += difficulty.knowledge;
@@ -345,17 +376,19 @@ function win(s) {
   }
   note(
     s,
-    `${raid ? "Caravan plundered · 10 rations seized" : patrolFight ? "Patrol defeated" : "Contract fulfilled"}. Earned ${reward} crowns, ${difficulty.knowledge} knowledge, and ${difficulty.xp} XP per survivor.`,
+    `${wildlife ? "Wolf pack defeated · 6 rations and 2 pelts recovered" : raid ? "Caravan plundered · 10 rations seized" : patrolFight ? "Patrol defeated" : "Contract fulfilled"}. Earned ${reward} crowns, ${difficulty.knowledge} knowledge, and ${difficulty.xp} XP per survivor.`,
   );
-  const lootPool = equipmentCatalog.filter(
-    (item) => item.tier === difficulty.tier,
-  );
-  const loot = lootPool[(s.completed + s.skirmishes - 1) % lootPool.length];
-  grantEquipment(s, loot.id);
-  note(
-    s,
-    `Recovered ${loot.rarity.toLowerCase()} ${loot.name}. Open Equipment to assign the loot.`,
-  );
+  if (!wildlife) {
+    const lootPool = equipmentCatalog.filter(
+      (item) => item.tier === difficulty.tier,
+    );
+    const loot = lootPool[(s.completed + s.skirmishes - 1) % lootPool.length];
+    grantEquipment(s, loot.id);
+    note(
+      s,
+      `Recovered ${loot.rarity.toLowerCase()} ${loot.name}. Open Equipment to assign the loot.`,
+    );
+  }
   if (!patrolFight) s.contract = null;
   s.battle = null;
 }
@@ -455,7 +488,7 @@ function endTurn(s) {
     s.location = 0;
     s.position = { x: places[0].x, y: places[0].y };
     s.trail = [{ ...s.position }];
-    for (const p of s.party) {
+    for (const p of livingParty(s)) {
       p.hp = 1;
       p.injury = true;
     }
@@ -481,7 +514,7 @@ function restore(raw) {
   const base = fresh();
   if (
     !raw ||
-    ![1, 2, 3, 4, 5, 6, 7].includes(raw.version) ||
+    ![1, 2, 3, 4, 5, 6, 7, 8].includes(raw.version) ||
     !Array.isArray(raw.party) ||
     raw.party.length < 1 ||
     raw.party.length > 6 ||
@@ -507,7 +540,7 @@ function restore(raw) {
   const result = {
     ...base,
     ...raw,
-    version: 7,
+    version: 8,
     inventory: { ...base.inventory, ...raw.inventory },
     explored: raw.explored || [],
     event: raw.event || null,
@@ -633,6 +666,34 @@ function restore(raw) {
     }
   }
   // Old saves retain company progression but return to the map for the new combat rules.
+  result.timeOfDay =
+    Number.isFinite(raw.timeOfDay) && raw.timeOfDay >= 0 && raw.timeOfDay < 24
+      ? raw.timeOfDay
+      : 8;
+  result.hungerDays =
+    Number.isInteger(raw.hungerDays) && raw.hungerDays >= 0
+      ? Math.min(1000, raw.hungerDays)
+      : 0;
+  result.wageDebt =
+    Number.isInteger(raw.wageDebt) && raw.wageDebt >= 0
+      ? Math.min(1e9, raw.wageDebt)
+      : 0;
+  result.campOpen = false;
+  result.campUpgrades = Object.fromEntries(
+    campStructures.map((building) => [
+      building.id,
+      Number.isInteger(raw.campUpgrades?.[building.id])
+        ? Math.max(0, Math.min(building.max, raw.campUpgrades[building.id]))
+        : 0,
+    ]),
+  );
+  for (const p of result.party) {
+    p.dead = !!p.dead;
+    if (p.dead) {
+      p.hp = 0;
+      p.equipment = { weapon: null, armor: null };
+    }
+  }
   if (raw.version === 1) result.battle = null;
   if (result.battle) {
     result.battle.valor = Number.isFinite(result.battle.valor)
@@ -671,6 +732,7 @@ function train(s, id, kind) {
   const p = s.party[id];
   if (
     !p ||
+    p.dead ||
     s.battle ||
     s.event ||
     p.points < 1 ||
@@ -692,15 +754,17 @@ function recruit(s) {
     s.event ||
     places[s.location]?.type !== "town" ||
     s.gold < 60 ||
-    s.party.length >= 6
+    livingParty(s).length >= 6
   )
     return false;
-  const id = s.party.length;
+  if (companyLost(s)) return false;
+  const vacancy = s.party.findIndex((p) => p.dead);
+  const id = vacancy >= 0 ? vacancy : s.party.length;
   s.gold -= 60;
-  s.party.push({
+  const recruit = {
     id,
-    name: id === 4 ? "Tamsin" : "Bram",
-    role: id === 4 ? "Archer" : "Shieldbearer",
+    name: id % 2 === 0 ? "Tamsin" : "Bram",
+    role: id % 2 === 0 ? "Archer" : "Shieldbearer",
     max: 26,
     hp: 26,
     damage: 6,
@@ -708,14 +772,17 @@ function recruit(s) {
     xp: 0,
     points: 0,
     injury: false,
+    dead: false,
     armor: 0,
     weapon: 0,
-    profession: id === 4 ? "Herbalist" : "Miner",
+    profession: id % 2 === 0 ? "Herbalist" : "Miner",
     professionXP: 0,
     professionXPBy: {},
     talent: null,
     equipment: { weapon: null, armor: null },
-  });
+  };
+  if (vacancy >= 0) s.party[id] = recruit;
+  else s.party.push(recruit);
   note(
     s,
     `${s.party[id].name} joins the company. Daily wages increase by 2 crowns.`,
@@ -761,6 +828,7 @@ function craft(s, id, target = 0) {
   if (
     !r ||
     !p ||
+    p.dead ||
     !plan.maker ||
     s.battle ||
     s.event ||
@@ -786,6 +854,7 @@ function heal(s, id) {
   const p = s.party[id];
   if (
     !p ||
+    p.dead ||
     s.battle ||
     s.event ||
     s.inventory.medicine < 1 ||
@@ -831,16 +900,16 @@ function explore(s) {
   return true;
 }
 function forage(s) {
-  if (s.battle || s.event) return false;
+  if (s.battle || s.event || companyLost(s)) return false;
   s.food += 6;
   const herbalist = professional(s, "Herbalist");
   if (herbalist) {
     s.inventory.herbs += 1 + professionRank(herbalist);
     practice(s, herbalist, 1);
   }
-  s.day++;
+  spendHours(s, 6);
   s.morale = Math.max(0, s.morale - 3);
-  note(s, "Gathered 6 rations. A day passes.");
+  note(s, "Gathered 6 rations in six hours.");
   return true;
 }
 function resolveEvent(s, choice) {
@@ -866,8 +935,8 @@ function resolveEvent(s, choice) {
   if (s.event?.kind === "storm") {
     if (!["shelter", "push", "leave"].includes(choice)) return false;
     if (choice === "shelter") {
-      s.day++;
-      note(s, "Waited a day for the storm to pass.");
+      spendHours(s, 24);
+      note(s, "Waited a day for the storm to pass; daily upkeep settled.");
     } else {
       s.morale = Math.max(0, s.morale - 10);
       for (const p of s.party) if (p.hp > 0) p.hp = Math.max(1, p.hp - 3);
@@ -1098,7 +1167,14 @@ function nearbyPlace(position) {
   );
 }
 function moveTo(s, x, y) {
-  if (s.battle || s.event || !Number.isFinite(x) || !Number.isFinite(y))
+  if (
+    s.battle ||
+    s.event ||
+    s.campOpen ||
+    companyLost(s) ||
+    !Number.isFinite(x) ||
+    !Number.isFinite(y)
+  )
     return false;
   const point = {
     x: Math.max(12, Math.min(WORLD.width - 12, x)),
@@ -1126,6 +1202,8 @@ function terrainAt(p) {
 function advanceMovement(s, seconds) {
   if (
     !s.destination ||
+    s.campOpen ||
+    companyLost(s) ||
     s.battle ||
     s.event ||
     !Number.isFinite(seconds) ||
@@ -1144,10 +1222,10 @@ function advanceMovement(s, seconds) {
       arrived = true;
       break;
     }
-    const amount = Math.min(budget, length, 160 - s.walked, 12);
+    const amount = Math.min(budget, length, 12);
     s.position.x += (dx / length) * amount;
     s.position.y += (dy / length) * amount;
-    s.walked += amount;
+    s.walked = (s.walked + amount) % 160;
     discoverNearby(s);
     budget -= amount;
     changed = true;
@@ -1163,25 +1241,6 @@ function advanceMovement(s, seconds) {
     s.location = nearbyPlace(s.position);
     if (old !== s.location && s.location >= 0)
       note(s, `Reached ${places[s.location].name}.`);
-    if (s.walked >= 160 - 0.001) {
-      const cost = s.research.includes("rations") ? 3 : 4;
-      if (s.food < cost) {
-        s.walked = 159.999;
-        s.destination = null;
-        note(s, "Provisions exhausted. Stop to forage before continuing.");
-        break;
-      }
-      s.food -= cost;
-      s.walked = 0;
-      s.day++;
-      s.morale = Math.max(0, s.morale - 2);
-      note(s, `A day on the road. Used ${cost} rations.`);
-      if (s.day % 3 === 0) {
-        s.event = roadEvent(s);
-        s.destination = null;
-        break;
-      }
-    }
     if (amount >= length - 0.001) {
       s.destination = null;
       arrived = true;
@@ -1219,7 +1278,9 @@ function initialChart() {
   return cells;
 }
 function discoverNearby(s, reward = true) {
-  const radius = s.research.includes("scouting") ? 210 : 140,
+  const radius =
+      (s.research.includes("scouting") ? 210 : 140) +
+      (s.campUpgrades.watchpost ? 40 : 0),
     known = new Set(s.charted),
     cols = Math.ceil(WORLD.width / 64);
   const cx = Math.floor(s.position.x / 64),
@@ -1298,13 +1359,77 @@ function initialPatrols() {
       ],
       cleared: false,
     },
+    {
+      id: "pine-wolves",
+      name: "Pinewatch wolf pack",
+      kind: "wolves",
+      x: 365,
+      y: 205,
+      waypoint: 0,
+      route: [
+        { x: 310, y: 210 },
+        { x: 375, y: 175 },
+        { x: 385, y: 220 },
+      ],
+      cleared: false,
+    },
+    {
+      id: "grove-wolves",
+      name: "Grove wolf pack",
+      kind: "wolves",
+      x: 980,
+      y: 275,
+      waypoint: 0,
+      route: [
+        { x: 910, y: 340 },
+        { x: 1080, y: 310 },
+        { x: 1000, y: 190 },
+      ],
+      cleared: false,
+    },
+    {
+      id: "road-bandits",
+      name: "Roadside cutthroats",
+      kind: "bandits",
+      x: 410,
+      y: 440,
+      waypoint: 0,
+      route: [
+        { x: 500, y: 475 },
+        { x: 445, y: 540 },
+        { x: 345, y: 455 },
+      ],
+      cleared: false,
+    },
   ];
 }
 function advancePatrols(s, seconds) {
-  if (s.battle || s.event || !Number.isFinite(seconds) || seconds <= 0)
+  if (
+    s.battle ||
+    s.event ||
+    s.campOpen ||
+    companyLost(s) ||
+    !Number.isFinite(seconds) ||
+    seconds <= 0
+  )
     return false;
   for (const p of s.patrols.filter((p) => !p.cleared)) {
-    let budget = Math.min(seconds, 5) * (p.kind === "merchant" ? 14 : 20);
+    let budget =
+      Math.min(seconds, 5) *
+      (p.kind === "merchant" ? 14 : p.kind === "wolves" ? 24 : 20);
+    const playerDistance = Math.hypot(s.position.x - p.x, s.position.y - p.y);
+    if (
+      p.kind !== "merchant" &&
+      playerDistance < 90 &&
+      (p.kind !== "wolves" || terrainAt(s.position) === "forest")
+    ) {
+      const chase = Math.min(budget, Math.max(0, playerDistance - 30));
+      if (playerDistance > 0) {
+        p.x += ((s.position.x - p.x) / playerDistance) * chase;
+        p.y += ((s.position.y - p.y) / playerDistance) * chase;
+      }
+      continue;
+    }
     while (budget > 0) {
       const t = p.route[p.waypoint],
         dx = t.x - p.x,
@@ -1396,6 +1521,7 @@ function assignProfession(s, id, name) {
   const p = s.party[id];
   if (
     !p ||
+    p.dead ||
     s.battle ||
     s.event ||
     !professions.includes(name) ||
@@ -1413,7 +1539,16 @@ function assignProfession(s, id, name) {
   return true;
 }
 function campCost(s) {
-  return Math.max(2, 4 - professionBonus(s, "Cook"));
+  const count = livingParty(s).length;
+  return count
+    ? Math.max(
+        1,
+        count -
+          Math.min(2, professionBonus(s, "Cook")) -
+          (s.research.includes("rations") ? 1 : 0) -
+          (s.campUpgrades.cookpot || 0),
+      )
+    : 0;
 }
 function healAmount(s) {
   return 15 + professionBonus(s, "Herbalist") * 3;
@@ -1442,7 +1577,7 @@ function workSite(s) {
   if (!maker || s.battle || s.event || s.food < 2) return false;
   s.destination = null;
   s.food -= 2;
-  s.day++;
+  spendHours(s, 6);
   const yieldAmount = 3 + professionRank(maker) * 2;
   if (type === "mine") s.inventory.ore += yieldAmount;
   else {
@@ -1452,7 +1587,7 @@ function workSite(s) {
   practice(s, maker, 2);
   note(
     s,
-    `${maker.name} worked at ${places[s.location].name}: gained ${yieldAmount} ${type === "mine" ? "ore" : "herbs"} for 2 rations and a day.`,
+    `${maker.name} worked at ${places[s.location].name}: gained ${yieldAmount} ${type === "mine" ? "ore" : "herbs"} for 2 rations and six hours.`,
   );
   return true;
 }
@@ -1542,7 +1677,15 @@ function talentsFor(p) {
 function learnTalent(s, id, talent) {
   const p = s.party[id],
     t = p && talentsFor(p).find((t) => t.id === talent);
-  if (!t || s.battle || s.event || p.talent || p.level < 2 || p.points < 1)
+  if (
+    !t ||
+    p.dead ||
+    s.battle ||
+    s.event ||
+    p.talent ||
+    p.level < 2 ||
+    p.points < 1
+  )
     return false;
   p.points--;
   p.talent = talent;
@@ -1581,6 +1724,7 @@ function useSkill(s, id, x, y) {
     !b ||
     !u ||
     !p ||
+    p.dead ||
     !skill ||
     p.hp <= 0 ||
     u.acted ||
@@ -1615,6 +1759,7 @@ function buyGear(s, item, target = 0) {
   const offer = { weapon: [35, 2, 4], armor: [30, 1, 3] }[item];
   if (
     !p ||
+    p.dead ||
     !offer ||
     s.battle ||
     s.event ||
@@ -1634,7 +1779,7 @@ function buyGear(s, item, target = 0) {
   return true;
 }
 
-const salePrices = { ore: 2, wood: 1, herbs: 1, medicine: 4 };
+const salePrices = { ore: 2, wood: 1, herbs: 1, medicine: 4, pelts: 3 };
 function sell(s, item, quantity = 1) {
   const price = salePrices[item];
   if (
@@ -1656,7 +1801,7 @@ function sell(s, item, quantity = 1) {
   return true;
 }
 function innCost(s) {
-  return s.party.length * 6;
+  return livingParty(s).length * 6 + s.wageDebt;
 }
 function restAtInn(s) {
   const price = innCost(s);
@@ -1664,14 +1809,15 @@ function restAtInn(s) {
     s.battle ||
     s.event ||
     places[s.location]?.type !== "town" ||
+    companyLost(s) ||
     s.gold < price
   )
     return false;
   s.destination = null;
-  s.gold -= price;
-  s.day++;
-  s.morale = Math.min(100, s.morale + 15);
-  for (const p of s.party) {
+  s.gold -= livingParty(s).length * 4;
+  spendHours(s, 24, { mealsProvided: true });
+  s.morale = Math.min(100, s.morale + 17);
+  for (const p of livingParty(s)) {
     p.hp = p.max;
     p.injury = false;
   }
@@ -1750,6 +1896,7 @@ function equipEquipment(s, id, target) {
   if (
     !item ||
     !p ||
+    p.dead ||
     s.battle ||
     s.event ||
     (item.role && item.role !== p.role) ||
@@ -1770,6 +1917,7 @@ function unequipEquipment(s, target, slot) {
   const p = s.party[target];
   if (
     !p ||
+    p.dead ||
     !["weapon", "armor"].includes(slot) ||
     !p.equipment?.[slot] ||
     s.battle ||
@@ -1828,7 +1976,9 @@ function equipmentRecipe(s, templateId) {
     smith,
     ore: Math.max(
       1,
-      (item.slot === "armor" ? 6 : 5) - (smith ? professionRank(smith) : 0),
+      (item.slot === "armor" ? 6 : 5) -
+        (smith ? professionRank(smith) : 0) -
+        (s.campOpen && s.campUpgrades.forge ? 1 : 0),
     ),
     wood: item.slot === "armor" ? 1 : 2,
   };
@@ -1852,6 +2002,240 @@ function craftEquipment(s, templateId) {
   note(
     s,
     `${plan.smith.name} crafted ${plan.item.name}. Assign it in Equipment.`,
+  );
+  return true;
+}
+
+// One authoritative calendar settles costs for travel, work, rest, and idle exploration.
+const DAY_SECONDS = 240;
+function livingParty(s) {
+  return s.party.filter((p) => !p.dead);
+}
+function companyLost(s) {
+  return livingParty(s).length === 0;
+}
+function dailyWages(s) {
+  return livingParty(s).length * 2;
+}
+function starvationDamage(s) {
+  return Math.min(8, 2 + s.hungerDays);
+}
+function settleDay(s, mealsProvided = false) {
+  const wages = dailyWages(s);
+  const cost = campCost(s),
+    supplied = mealsProvided ? cost : Math.min(s.food, cost);
+  if (!mealsProvided) s.food -= supplied;
+  if (supplied < cost) {
+    s.hungerDays++;
+    const damage = Math.max(
+      1,
+      Math.ceil((starvationDamage(s) * (cost - supplied)) / cost),
+    );
+    for (const p of livingParty(s)) {
+      p.hp = Math.max(0, p.hp - damage);
+      p.injury = true;
+      if (p.hp === 0) {
+        p.dead = true;
+        p.equipment = { weapon: null, armor: null };
+        note(
+          s,
+          `${p.name} died of starvation. Their equipment returns to company stores.`,
+        );
+      }
+    }
+    s.morale = Math.max(0, s.morale - 10);
+    note(
+      s,
+      `Not enough rations: ${supplied}/${cost} supplied. Hunger day ${s.hungerDays}; living companions lost ${damage} health. Starvation deaths are permanent.`,
+    );
+  } else {
+    s.hungerDays = 0;
+    s.morale = Math.max(0, s.morale - 2);
+  }
+  const owed = wages + s.wageDebt;
+  const paid = Math.min(s.gold, owed);
+  s.gold -= paid;
+  s.wageDebt = owed - paid;
+  if (s.wageDebt) {
+    s.morale = Math.max(0, s.morale - 8);
+    note(s, `Unpaid wages: ${s.wageDebt} crowns owed. Company morale falls.`);
+  }
+  note(
+    s,
+    `Daily upkeep: ${mealsProvided ? "inn meals" : `${supplied} rations`} and ${paid} crowns paid. ${s.wageDebt ? `${s.wageDebt} crowns still owed.` : "Wages settled."}`,
+  );
+  if (companyLost(s)) {
+    s.destination = null;
+    s.campOpen = false;
+    s.event = null;
+    s.battle = null;
+    note(s, "The company has perished. Start a new company to continue.");
+  }
+}
+function spendHours(s, hours, options = {}) {
+  if (!Number.isFinite(hours) || hours <= 0 || companyLost(s)) return false;
+  let remaining = Math.min(hours, 24 * 30);
+  while (remaining > 0.000001 && !companyLost(s)) {
+    const untilMidnight = 24 - s.timeOfDay;
+    const amount = Math.min(remaining, untilMidnight);
+    s.timeOfDay += amount;
+    remaining -= amount;
+    if (s.timeOfDay >= 24 - 0.000001) {
+      s.timeOfDay = 0;
+      s.day++;
+      settleDay(s, !!options.mealsProvided);
+    }
+  }
+  return true;
+}
+function advanceClock(s, seconds) {
+  if (
+    !Number.isFinite(seconds) ||
+    seconds <= 0 ||
+    s.battle ||
+    s.event ||
+    s.campOpen ||
+    companyLost(s)
+  )
+    return false;
+  const before = s.day;
+  spendHours(s, (seconds / DAY_SECONDS) * 24);
+  if (s.day !== before && !companyLost(s) && s.day % 3 === 0) {
+    s.event = roadEvent(s);
+    s.destination = null;
+  }
+  return true;
+}
+function payWages(s) {
+  if (s.battle || s.event || companyLost(s) || !s.wageDebt || !s.gold)
+    return false;
+  const paid = Math.min(s.gold, s.wageDebt);
+  s.gold -= paid;
+  s.wageDebt -= paid;
+  note(s, `Paid ${paid} crowns in overdue wages. ${s.wageDebt} remain owed.`);
+  return true;
+}
+function clockInfo(s) {
+  const hours = Math.floor(s.timeOfDay),
+    minutes = Math.floor((s.timeOfDay - hours) * 60);
+  const period =
+    s.timeOfDay < 5 || s.timeOfDay >= 20
+      ? "Night"
+      : s.timeOfDay < 8
+        ? "Dawn"
+        : s.timeOfDay < 17
+          ? "Daylight"
+          : "Dusk";
+  return {
+    period,
+    time: `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`,
+    percent: (s.timeOfDay / 24) * 100,
+  };
+}
+const campStructures = [
+  {
+    id: "tents",
+    name: "Sleeping tents",
+    max: 2,
+    gold: 20,
+    wood: 6,
+    ore: 0,
+    herbs: 0,
+    desc: "Each level restores 5 more health when resting with food.",
+  },
+  {
+    id: "cookpot",
+    name: "Cookpot",
+    max: 1,
+    gold: 15,
+    wood: 3,
+    ore: 2,
+    herbs: 0,
+    desc: "Reduce the daily ration requirement by 1, down to a minimum of 1.",
+  },
+  {
+    id: "forge",
+    name: "Portable forge",
+    max: 1,
+    gold: 30,
+    wood: 4,
+    ore: 6,
+    herbs: 0,
+    desc: "Fine equipment recipes use 1 less ore while the camp is pitched.",
+  },
+  {
+    id: "watchpost",
+    name: "Watch post",
+    max: 1,
+    gold: 20,
+    wood: 5,
+    ore: 2,
+    herbs: 0,
+    desc: "Increase discovery radius by 40 and begin battles with 1 extra valor.",
+  },
+  {
+    id: "infirmary",
+    name: "Medicine tent",
+    max: 1,
+    gold: 25,
+    wood: 4,
+    ore: 0,
+    herbs: 8,
+    desc: "Rest heals 6 more health and cures injuries above half health.",
+  },
+];
+function openCamp(s) {
+  if (s.battle || s.event || companyLost(s)) return false;
+  s.destination = null;
+  s.campOpen = true;
+  note(
+    s,
+    "Camp pitched. Build improvements, tend your company, or rest until dawn.",
+  );
+  return true;
+}
+function leaveCamp(s) {
+  s.campOpen = false;
+}
+function campBuildPlan(s, id) {
+  const building = campStructures.find((b) => b.id === id);
+  if (!building) return null;
+  const level = s.campUpgrades[id] || 0,
+    multiplier = level + 1;
+  return {
+    ...building,
+    level,
+    gold: building.gold * multiplier,
+    wood: building.wood * multiplier,
+    ore: building.ore * multiplier,
+    herbs: building.herbs * multiplier,
+  };
+}
+function buildCamp(s, id) {
+  const plan = campBuildPlan(s, id);
+  if (
+    !plan ||
+    !s.campOpen ||
+    s.battle ||
+    s.event ||
+    companyLost(s) ||
+    plan.level >= plan.max ||
+    s.gold < plan.gold ||
+    s.inventory.wood < plan.wood ||
+    s.inventory.ore < plan.ore ||
+    s.inventory.herbs < plan.herbs
+  )
+    return false;
+  s.gold -= plan.gold;
+  s.inventory.wood -= plan.wood;
+  s.inventory.ore -= plan.ore;
+  s.inventory.herbs -= plan.herbs;
+  s.campUpgrades[id] = plan.level + 1;
+  spendHours(s, 2);
+  discoverNearby(s);
+  note(
+    s,
+    `${plan.name} built at level ${plan.level + 1}. Camp improvements travel with the company.`,
   );
   return true;
 }
@@ -2616,6 +3000,203 @@ function fogArtwork(charted) {
   return fogImage;
 }
 
+function drawWolf(c, x, y, step = 0) {
+  x = Math.round(x);
+  y = Math.round(y);
+  steppedOval(c, x - 14, y + 10, 30, 6, "#58634877");
+  pixel(c, x - 11, y - 3, 20, 12, "#494e40");
+  pixel(c, x - 10, y - 5, 18, 12, "#939588");
+  pixel(c, x - 9, y - 5, 16, 3, "#b5b5a0");
+  pixel(c, x - 13, y - 6, 5, 4, "#838777");
+  pixel(c, x - 16, y - 9, 4, 3, "#a7aa93");
+  for (const dx of [-9, 3]) {
+    pixel(c, x + dx, y + 5, 3, 8 + step, "#626957");
+    pixel(c, x + dx + 4, y + 5, 3, 7 - step, "#929582");
+    pixel(c, x + dx - 1, y + 12 + step, 4, 2, "#414e3e");
+  }
+  pixel(c, x + 6, y - 10, 9, 10, "#b0b09a");
+  pixel(c, x + 7, y - 14, 3, 7, "#747b69");
+  pixel(c, x + 12, y - 12, 3, 4, "#757b68");
+  pixel(c, x + 12, y - 4, 8, 5, "#c5c2a9");
+  pixel(c, x + 19, y - 4, 2, 3, "#384b3d");
+  pixel(c, x + 13, y - 7, 1, 1, "#352f26");
+  pixel(c, x + 10, y - 1, 3, 4, "#808773");
+}
+function lanternGlow(c, x, y, radius, strength = 0.2) {
+  for (let i = 4; i >= 1; i--) {
+    c.fillStyle = `rgba(238,185,90,${strength / 5})`;
+    c.beginPath();
+    c.arc(x, y, (radius * i) / 4, 0, Math.PI * 2);
+    c.fill();
+  }
+}
+function drawLighting(c, s, width, height) {
+  const hour = s.timeOfDay;
+  const night =
+    hour < 5 || hour >= 20
+      ? 0.5
+      : hour < 8
+        ? ((8 - hour) / 3) * 0.5
+        : hour >= 17
+          ? ((hour - 17) / 3) * 0.5
+          : 0;
+  if (night <= 0) return;
+  c.save();
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.fillStyle = `rgba(21,34,57,${night})`;
+  c.fillRect(0, 0, width, height);
+  c.restore();
+  if (s.battle) return;
+  if (s.campOpen) {
+    lanternGlow(c, 325, 250, 86, night * 0.8);
+    return;
+  }
+  for (const [i, p] of places.entries()) {
+    if (p.type !== "town" || !s.discovered.includes(i)) continue;
+    lanternGlow(c, p.x + 5, p.y + 8, 42, night * 0.6);
+    pixel(c, p.x - 28, p.y - 14, 3, 3, "#e4bb76");
+    pixel(c, p.x + 10, p.y - 9, 3, 3, "#e4bb76");
+  }
+  lanternGlow(c, s.position.x, s.position.y, 24, night * 0.35);
+}
+let campGround;
+function drawCampScene(c, s) {
+  if (!campGround) {
+    campGround = surface(768, 432);
+    const g = campGround.getContext("2d");
+    pixel(g, 0, 0, 768, 432, "#8d9b6e");
+    steppedOval(g, 126, 54, 446, 352, "#a5a579");
+    steppedOval(g, 156, 82, 396, 288, "#b7b080");
+    for (let i = 0; i < 600; i++) {
+      const x = Math.floor(noise(i, 7) * 768),
+        y = Math.floor(noise(i, 8) * 432);
+      pixel(g, x, y, 2, 1, i % 2 ? "#c0bc8e" : "#8d9869");
+    }
+    const trees = [];
+    for (let i = 0; i < 70; i++) {
+      const x = Math.floor(noise(i, 9) * 768),
+        y = Math.floor(noise(i, 10) * 432);
+      if (Math.hypot((x - 335) / 245, (y - 225) / 180) > 1.02)
+        trees.push({ x, y, i });
+    }
+    trees.sort((a, b) => a.y - b.y).forEach((p) => drawTree(g, p.x, p.y, p.i));
+    for (let i = 0; i < 8; i++) rock(g, 230 + i * 27, 353 + (i % 2) * 5);
+  }
+  c.imageSmoothingEnabled = false;
+  c.drawImage(campGround, 0, 0);
+  const tents = s.campUpgrades.tents || 0;
+  function tent(x, y, color = "#b8b088", medical = false) {
+    pixel(c, x - 5, y + 14, 54, 9, "#899065");
+    for (let row = 0; row < 29; row++) {
+      const half = Math.floor(row * 0.8);
+      pixel(c, x + 20 - half, y - 16 + row, half * 2 + 1, 1, color);
+      pixel(c, x + 20, y - 16 + row, Math.max(1, half), 1, "#938b65");
+    }
+    pixel(c, x + 16, y + 1, 10, 15, "#5b5f44");
+    pixel(c, x + 20, y - 17, 2, 33, "#807449");
+    pixel(c, x - 4, y + 13, 3, 7, "#75663f");
+    pixel(c, x + 44, y + 13, 3, 7, "#75663f");
+    if (medical) {
+      pixel(c, x + 10, y - 4, 12, 3, "#a3644d");
+      pixel(c, x + 14, y - 8, 4, 11, "#a3644d");
+    }
+  }
+  if (tents) {
+    tent(172, 123);
+    tent(222, 151, "#b3a678");
+    if (tents > 1) {
+      tent(170, 173, "#a9936a");
+      tent(223, 111, "#b4ac82");
+    }
+  } else
+    for (let i = 0; i < 4; i++) {
+      pixel(
+        c,
+        171 + (i % 2) * 31,
+        118 + Math.floor(i / 2) * 32,
+        20,
+        26,
+        "#7b815c",
+      );
+      pixel(
+        c,
+        173 + (i % 2) * 31,
+        121 + Math.floor(i / 2) * 32,
+        16,
+        20,
+        "#b4a578",
+      );
+      pixel(
+        c,
+        173 + (i % 2) * 31,
+        120 + Math.floor(i / 2) * 32,
+        16,
+        5,
+        "#dbcc98",
+      );
+    }
+  drawMapLabel(c, tents ? `Sleeping tents · ${tents}/2` : "Bedrolls", 205, 94);
+  // Supplies and a portable cart are present before the first upgrade.
+  drawWagon(c, 393, 329);
+  for (let i = 0; i < 3; i++) {
+    pixel(c, 187 + i * 19, 275, 16, 13, "#917348");
+    pixel(c, 188 + i * 19, 276, 14, 3, "#b79a60");
+    pixel(c, 190 + i * 19, 276, 2, 12, "#6c6240");
+  }
+  drawMapLabel(c, "Company stores", 213, 300);
+  if (s.campUpgrades.forge) {
+    pixel(c, 435, 276, 45, 18, "#8a8b6c");
+    pixel(c, 441, 277, 33, 10, "#515b47");
+    pixel(c, 449, 282, 12, 4, "#d28d50");
+    pixel(c, 453, 296, 6, 14, "#655c3f");
+    pixel(c, 443, 293, 27, 5, "#747b68");
+    pixel(c, 443, 292, 27, 2, "#b3b79c");
+    drawMapLabel(c, "Portable forge", 459, 325);
+  }
+  if (s.campUpgrades.watchpost) {
+    fence(c, 460, 118, 39);
+    pixel(c, 470, 88, 3, 32, "#796846");
+    pixel(c, 473, 89, 15, 10, "#b7a16e");
+    pixel(c, 475, 91, 10, 2, "#d7c58b");
+    drawCharacter(c, 460, 111, partyCoats[1], 0, "Shieldbearer", 1);
+    drawMapLabel(c, "Watch post", 478, 153);
+  }
+  if (s.campUpgrades.infirmary) {
+    tent(463, 213, "#d3cab0", true);
+    drawMapLabel(c, "Medicine tent", 484, 247);
+  }
+  steppedOval(c, 309, 240, 32, 16, "#747b5b");
+  for (let i = 0; i < 6; i++) rock(c, 314 + i * 4, 248 + (i % 2) * 7);
+  pixel(c, 313, 250, 23, 4, "#705739");
+  pixel(c, 321, 239, 5, 18, "#805e3c");
+  if (s.campUpgrades.cookpot) {
+    pixel(c, 313, 224, 2, 22, "#514e39");
+    pixel(c, 335, 224, 2, 22, "#514e39");
+    pixel(c, 313, 224, 24, 2, "#716a4f");
+    pixel(c, 324, 226, 1, 8, "#55563c");
+    steppedOval(c, 318, 232, 15, 10, "#535b4e");
+    pixel(c, 319, 233, 12, 2, "#9b9f82");
+  }
+  s.party
+    .filter((p) => !p.dead)
+    .forEach((p, i) =>
+      drawCharacter(
+        c,
+        286 + (i % 3) * 32,
+        280 + Math.floor(i / 3) * 30,
+        partyCoats[p.id],
+        0,
+        p.role,
+        p.id,
+      ),
+    );
+  drawLighting(c, s, c.canvas.width, c.canvas.height);
+  // The campfire remains bright after the night overlay.
+  pixel(c, 319, 240, 11, 13, "#c8773d");
+  pixel(c, 322, 236, 6, 15, "#e5aa54");
+  pixel(c, 324, 241, 3, 10, "#f1d389");
+}
+
 let s = fresh();
 try {
   s = restore(JSON.parse(localStorage.getItem("pixel-tales")));
@@ -2699,10 +3280,23 @@ function objective() {
     : "Click or tap anywhere to walk. Visit towns for contracts and trade, or venture into the wilderness.";
 }
 function render() {
-  if (!s.party[gearTarget]) gearTarget = 0;
-  if (!s.party[craftTarget]) craftTarget = 0;
+  if (companyLost(s)) {
+    tab = "Company";
+    drawerOpen = true;
+    heldKeys.clear();
+  }
+  if (tab === "Camp" && !s.campOpen) tab = "Company";
+
+  if (!s.party[gearTarget] || s.party[gearTarget].dead)
+    gearTarget = s.party.find((p) => !p.dead)?.id || 0;
+  if (!s.party[craftTarget] || s.party[craftTarget].dead)
+    craftTarget = s.party.find((p) => !p.dead)?.id || 0;
   const inVillage =
-    places[s.location]?.type === "town" && !s.battle && !s.event;
+    places[s.location]?.type === "town" &&
+    !s.battle &&
+    !s.event &&
+    !s.campOpen &&
+    !companyLost(s);
   if (observedLocation !== s.location) {
     pendingVillage = places[s.location]?.type === "town" ? s.location : null;
     observedLocation = s.location;
@@ -2723,6 +3317,7 @@ function render() {
   document.body.classList.toggle("drawer-open", drawerOpen);
   document.body.classList.toggle("encounter", !!s.event);
   document.body.classList.toggle("in-battle", !!s.battle);
+  document.body.classList.toggle("in-camp", !!s.campOpen);
   $("drawer").hidden = !drawerOpen;
   $("journal").hidden = tab !== "Journal";
   $("panel").hidden = tab === "Journal";
@@ -2750,7 +3345,14 @@ function render() {
     abilityMode = false;
   $("objective").textContent = objective();
   $("tabs").replaceChildren(
-    ...["Company", "Equipment", "Research", "Workshop", "Journal"].map((t) => {
+    ...[
+      ...(s.campOpen ? ["Camp"] : []),
+      "Company",
+      "Equipment",
+      "Research",
+      "Workshop",
+      "Journal",
+    ].map((t) => {
       const b = button(t, () => {
         drawerOpen = tab === t ? !drawerOpen : true;
         tab = t;
@@ -2767,6 +3369,7 @@ function render() {
       : {
           Company: "The Ashen Company",
           Equipment: "Equipment & loot",
+          Camp: "The company camp",
           Market: "Market square",
           Blacksmith: "The forge",
           Tavern: "The Crooked Lantern",
@@ -2787,10 +3390,41 @@ function render() {
     panel.append(
       card(
         "The Ashen Company",
-        `<div class="row"><span class="hint">${s.completed} contracts · ${s.skirmishes} skirmishes · ${s.renown} renown</span><span class="badge">Morale ${s.morale}%</span></div><div class="bar"><i style="width:${s.morale}%"></i></div><p>${standing.name}${standing.next ? ` · ${standing.next.renown - s.renown} more renown to become ${standing.next.name}` : " · Highest standing achieved"}. Complete contracts to unlock tougher work.</p><p>Map: ${s.discovered.length}/${places.length} locations discovered.</p><p>Wages: ${s.party.length * 2} crowns per camp. At 85 morale, all attacks gain +1 damage. Injuries reduce attack by 1. Skilled cooks reduce camp supplies to ${campCost(s)} rations.</p>`,
+        `<div class="row"><span class="hint">${s.completed} contracts · ${s.skirmishes} skirmishes · ${s.renown} renown</span><span class="badge">Morale ${s.morale}%</span></div><div class="bar"><i style="width:${s.morale}%"></i></div><p>${standing.name}${standing.next ? ` · ${standing.next.renown - s.renown} more renown to become ${standing.next.name}` : " · Highest standing achieved"}. Complete contracts to unlock tougher work.</p><p>Map: ${s.discovered.length}/${places.length} locations discovered.</p><p>Wages: ${dailyWages(s)} crowns per day. At 85 morale, all attacks gain +1 damage. Injuries reduce attack by 1. Skilled cooks reduce camp supplies to ${campCost(s)} rations.</p>`,
       ),
     );
+    panel.append(
+      card(
+        "Daily upkeep",
+        `<p>${livingParty(s).length} living companions require ${campCost(s)} rations and ${dailyWages(s)} crowns per day. ${s.wageDebt ? `${s.wageDebt} crowns are overdue.` : "Wages are up to date."} ${s.hungerDays ? `<strong>STARVING · day ${s.hungerDays}. Find food; hunger damages the company every day.</strong>` : "The company is fed."}</p>`,
+      ),
+    );
+    if (s.wageDebt)
+      panel.append(
+        button(
+          "Pay overdue wages",
+          () => payWages(s),
+          !s.gold || !!s.battle || !!s.event,
+        ),
+      );
+    if (companyLost(s))
+      panel.append(
+        card(
+          "The company has perished",
+          "<p>All companions died of starvation. Start a new company to continue.</p>",
+        ),
+      );
     s.party.forEach((p) => {
+      if (p.dead) {
+        const memorial = card(
+          `${p.name} · Fallen`,
+          "<p>Died of starvation. Starvation deaths are permanent; medicine and rest cannot revive this companion.</p>",
+        );
+        memorial.classList.add("fallen");
+        memorial.querySelector(".pixel-icon").replaceWith(portraitArtwork(p));
+        panel.append(memorial);
+        return;
+      }
       const c = card(
         `${p.name} · Level ${p.level}`,
         `<p>${p.role} · ${rankNames[professionRank(p)]} ${p.profession} (${p.professionXP} practice${professionRank(p) < 3 ? ` / ${[3, 8, 15][professionRank(p)]} for next rank` : " · mastered"}) ${p.injury ? "· INJURED" : ""}</p><div class="row"><span class="hint">HP ${p.hp}/${p.max}</span><span class="hint">ATK ${attackPower(s, p)} · Armor ${armorPower(s, p)}</span></div><div class="bar"><i style="width:${(p.hp / p.max) * 100}%"></i></div><p>XP ${p.xp}/${p.level * 30} · ${p.points} training points</p>`,
@@ -2882,6 +3516,61 @@ function render() {
       panel.append(c);
     });
   }
+  if (tab === "Camp") {
+    panel.append(
+      card(
+        "Campfire & company stores",
+        `<p>The camp travels with you. ${livingParty(s).length} companions · ${s.food} rations · ${s.gold} crowns</p><p>Wood ${s.inventory.wood} · Ore ${s.inventory.ore} · Herbs ${s.inventory.herbs}</p><p>Daily upkeep: ${campCost(s)} rations and ${dailyWages(s)} crowns. ${s.hungerDays ? `<strong>Starving for ${s.hungerDays} day(s). Empty meals prevent recovery.</strong>` : "Rest with enough food to recover."} ${s.wageDebt ? `${s.wageDebt} crowns in overdue wages.` : ""}</p>`,
+      ),
+    );
+    const rest = card(
+      "Rest & prepare",
+      "<p>Rest until the next 08:00. Daily upkeep is settled at midnight. Planning is paused; construction takes two hours. Camp improvements persist when you pack up.</p>",
+    );
+    rest.append(
+      button("Rest until dawn", () => camp(s), false, true),
+      button("Forage · 6 rations / 6 hours", () => forage(s)),
+      button("Open camp workshop", () => {
+        tab = "Workshop";
+      }),
+    );
+    if (s.wageDebt)
+      rest.append(button("Pay overdue wages", () => payWages(s), !s.gold));
+    panel.append(rest);
+    for (const building of campStructures) {
+      const plan = campBuildPlan(s, building.id);
+      const done = plan.level >= plan.max;
+      const c = card(
+        `${plan.name} · ${plan.level}/${plan.max}`,
+        `<p>${plan.desc}</p>${done ? "<p>Fully built.</p>" : `<p>Cost: ${plan.gold} crowns · ${plan.wood} wood${plan.ore ? ` · ${plan.ore} ore` : ""}${plan.herbs ? ` · ${plan.herbs} herbs` : ""} · 2 hours</p>`}`,
+      );
+      c.dataset.campUpgrade = building.id;
+      c.append(
+        button(
+          done
+            ? `${plan.name} complete`
+            : `${plan.level ? "Upgrade" : "Build"} ${plan.name}`,
+          () => buildCamp(s, building.id),
+          done ||
+            s.gold < plan.gold ||
+            s.inventory.wood < plan.wood ||
+            s.inventory.ore < plan.ore ||
+            s.inventory.herbs < plan.herbs,
+        ),
+      );
+      panel.append(c);
+    }
+    panel.append(
+      button("View camp", () => {
+        drawerOpen = false;
+      }),
+      button("Break camp", () => {
+        leaveCamp(s);
+        drawerOpen = false;
+        tab = "Company";
+      }),
+    );
+  }
   if (tab === "Equipment") {
     panel.append(
       card(
@@ -2891,7 +3580,7 @@ function render() {
     );
     const selector = document.createElement("select");
     selector.setAttribute("aria-label", "Equipment companion");
-    s.party.forEach((p) =>
+    livingParty(s).forEach((p) =>
       selector.add(new Option(`${p.name} · ${p.role}`, p.id)),
     );
     selector.value = gearTarget;
@@ -3042,7 +3731,7 @@ function render() {
       ),
     );
     const target = card("Equip a companion", "");
-    s.party.forEach((p) =>
+    livingParty(s).forEach((p) =>
       target.append(
         button(p.name, () => (craftTarget = p.id), false, craftTarget === p.id),
       ),
@@ -3202,18 +3891,18 @@ function render() {
     if (tab === "Tavern") {
       const inn = card(
         "The Crooked Lantern",
-        `<p>${s.party.length < 6 ? (s.party.length === 4 ? "Tamsin, an archer and herbalist" : "Bram, a shieldbearer and miner") + " is looking for work." : "Your company is full."}</p><p>Recruitment: 60 crowns · +2 wages per camp · Capacity 6</p>`,
+        `<p>${livingParty(s).length < 6 ? (s.party.length === 4 ? "Tamsin, an archer and herbalist" : "Bram, a shieldbearer and miner") + " is looking for work." : "Your company is full."}</p><p>Recruitment: 60 crowns · +2 wages per camp · Capacity 6</p>`,
       );
       inn.append(
         button(
           "Recruit companion",
           () => recruit(s),
-          s.gold < 60 || s.party.length >= 6 || !!s.battle || !!s.event,
+          s.gold < 60 || livingParty(s).length >= 6 || !!s.battle || !!s.event,
         ),
       );
       const rest = card(
         "A night under a roof",
-        `<p>Full health, injuries cured, +15 morale. Includes meals and company wages; uses no rations. Takes one day.</p><p>${innCost(s)} crowns for ${s.party.length} companions.</p>`,
+        `<p>Full health, injuries cured, +15 morale. Includes meals and company wages; uses no rations. Takes one day.</p><p>${innCost(s)} crowns for ${livingParty(s).length} companions.</p>`,
       );
       rest.append(
         button(
@@ -3233,9 +3922,12 @@ function render() {
       );
       const selector = document.createElement("select");
       selector.setAttribute("aria-label", "Equip companion");
-      s.party.forEach((p, i) =>
+      livingParty(s).forEach((p) =>
         selector.add(
-          new Option(`${p.name} · weapon +${p.weapon} · armor ${p.armor}`, i),
+          new Option(
+            `${p.name} · weapon +${p.weapon} · armor ${p.armor}`,
+            p.id,
+          ),
         ),
       );
       selector.value = craftTarget;
@@ -3288,7 +3980,30 @@ function render() {
   }
   const a = $("actions");
   a.replaceChildren();
-  if (s.event) {
+  if (companyLost(s)) {
+    a.append(
+      button("Company lost · start a new company", () => $("reset").click()),
+    );
+  } else if (s.campOpen) {
+    if (!drawerOpen)
+      a.append(
+        button(
+          "Return to camp menu",
+          () => {
+            tab = "Camp";
+            drawerOpen = true;
+          },
+          false,
+          true,
+        ),
+        button("Break camp", () => {
+          leaveCamp(s);
+          drawerOpen = false;
+          tab = "Company";
+        }),
+      );
+    $("map-label").textContent = "The Ashen Company · camp";
+  } else if (s.event) {
     const c = card(s.event.title, `<p>${s.event.text}</p>`);
     c.id = "event";
     if (s.event.kind === "camp")
@@ -3380,12 +4095,14 @@ function render() {
       "Select ally · click tile to move / enemy to attack";
   } else {
     a.append(
-      button(
-        `Camp · ${campCost(s)} rations / ${s.party.length * 2} crowns`,
-        () => camp(s),
-        s.food < campCost(s) || s.gold < s.party.length * 2,
-      ),
-      button("Forage · +6 rations / 1 day", () => forage(s)),
+      button("Make camp", () => {
+        if (openCamp(s)) {
+          heldKeys.clear();
+          tab = "Camp";
+          drawerOpen = true;
+        }
+      }),
+      button("Forage · +6 rations / 6 hours", () => forage(s)),
     );
     if (places[s.location]?.type === "town")
       a.append(
@@ -3412,8 +4129,8 @@ function render() {
       a.append(
         button(
           places[s.location].type === "mine"
-            ? "Work mine · 2 rations / 1 day"
-            : "Gather herbs · 2 rations / 1 day",
+            ? "Work mine · 2 rations / 6 hours"
+            : "Gather herbs · 2 rations / 6 hours",
           () => workSite(s),
           s.food < 2 ||
             !professional(
@@ -3467,6 +4184,7 @@ function render() {
     $("drawer").scrollTop = 0;
     renderedTab = tab;
   }
+  updateClockUI();
   draw();
 }
 function rect(x, y, w, h, c) {
@@ -3510,6 +4228,11 @@ function draw() {
           s.position.y - (h - 180) / view.scale / 2,
         ),
       );
+  if (s.campOpen) {
+    view.scale = Math.min(w / 560, Math.max(160, h - 180) / 400);
+    view.x = 325 - w / view.scale / 2;
+    view.y = 225 - Math.max(160, h - 180) / view.scale / 2;
+  }
   canvas.dataset.viewX = view.x;
   canvas.dataset.viewY = view.y;
   canvas.dataset.scale = view.scale;
@@ -3521,7 +4244,17 @@ function draw() {
     -view.x * view.scale,
     -view.y * view.scale,
   );
-  rect(-768, -432, WORLD.width + 1536, WORLD.height + 864, "#a3a775");
+  rect(
+    -768,
+    -432,
+    WORLD.width + 1536,
+    WORLD.height + 864,
+    s.campOpen ? "#8d9b6e" : "#a3a775",
+  );
+  if (s.campOpen) {
+    drawCampScene(ctx, s);
+    return;
+  }
   if (s.battle) {
     drawBattlefield(ctx);
     const active = s.battle.units.find((u) => u.id === selected);
@@ -3559,21 +4292,23 @@ function draw() {
     s.battle.enemies
       .filter((e) => e.hp > 0)
       .forEach((e) => {
-        person(
-          136 + e.x * 62,
-          28 + e.y * 60,
-          e.kind === "archer"
-            ? "#9b784e"
-            : e.kind === "brute"
-              ? "#765c63"
-              : "#8f5143",
-          0,
-          e.kind === "archer"
-            ? "Archer"
-            : e.kind === "brute"
-              ? "Shieldbearer"
-              : "Swordswoman",
-        );
+        if (e.kind === "wolf") drawWolf(ctx, 136 + e.x * 62, 28 + e.y * 60);
+        else
+          person(
+            136 + e.x * 62,
+            28 + e.y * 60,
+            e.kind === "archer"
+              ? "#9b784e"
+              : e.kind === "brute"
+                ? "#765c63"
+                : "#8f5143",
+            0,
+            e.kind === "archer"
+              ? "Archer"
+              : e.kind === "brute"
+                ? "Shieldbearer"
+                : "Swordswoman",
+          );
         ctx.fillStyle = "#4c4935";
         ctx.font = "9px monospace";
         ctx.textAlign = "center";
@@ -3621,6 +4356,7 @@ function draw() {
           "#a2b477",
         );
       });
+    drawLighting(ctx, s, canvas.width, canvas.height);
     return;
   }
   ctx.drawImage(worldArtwork(), 0, 0);
@@ -3647,7 +4383,7 @@ function draw() {
           (s.research.includes("scouting") ? 210 : 140),
     )
     .forEach((p) => {
-      const hostile = p.kind === "bandits" || p.hostile;
+      const hostile = p.kind !== "merchant" || p.hostile;
       const color = hostile ? "#a16c54" : "#b39d69";
       if (p.kind === "merchant") drawWagon(ctx, p.x - 9, p.y - 8, p.hostile);
       else
@@ -3682,6 +4418,7 @@ function draw() {
   }
   partyPositions(s)
     .map((point, i) => ({ ...point, i }))
+    .filter((p) => !s.party[p.i].dead)
     .sort((a, b) => a.y - b.y)
     .forEach((p) => {
       const step = s.destination
@@ -3691,8 +4428,10 @@ function draw() {
         : 0;
       person(p.x, p.y, partyCoats[p.i], step, s.party[p.i].role, p.i);
     });
+  drawLighting(ctx, s, canvas.width, canvas.height);
 }
 canvas.onclick = (e) => {
+  if (s.campOpen || companyLost(s)) return;
   const r = canvas.getBoundingClientRect(),
     x = view.x + (e.clientX - r.left) / view.scale,
     y = view.y + (e.clientY - r.top) / view.scale;
@@ -3735,13 +4474,36 @@ $("reset").onclick = () => {
 render();
 
 $("close-drawer").onclick = () => {
+  if (s.campOpen) {
+    leaveCamp(s);
+    tab = "Company";
+  }
   drawerOpen = false;
   render();
 };
 let previousFrame = 0,
   lastSave = 0;
+function updateClockUI() {
+  const info = clockInfo(s);
+  const label = `Day ${s.day} · ${info.time} · ${info.period}`;
+  if ($("clock-label").textContent !== label)
+    $("clock-label").textContent = label;
+  $("day-marker").style.left = `${info.percent}%`;
+  $("day-scale").setAttribute("aria-valuenow", String(s.timeOfDay));
+  $("day-scale").setAttribute("aria-valuetext", label);
+  $("survival-warning").hidden = !s.hungerDays && !s.wageDebt;
+  $("survival-warning").textContent =
+    `${s.hungerDays ? `STARVING · day ${s.hungerDays}. Find food before the next meal. ` : ""}${s.wageDebt ? `${s.wageDebt} crowns in unpaid wages.` : ""}`;
+}
 function animate(time) {
-  if (heldKeys.size && !s.battle && !s.event && !drawerOpen) {
+  if (
+    heldKeys.size &&
+    !s.battle &&
+    !s.event &&
+    !s.campOpen &&
+    !companyLost(s) &&
+    !drawerOpen
+  ) {
     const x =
       (heldKeys.has("d") || heldKeys.has("ArrowRight") ? 1 : 0) -
       (heldKeys.has("a") || heldKeys.has("ArrowLeft") ? 1 : 0);
@@ -3754,7 +4516,7 @@ function animate(time) {
     ? Math.min((time - previousFrame) / 1000, 0.1)
     : 0;
   previousFrame = time;
-  if (s.destination) {
+  if (s.destination && !document.hidden) {
     const before = {
       day: s.day,
       location: s.location,
@@ -3781,7 +4543,18 @@ function animate(time) {
       lastSave = time;
     }
   }
-  if (!s.battle && !s.event && !drawerOpen) {
+  if (
+    !s.battle &&
+    !s.event &&
+    !s.campOpen &&
+    !companyLost(s) &&
+    !drawerOpen &&
+    !document.hidden
+  ) {
+    const dayBefore = s.day;
+    advanceClock(s, seconds);
+    if (dayBefore !== s.day || s.event || companyLost(s)) render();
+    updateClockUI();
     const nearbyBefore = nearbyPatrols(s)
       .map((p) => p.id)
       .join(",");
@@ -3886,6 +4659,7 @@ function drawAtlas() {
   }
 }
 $("atlas").onclick = (event) => {
+  if (s.campOpen || companyLost(s)) return;
   const r = $("atlas").getBoundingClientRect();
   heldKeys.clear();
   drawerOpen = false;

@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   fresh,
+  advanceClock,
+  DAY_SECONDS,
   places,
   travel,
   camp,
@@ -21,14 +23,16 @@ test("travel spends supplies; research reduces subsequent travel costs", () => {
   assert.equal(s.day, 3);
   assert.equal(research(s, "rations"), false);
 });
-test("camp requires wages and food and heals wounds", () => {
+test("camp settles daily wages, heals fed companions, and permits hungry rest", () => {
   const s = fresh();
   s.party[0].hp = 5;
   assert.ok(camp(s));
   assert.equal(s.party[0].hp, 15);
   assert.equal(s.gold, 112);
   s.food = 0;
-  assert.equal(camp(s), false);
+  assert.equal(camp(s), true);
+  assert.equal(s.party[0].hp, 12);
+  assert.equal(s.hungerDays, 1);
 });
 test("battle validates range and actions, victory grants progression", () => {
   const s = fresh();
@@ -45,7 +49,7 @@ test("battle validates range and actions, victory grants progression", () => {
   s.battle.enemies[0] = { id: 0, x: 4, y: 1, hp: 1, max: 16 };
   assert.ok(act(s, 0, 4, 1));
   assert.equal(s.battle, null);
-  assert.equal(s.gold, 185);
+  assert.equal(s.gold, 177);
   assert.equal(s.knowledge, 2);
   assert.equal(s.party[0].level, 2);
   assert.equal(s.party[0].points, 1);
@@ -84,7 +88,7 @@ test("old saves migrate and malformed saves recover", () => {
   s.gold = 99;
   const migrated = restore(s);
   assert.equal(migrated.gold, 99);
-  assert.equal(migrated.version, 7);
+  assert.equal(migrated.version, 8);
   assert.equal(migrated.inventory.medicine, 1);
   assert.equal(restore({ version: 1 }).party.length, 4);
   assert.equal(restore(null).day, 1);
@@ -124,7 +128,7 @@ test("roadside choices require medicine and cannot be claimed twice", () => {
   assert.equal(resolveEvent(s, "help"), false);
   assert.equal(travel(s, 2), false);
   assert.ok(resolveEvent(s, "trade"));
-  assert.equal(s.gold, 132);
+  assert.equal(s.gold, 116);
   assert.equal(s.event, null);
   assert.equal(resolveEvent(s, "trade"), false);
 });
@@ -136,7 +140,7 @@ test("delivery contracts award resources without combat and honor destination", 
   assert.equal(startBattle(s), false);
   assert.ok(deliver(s));
   assert.equal(s.completed, 1);
-  assert.equal(s.gold, 165);
+  assert.equal(s.gold, 157);
   assert.equal(s.food, 15);
   assert.equal(deliver(s), false);
 });
@@ -212,22 +216,26 @@ test("redirecting changes route, followers trace it, and stopping freezes positi
   advanceMovement(s, 5);
   assert.deepEqual(s.position, pos);
 });
-test("distance costs persist across short clicks, research lowers upkeep", () => {
+test("daily costs follow the longer clock independently of walking distance", () => {
   const s = fresh();
   for (let i = 0; i < 4; i++) {
     moveTo(s, s.position.x + 40, s.position.y);
     advanceMovement(s, 1);
   }
+  assert.equal(s.food, 24);
+  assert.equal(s.day, 1);
+  advanceClock(s, (DAY_SECONDS * 16) / 24);
   assert.equal(s.food, 20);
   assert.equal(s.day, 2);
   const r = fresh();
   r.research = ["rations"];
   moveTo(r, 340, 280);
   advanceMovement(r, 3);
+  advanceClock(r, (DAY_SECONDS * 16) / 24);
   assert.equal(r.food, 21);
   assert.equal(r.day, 2);
 });
-test("movement clamps boundaries, pauses for encounters, and stops when out of food", () => {
+test("movement clamps boundaries, pauses for encounters, and remains possible without food", () => {
   const s = fresh();
   assert.equal(moveTo(s, NaN, 5), false);
   moveTo(s, -300, 900);
@@ -243,7 +251,9 @@ test("movement clamps boundaries, pauses for encounters, and stops when out of f
   assert.equal(s.destination, null);
   assert.equal(s.food, 0);
   assert.equal(s.day, 1);
-  assert.ok(s.log[0].includes("Provisions exhausted"));
+  assert.deepEqual(s.position, { x: 756, y: 280 });
+  advanceClock(s, (DAY_SECONDS * 16) / 24);
+  assert.equal(s.hungerDays, 1);
 });
 test("wilderness saves restore exact position, mileage, and a stopped party", () => {
   const s = fresh();
@@ -526,8 +536,8 @@ test("repeated fieldwork advances professions and costs supplies and time", () =
   assert.equal(professionRank(s.party[1]), 1);
   assert.ok(workSite(s));
   assert.equal(s.inventory.ore, 11);
-  assert.equal(s.food, food - 6);
-  assert.equal(s.day, day + 3);
+  assert.equal(s.food, food - 10);
+  assert.equal(s.day, day + 1);
   s.food = 1;
   assert.equal(workSite(s), false);
 });
@@ -871,7 +881,7 @@ test("gear migration preserves old upgrades and valid equipment while rejecting 
   old.party[0].armor = 3;
   delete old.party[0].equipment;
   const migrated = restore(old);
-  assert.equal(migrated.version, 7);
+  assert.equal(migrated.version, 8);
   assert.deepEqual(migrated.gear, []);
   assert.equal(migrated.party[0].weapon, 4);
   assert.equal(armorPower(migrated, migrated.party[0]), 3);
