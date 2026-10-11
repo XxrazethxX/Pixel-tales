@@ -1,5 +1,5 @@
 // Original, hand-built pixel artwork. All coordinates are logical pixels.
-import { WORLD, places, terrainAt } from "./game.js";
+import { WORLD, places, terrainAt, campRoles, campWorker } from "./game.js";
 export const artPalette = {
   meadow: "#a3a775",
   grass: "#8c9867",
@@ -917,7 +917,7 @@ export function drawCampScene(c, s) {
     pixel(c, 470, 88, 3, 32, "#796846");
     pixel(c, 473, 89, 15, 10, "#b7a16e");
     pixel(c, 475, 91, 10, 2, "#d7c58b");
-    drawCharacter(c, 460, 111, partyCoats[1], 0, "Shieldbearer", 1);
+
     drawMapLabel(c, "Watch post", 478, 153);
   }
   if (s.campUpgrades.infirmary) {
@@ -936,19 +936,30 @@ export function drawCampScene(c, s) {
     steppedOval(c, 318, 232, 15, 10, "#535b4e");
     pixel(c, 319, 233, 12, 2, "#9b9f82");
   }
+  const stations = {
+    cook: { x: 344, y: 244 },
+    smith: { x: 428, y: 290 },
+    medic: { x: 463, y: 229 },
+    guard: { x: 460, y: 111 },
+  };
   s.party
     .filter((p) => !p.dead)
-    .forEach((p, i) =>
-      drawCharacter(
-        c,
-        286 + (i % 3) * 32,
-        280 + Math.floor(i / 3) * 30,
-        partyCoats[p.id],
-        0,
-        p.role,
-        p.id,
-      ),
-    );
+    .forEach((p, i) => {
+      const duty = campRoles.find(
+        (role) => campWorker(s, role.id)?.id === p.id,
+      );
+      const point = duty
+        ? stations[duty.id]
+        : { x: 286 + (i % 3) * 32, y: 280 + Math.floor(i / 3) * 30 };
+      drawCharacter(c, point.x, point.y, partyCoats[p.id], 0, p.role, p.id);
+      if (duty)
+        drawMapLabel(
+          c,
+          p.name,
+          point.x - (duty.id === "medic" ? 40 : 0),
+          point.y + 20,
+        );
+    });
   drawLighting(c, s, c.canvas.width, c.canvas.height);
   // The campfire remains bright after the night overlay.
   pixel(c, 319, 240, 11, 13, "#c8773d");

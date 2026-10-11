@@ -18,7 +18,7 @@ export const studies = [
     id: "rations",
     name: "Trailcraft",
     cost: 2,
-    desc: "Each 160 pixels of travel uses 3 rations instead of 4.",
+    desc: "Reduce daily ration use by one, down to a minimum of one.",
   },
   {
     id: "medicine",
@@ -56,7 +56,7 @@ studies.push(
 );
 export function fresh() {
   return {
-    version: 8,
+    version: 9,
     inventory: { ore: 0, wood: 0, herbs: 0, medicine: 1, pelts: 0 },
     gear: [],
     nextGearId: 1,
@@ -73,6 +73,9 @@ export function fresh() {
     wageDebt: 0,
     campOpen: false,
     campUpgrades: {},
+    campJobs: {},
+    lastCampWorkDay: -1,
+    preparedValor: 0,
     gold: 120,
     food: 24,
     morale: 75,
@@ -106,6 +109,7 @@ export function fresh() {
       points: 0,
       injury: false,
       dead: false,
+      fatigue: 0,
       armor: 0,
       weapon: 0,
       profession:
@@ -150,7 +154,17 @@ export function camp(s) {
     professionBonus(s, "Herbalist") * 2 +
     (s.campUpgrades.tents || 0) * 5 +
     (s.campUpgrades.infirmary || 0) * 6;
-  spendHours(s, (8 - s.timeOfDay + 24) % 24 || 24);
+  const restHours = (8 - s.timeOfDay + 24) % 24 || 24;
+  spendHours(s, restHours, { resting: true });
+  for (const p of livingParty(s)) {
+    const working =
+      s.campOpen &&
+      campRoles.some((role) => campWorker(s, role.id)?.id === p.id);
+    p.fatigue = Math.max(
+      0,
+      (p.fatigue || 0) - restHours * (s.hungerDays ? 1 : working ? 3 : 5),
+    );
+  }
   if (s.hungerDays === 0 && !companyLost(s)) {
     s.morale = Math.min(100, s.morale + 12 + professionBonus(s, "Cook"));
     for (const p of livingParty(s)) {
@@ -158,7 +172,9 @@ export function camp(s) {
       if (p.hp === p.max || (s.campUpgrades.infirmary && p.hp >= p.max / 2))
         p.injury = false;
     }
-    if (cook && !cook.dead) practice(s, cook, 1);
+    if (cook && !cook.dead && campWorker(s, "cook")?.id !== cook.id)
+      practice(s, cook, 1);
+    finishCampJobs(s, restHours);
     note(
       s,
       "Rested until dawn. Fed companions recover; camp improvements help tend their wounds.",
@@ -226,7 +242,7 @@ export function startBattle(s, patrolId = null) {
     caravanRaid: patrol?.kind === "merchant",
     wildlife: patrol?.kind === "wolves",
     turn: 1,
-    valor: 3 + (s.campUpgrades.watchpost || 0),
+    valor: Math.min(5, 3 + (s.campUpgrades.watchpost || 0) + s.preparedValor),
     units: s.party
       .filter((p) => p.hp > 0)
       .map((p, i) => ({
@@ -282,6 +298,7 @@ export function startBattle(s, patrolId = null) {
       damage: 4,
       armor: 0,
     }));
+  s.preparedValor = 0;
   const difficulty = contractDifficulty(patrol ? null : s.contract);
   for (let i = 0; i < difficulty.tier - 1; i++) {
     s.battle.enemies.push({
@@ -317,8 +334,12 @@ export function act(s, id, x, y) {
   const e = b.enemies.find((e) => e.hp > 0 && e.x === x && e.y === y);
   if (e) {
     if (d > attackRange(p)) return false;
-    const damage = hitEnemy(s, e, attackPower(s, p));
-    note(s, `${p.name} strikes for ${damage} damage.`);
+    const flank = p.role === "Archer" ? 0 : flankingBonus(s, u, e);
+    const damage = hitEnemy(s, e, attackPower(s, p) + flank);
+    note(
+      s,
+      `${p.name} strikes for ${damage} damage${flank ? " · flanking +2" : ""}.`,
+    );
     u.acted = true;
   } else {
     if (
@@ -414,13 +435,30 @@ export function endTurn(s) {
           Math.abs(a.y - e.y) -
           (Math.abs(c.x - e.x) + Math.abs(c.y - e.y)),
       );
+    if (e.kind === "wolf") {
+      const nearby = targets.filter(
+        (u) => Math.abs(u.x - e.x) + Math.abs(u.y - e.y) <= 3,
+      );
+      nearby.sort(
+        (a, c) =>
+          s.party[a.id].hp / s.party[a.id].max -
+          s.party[c.id].hp / s.party[c.id].max,
+      );
+      if (nearby.length) targets.unshift(nearby[0]);
+    }
     const t = targets[0];
     if (!t) break;
     const range = e.kind === "archer" ? 4 : 1,
       dist = () => Math.abs(t.x - e.x) + Math.abs(t.y - e.y);
     const rooted = (e.root || 0) > 0;
     e.root = Math.max(0, (e.root || 0) - 1);
-    if (!rooted && (dist() > range || (e.kind === "archer" && dist() <= 1))) {
+    for (
+      let step = 0;
+      !rooted &&
+      step < (e.kind === "wolf" ? 2 : 1) &&
+      (dist() > range || (e.kind === "archer" && dist() <= 1));
+      step++
+    ) {
       const options = [
         [e.x + 1, e.y],
         [e.x - 1, e.y],
@@ -461,7 +499,18 @@ export function endTurn(s) {
           : 0;
       const damage = Math.max(
         1,
-        (e.damage || 5) -
+        (e.damage || 5) +
+          (e.kind === "archer" ? 0 : flankingBonus(s, e, t, "enemies")) +
+          (e.kind === "wolf" &&
+          b.enemies.some(
+            (ally) =>
+              ally !== e &&
+              ally.kind === "wolf" &&
+              ally.hp > 0 &&
+              Math.abs(ally.x - t.x) + Math.abs(ally.y - t.y) === 1,
+          )
+            ? 1
+            : 0) -
           (p.role === "Shieldbearer" ? 2 : 0) -
           armorPower(s, p) -
           (t.guard ? 2 : 0) -
@@ -512,7 +561,7 @@ export function restore(raw) {
   const base = fresh();
   if (
     !raw ||
-    ![1, 2, 3, 4, 5, 6, 7, 8].includes(raw.version) ||
+    ![1, 2, 3, 4, 5, 6, 7, 8, 9].includes(raw.version) ||
     !Array.isArray(raw.party) ||
     raw.party.length < 1 ||
     raw.party.length > 6 ||
@@ -538,7 +587,7 @@ export function restore(raw) {
   const result = {
     ...base,
     ...raw,
-    version: 8,
+    version: 9,
     inventory: { ...base.inventory, ...raw.inventory },
     explored: raw.explored || [],
     event: raw.event || null,
@@ -614,6 +663,9 @@ export function restore(raw) {
     id,
     armor: p.armor || 0,
     weapon: p.weapon || 0,
+    fatigue: Number.isFinite(p.fatigue)
+      ? Math.max(0, Math.min(100, p.fatigue))
+      : 0,
     profession: p.profession || "Cook",
     professionXP: p.professionXP || 0,
     professionXPBy: Object.fromEntries(
@@ -692,6 +744,16 @@ export function restore(raw) {
       p.equipment = { weapon: null, armor: null };
     }
   }
+  result.campJobs = {};
+  for (const role of campRoles) {
+    const id = raw.campJobs?.[role.id];
+    if (Number.isInteger(id) && canAssignCampJob(result, role.id, id))
+      result.campJobs[role.id] = id;
+  }
+  result.lastCampWorkDay = Number.isInteger(raw.lastCampWorkDay)
+    ? Math.max(-1, Math.min(result.day, raw.lastCampWorkDay))
+    : -1;
+  result.preparedValor = raw.preparedValor === 1 ? 1 : 0;
   if (raw.version === 1) result.battle = null;
   if (result.battle) {
     result.battle.valor = Number.isFinite(result.battle.valor)
@@ -714,7 +776,8 @@ export function attackPower(s, p) {
     (p.talent === "duelist" ? 2 : 0) +
     (s.research.includes("steel") ? 2 : 0) +
     (s.morale >= 85 ? 1 : 0) -
-    (p.injury ? 1 : 0)
+    (p.injury ? 1 : 0) -
+    fatiguePenalty(p)
   );
 }
 export function guard(s, id) {
@@ -771,6 +834,7 @@ export function recruit(s) {
     points: 0,
     injury: false,
     dead: false,
+    fatigue: 0,
     armor: 0,
     weapon: 0,
     profession: id % 2 === 0 ? "Herbalist" : "Miner",
@@ -1530,6 +1594,14 @@ export function assignProfession(s, id, name) {
   p.professionXPBy[p.profession] = p.professionXP;
   p.profession = name;
   p.professionXP = p.professionXPBy[name] || 0;
+  for (const role of campRoles) {
+    if (
+      s.campJobs[role.id] === p.id &&
+      role.profession &&
+      role.profession !== name
+    )
+      delete s.campJobs[role.id];
+  }
   note(
     s,
     `${p.name} takes up ${name}. Previous profession experience is retained.`,
@@ -1544,7 +1616,8 @@ export function campCost(s) {
         count -
           Math.min(2, professionBonus(s, "Cook")) -
           (s.research.includes("rations") ? 1 : 0) -
-          (s.campUpgrades.cookpot || 0),
+          (s.campUpgrades.cookpot || 0) -
+          (s.campOpen && campWorker(s, "cook") ? 1 : 0),
       )
     : 0;
 }
@@ -1702,7 +1775,10 @@ export function attackRange(p, skill = false) {
   );
 }
 export function movementRange(p) {
-  return p.talent === "skirmisher" ? 3 : 2;
+  return Math.max(
+    1,
+    (p.talent === "skirmisher" ? 3 : 2) - (fatiguePenalty(p) === 2 ? 1 : 0),
+  );
 }
 export function hitEnemy(s, e, power) {
   const damage = Math.max(1, power - (e.armor || 0)),
@@ -1742,7 +1818,8 @@ export function useSkill(s, id, x, y) {
         )
       : [enemy];
   victims.forEach((e) => {
-    const damage = hitEnemy(s, e, attackPower(s, p) + skill.bonus);
+    const flank = p.role === "Archer" ? 0 : flankingBonus(s, u, e);
+    const damage = hitEnemy(s, e, attackPower(s, p) + skill.bonus + flank);
     if (p.role === "Shieldbearer") e.stun = p.talent === "stalwart" ? 2 : 1;
     if (p.talent === "pinning") e.root = 2;
     if (p.talent === "reaver" || p.talent === "bloodletter") e.bleed = 2;
@@ -1813,11 +1890,12 @@ export function restAtInn(s) {
     return false;
   s.destination = null;
   s.gold -= livingParty(s).length * 4;
-  spendHours(s, 24, { mealsProvided: true });
+  spendHours(s, 24, { mealsProvided: true, resting: true });
   s.morale = Math.min(100, s.morale + 17);
   for (const p of livingParty(s)) {
     p.hp = p.max;
     p.injury = false;
+    p.fatigue = 0;
   }
   note(
     s,
@@ -1976,7 +2054,8 @@ export function equipmentRecipe(s, templateId) {
       1,
       (item.slot === "armor" ? 6 : 5) -
         (smith ? professionRank(smith) : 0) -
-        (s.campOpen && s.campUpgrades.forge ? 1 : 0),
+        (s.campOpen && s.campUpgrades.forge ? 1 : 0) -
+        (s.campOpen && campWorker(s, "smith") ? 1 : 0),
     ),
     wood: item.slot === "armor" ? 1 : 2,
   };
@@ -2035,6 +2114,8 @@ function settleDay(s, mealsProvided = false) {
       if (p.hp === 0) {
         p.dead = true;
         p.equipment = { weapon: null, armor: null };
+        for (const role of campRoles)
+          if (s.campJobs[role.id] === p.id) delete s.campJobs[role.id];
         note(
           s,
           `${p.name} died of starvation. Their equipment returns to company stores.`,
@@ -2076,6 +2157,9 @@ export function spendHours(s, hours, options = {}) {
   while (remaining > 0.000001 && !companyLost(s)) {
     const untilMidnight = 24 - s.timeOfDay;
     const amount = Math.min(remaining, untilMidnight);
+    if (!options.resting)
+      for (const p of livingParty(s))
+        p.fatigue = Math.min(100, (p.fatigue || 0) + amount * 2);
     s.timeOfDay += amount;
     remaining -= amount;
     if (s.timeOfDay >= 24 - 0.000001) {
@@ -2236,4 +2320,146 @@ export function buildCamp(s, id) {
     `${plan.name} built at level ${plan.level + 1}. Camp improvements travel with the company.`,
   );
   return true;
+}
+
+export const campRoles = [
+  {
+    id: "cook",
+    name: "Camp cook",
+    building: "cookpot",
+    profession: "Cook",
+    desc: "One fewer ration per daily meal while camping. Fed rests grant Cook practice.",
+  },
+  {
+    id: "smith",
+    name: "Camp smith",
+    building: "forge",
+    profession: "Smith",
+    desc: "Fine recipes use one extra ore less while camping. A fed rest converts 1 wood into 2 ore, plus Smith rank, and grants 2 practice.",
+  },
+  {
+    id: "medic",
+    name: "Camp medic",
+    building: "infirmary",
+    profession: "Herbalist",
+    desc: "A fed rest uses 2 herbs to heal everyone by 4 extra health, plus 2 per Herbalist rank, and grants practice.",
+  },
+  {
+    id: "guard",
+    name: "Night guard",
+    building: "watchpost",
+    profession: null,
+    desc: "A fed rest prepares +1 valor for the next battle. Any conscious companion can guard.",
+  },
+];
+export function fatiguePenalty(p) {
+  return (p.fatigue || 0) >= 80 ? 2 : (p.fatigue || 0) >= 50 ? 1 : 0;
+}
+export function fatigueLabel(p) {
+  return fatiguePenalty(p) === 2
+    ? "Exhausted"
+    : fatiguePenalty(p)
+      ? "Tired"
+      : "Rested";
+}
+export function canAssignCampJob(s, roleId, companionId) {
+  const role = campRoles.find((role) => role.id === roleId),
+    p = s.party[companionId];
+  return !!(
+    role &&
+    p &&
+    !p.dead &&
+    p.hp > 0 &&
+    s.campUpgrades[role.building] &&
+    (!role.profession || p.profession === role.profession) &&
+    !campRoles.some(
+      (other) => other.id !== roleId && s.campJobs[other.id] === companionId,
+    )
+  );
+}
+export function campWorker(s, roleId) {
+  const id = s.campJobs[roleId];
+  return Number.isInteger(id) && canAssignCampJob(s, roleId, id)
+    ? s.party[id]
+    : null;
+}
+export function assignCampJob(s, roleId, companionId) {
+  const role = campRoles.find((role) => role.id === roleId);
+  if (!s.campOpen || s.battle || s.event || companyLost(s) || !role)
+    return false;
+  if (companionId === null) {
+    delete s.campJobs[roleId];
+    note(s, `${role.name} duty left vacant.`);
+    return true;
+  }
+  if (
+    !Number.isInteger(companionId) ||
+    !canAssignCampJob(s, roleId, companionId)
+  )
+    return false;
+  s.campJobs[roleId] = companionId;
+  note(
+    s,
+    `${s.party[companionId].name} assigned as ${role.name.toLowerCase()}.`,
+  );
+  return true;
+}
+function finishCampJobs(s, restHours) {
+  if (!s.campOpen || restHours < 6 || s.lastCampWorkDay === s.day) return;
+  s.lastCampWorkDay = s.day;
+  const cook = campWorker(s, "cook"),
+    smith = campWorker(s, "smith"),
+    medic = campWorker(s, "medic"),
+    guard = campWorker(s, "guard");
+  if (cook) {
+    practice(s, cook, 1);
+    note(s, `${cook.name} tended the cookpot and practiced cooking.`);
+  }
+  if (smith) {
+    if (s.inventory.wood >= 1) {
+      const ore = 2 + professionRank(smith);
+      s.inventory.wood--;
+      s.inventory.ore += ore;
+      practice(s, smith, 2);
+      note(s, `${smith.name} salvaged ${ore} ore using 1 wood at the forge.`);
+    } else note(s, `${smith.name} needs 1 wood to work the camp forge.`);
+  }
+  if (medic) {
+    if (s.inventory.herbs >= 2) {
+      s.inventory.herbs -= 2;
+      const recovery = 4 + professionRank(medic) * 2;
+      for (const p of livingParty(s)) {
+        p.hp = Math.min(p.max, p.hp + recovery);
+        if (p.hp >= p.max / 2) p.injury = false;
+      }
+      practice(s, medic, 1);
+      note(
+        s,
+        `${medic.name} used 2 herbs to tend the company: +${recovery} health.`,
+      );
+    } else note(s, `${medic.name} needs 2 herbs to tend the company.`);
+  }
+  if (guard) {
+    s.preparedValor = 1;
+    note(s, `${guard.name} kept watch. The next battle starts with +1 valor.`);
+  }
+}
+export function flankingBonus(s, attacker, target, side = "party") {
+  if (
+    !s.battle ||
+    Math.abs(attacker.x - target.x) + Math.abs(attacker.y - target.y) !== 1
+  )
+    return 0;
+  const allies =
+    side === "party"
+      ? s.battle.units.filter((u) => s.party[u.id].hp > 0)
+      : s.battle.enemies.filter((e) => e.hp > 0);
+  return allies.some(
+    (ally) =>
+      ally !== attacker &&
+      ally.x === 2 * target.x - attacker.x &&
+      ally.y === 2 * target.y - attacker.y,
+  )
+    ? 2
+    : 0;
 }

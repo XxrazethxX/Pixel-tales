@@ -732,3 +732,8 @@ nav button[data-count]::after {
     visibility: hidden;
   }
 }
+
+.fatigue-bar i {
+  background: #a77d47;
+  box-shadow: inset 0 1px #c6a263;
+}

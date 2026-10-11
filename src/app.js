@@ -71,6 +71,12 @@ import {
   leaveCamp,
   buildCamp,
   campStructures,
+  campRoles,
+  campWorker,
+  canAssignCampJob,
+  assignCampJob,
+  fatigueLabel,
+  fatiguePenalty,
   campBuildPlan,
   livingParty,
   companyLost,
@@ -169,7 +175,7 @@ function objective() {
       u = s.battle.units.find((u) => u.id === selected);
     if (abilityMode)
       return `${classSkills[p.role].name} armed: click an outlined enemy within ${attackRange(p, true)} tiles. ${classSkills[p.role].desc} Costs ${classSkills[p.role].cost} valor.`;
-    return `Valor ${s.battle.valor}/5 · Round ${s.battle.turn} · ${p.name}: ${u?.moved ? "movement used" : `move up to ${movementRange(p)} tiles`} · ${u?.acted ? "action used" : "attack or brace"}. Move and attack in the same round. Bows reach 4 tiles; spears 2; other weapons 1.`;
+    return `Valor ${s.battle.valor}/5 · Round ${s.battle.turn} · ${p.name}: ${u?.moved ? "movement used" : `move up to ${movementRange(p)} tiles`} · ${u?.acted ? "action used" : "attack or brace"}. ${fatigueLabel(p)} · Fatigue ${Math.round(p.fatigue || 0)}/100. Melee flanking +2: place allies on opposite sides of a foe. Wolves rush wounded targets and gain +1 damage when hunting together.`;
   }
   if (s.contract)
     return `Active: ${s.contract.name}. ${s.location === s.contract.target ? "Use the gold button below to complete your objective." : `Travel to ${places[s.contract.target].name} by clicking any point on the map.`}`;
@@ -325,7 +331,7 @@ function render() {
       }
       const c = card(
         `${p.name} · Level ${p.level}`,
-        `<p>${p.role} · ${rankNames[professionRank(p)]} ${p.profession} (${p.professionXP} practice${professionRank(p) < 3 ? ` / ${[3, 8, 15][professionRank(p)]} for next rank` : " · mastered"}) ${p.injury ? "· INJURED" : ""}</p><div class="row"><span class="hint">HP ${p.hp}/${p.max}</span><span class="hint">ATK ${attackPower(s, p)} · Armor ${armorPower(s, p)}</span></div><div class="bar"><i style="width:${(p.hp / p.max) * 100}%"></i></div><p>XP ${p.xp}/${p.level * 30} · ${p.points} training points</p>`,
+        `<p>${p.role} · ${rankNames[professionRank(p)]} ${p.profession} (${p.professionXP} practice${professionRank(p) < 3 ? ` / ${[3, 8, 15][professionRank(p)]} for next rank` : " · mastered"}) ${p.injury ? "· INJURED" : ""}</p><div class="row"><span class="hint">HP ${p.hp}/${p.max}</span><span class="hint">ATK ${attackPower(s, p)} · Armor ${armorPower(s, p)}</span></div><div class="bar"><i style="width:${(p.hp / p.max) * 100}%"></i></div><p>${fatigueLabel(p)} · Fatigue ${Math.round(p.fatigue || 0)}/100${fatiguePenalty(p) ? ` · −${fatiguePenalty(p)} attack${fatiguePenalty(p) === 2 ? " · −1 movement" : ""}` : ""}</p><div class="bar fatigue-bar"><i style="width:${p.fatigue || 0}%"></i></div><p>XP ${p.xp}/${p.level * 30} · ${p.points} training points</p>`,
       );
       const worn = card(
         "Equipped gear",
@@ -418,7 +424,7 @@ function render() {
     panel.append(
       card(
         "Campfire & company stores",
-        `<p>The camp travels with you. ${livingParty(s).length} companions · ${s.food} rations · ${s.gold} crowns</p><p>Wood ${s.inventory.wood} · Ore ${s.inventory.ore} · Herbs ${s.inventory.herbs}</p><p>Daily upkeep: ${campCost(s)} rations and ${dailyWages(s)} crowns. ${s.hungerDays ? `<strong>Starving for ${s.hungerDays} day(s). Empty meals prevent recovery.</strong>` : "Rest with enough food to recover."} ${s.wageDebt ? `${s.wageDebt} crowns in overdue wages.` : ""}</p>`,
+        `<p>The camp travels with you. ${livingParty(s).length} companions · ${s.food} rations · ${s.gold} crowns</p><p>Wood ${s.inventory.wood} · Ore ${s.inventory.ore} · Herbs ${s.inventory.herbs}</p>${s.preparedValor ? "<p>Guard preparation: +1 valor in the next battle.</p>" : ""}<p>Daily upkeep: ${campCost(s)} rations and ${dailyWages(s)} crowns. ${s.hungerDays ? `<strong>Starving for ${s.hungerDays} day(s). Empty meals prevent recovery.</strong>` : "Rest with enough food to recover."} ${s.wageDebt ? `${s.wageDebt} crowns in overdue wages.` : ""}</p>`,
       ),
     );
     const rest = card(
@@ -435,6 +441,43 @@ function render() {
     if (s.wageDebt)
       rest.append(button("Pay overdue wages", () => payWages(s), !s.gold));
     panel.append(rest);
+    const duties = card(
+      "Camp duties",
+      "<p>Choose one job per conscious companion. Build its station first. Jobs use current professions and operate on fed rests of at least six hours, once per day. Workers recover 3 fatigue per hour; resting companions recover 5.</p>",
+    );
+    for (const role of campRoles) {
+      const worker = campWorker(s, role.id),
+        row = card(
+          role.name,
+          `<p>${role.desc}</p><p>${s.campUpgrades[role.building] ? (worker ? `${worker.name} on duty` : "Unstaffed") : `Requires ${campStructures.find((b) => b.id === role.building).name}`}</p>`,
+        );
+      const selector = document.createElement("select");
+      selector.setAttribute("aria-label", role.name);
+      selector.add(new Option("No assignment", ""));
+      livingParty(s)
+        .filter((p) => p.hp > 0)
+        .forEach((p) => {
+          const option = new Option(
+            `${p.name} · ${p.profession} · ${fatigueLabel(p)}`,
+            String(p.id),
+          );
+          option.disabled = !canAssignCampJob(s, role.id, p.id);
+          selector.add(option);
+        });
+      selector.value = worker ? String(worker.id) : "";
+      selector.disabled = !s.campUpgrades[role.building];
+      selector.onchange = () => {
+        assignCampJob(
+          s,
+          role.id,
+          selector.value === "" ? null : Number(selector.value),
+        );
+        render();
+      };
+      row.append(selector);
+      duties.append(row);
+    }
+    panel.append(duties);
     for (const building of campStructures) {
       const plan = campBuildPlan(s, building.id);
       const done = plan.level >= plan.max;
@@ -1389,9 +1432,11 @@ function updateClockUI() {
   $("day-marker").style.left = `${info.percent}%`;
   $("day-scale").setAttribute("aria-valuenow", String(s.timeOfDay));
   $("day-scale").setAttribute("aria-valuetext", label);
-  $("survival-warning").hidden = !s.hungerDays && !s.wageDebt;
+  const exhausted = livingParty(s).filter((p) => fatiguePenalty(p) === 2);
+  $("survival-warning").hidden =
+    !s.hungerDays && !s.wageDebt && !exhausted.length;
   $("survival-warning").textContent =
-    `${s.hungerDays ? `STARVING · day ${s.hungerDays}. Find food before the next meal. ` : ""}${s.wageDebt ? `${s.wageDebt} crowns in unpaid wages.` : ""}`;
+    `${s.hungerDays ? `STARVING · day ${s.hungerDays}. Find food before the next meal. ` : ""}${s.wageDebt ? `${s.wageDebt} crowns in unpaid wages. ` : ""}${exhausted.length ? `${exhausted.length} exhausted · camp to recover.` : ""}`;
 }
 function animate(time) {
   if (
@@ -1579,5 +1624,5 @@ canvas.addEventListener("pointermove", (event) => {
     enemy = s.battle.enemies.find((e) => e.hp > 0 && e.x === x && e.y === y);
   if (enemy)
     $("map-label").textContent =
-      `${enemy.kind || "raider"} · HP ${enemy.hp}/${enemy.max} · Armor ${enemy.armor || 0} · Range ${enemy.kind === "archer" ? 4 : 1}${enemy.stun ? " · Stunned" : ""}${enemy.bleed ? " · Bleeding" : ""}`;
+      `${enemy.kind || "raider"} · HP ${enemy.hp}/${enemy.max} · Armor ${enemy.armor || 0} · Range ${enemy.kind === "archer" ? 4 : 1}${enemy.kind === "wolf" ? " · Rush 2 · pack hunter" : enemy.kind === "archer" ? " · Keeps distance" : " · Melee flanking +2"}${enemy.stun ? " · Stunned" : ""}${enemy.bleed ? " · Bleeding" : ""}`;
 });
