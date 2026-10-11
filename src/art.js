@@ -319,13 +319,17 @@ export function worldArtwork() {
   trees.sort((a, b) => a.y - b.y).forEach((p) => drawTree(c, p.x, p.y, p.i));
   return landscape;
 }
-function characterImage(role, coat, step, variant) {
-  const key = `${role}:${coat}:${step}:${variant}`;
+function characterImage(role, coat, step, variant, appearance = {}) {
+  const key = `${role}:${coat}:${step}:${variant}:${appearance.sex}:${appearance.skin}:${appearance.hair}:${appearance.hairStyle}`;
   if (characterImages.has(key)) return characterImages.get(key);
   const image = surface(26, 34),
     c = image.getContext("2d");
-  const skin = ["#d9b486", "#bd946e", "#e2c396", "#c69f78"][variant % 4];
-  const hair = ["#6b4c33", "#605c4b", "#927344", "#4b4635"][variant % 4];
+  const skin =
+    appearance.skin ||
+    ["#d9b486", "#bd946e", "#e2c396", "#c69f78"][variant % 4];
+  const hair =
+    appearance.hair ||
+    ["#6b4c33", "#605c4b", "#927344", "#4b4635"][variant % 4];
   steppedOval(c, 4, 28, 20, 5, "#63724b88");
   pixel(c, 8, 23 + step, 4, 8 - step, "#3e4135");
   pixel(c, 15, 23 - step, 4, 8 + step, "#3e4135");
@@ -351,8 +355,6 @@ function characterImage(role, coat, step, variant) {
   pixel(c, 9, 3, 10, 4, hair);
   pixel(c, 9, 7, 2, 3, hair);
   if (role === "Swordswoman") {
-    pixel(c, 9, 6, 1, 9, hair);
-    pixel(c, 18, 6, 2, 10, hair);
     pixel(c, 23, 12, 2, 13, "#d0d0ad");
     pixel(c, 23, 12, 1, 11, "#f0e2bd");
     pixel(c, 21, 23, 6, 2, "#a99b68");
@@ -389,13 +391,33 @@ function characterImage(role, coat, step, variant) {
     pixel(c, 11, 2, 7, 2, "#b6b99c");
     pixel(c, 11, 12, 6, 2, "#a57850");
   }
+  if (appearance.hairStyle === "long" || appearance.hairStyle === "braid") {
+    pixel(c, 9, 7, 2, 11, hair);
+    pixel(c, 18, 7, appearance.hairStyle === "braid" ? 1 : 2, 12, hair);
+  }
+  if (appearance.sex === "male") pixel(c, 11, 12, 7, 2, "#9b755c");
   characterImages.set(key, image);
   return image;
 }
-export function drawCharacter(c, x, y, coat, step = 0, role = "", variant = 0) {
+export function drawCharacter(
+  c,
+  x,
+  y,
+  coat,
+  step = 0,
+  role = "",
+  variant = 0,
+  appearance = {},
+) {
   c.imageSmoothingEnabled = false;
   c.drawImage(
-    characterImage(role, coat, step > 0 ? 1 : step < 0 ? -1 : 0, variant),
+    characterImage(
+      role,
+      coat,
+      step > 0 ? 1 : step < 0 ? -1 : 0,
+      variant,
+      appearance,
+    ),
     Math.round(x) - 13,
     Math.round(y) - 17,
   );
@@ -421,6 +443,7 @@ export function portraitArtwork(p) {
       p.coat || partyCoats[p.id] || partyCoats[0],
       0,
       p.id,
+      p,
     ),
     6,
     1,
@@ -1051,6 +1074,7 @@ export function drawCampScene(c, s) {
         0,
         p.role,
         p.id,
+        p,
       );
       drawLoadout(c, s, p, point.x, point.y);
       if (duty)
@@ -1082,4 +1106,73 @@ export function drawLoadout(c, s, p, x, y) {
     pixel(c, x + 10, y - 14, 2, 24, "#c5c9ac");
     pixel(c, x + 7, y + 4, 8, 2, "#7b6844");
   }
+}
+
+export function drawSiteInterior(c, s) {
+  const e = s.event;
+  pixel(c, 0, 0, 768, 432, e.site === 10 ? "#879064" : "#393e35");
+  if (e.site === 10) {
+    for (let y = 0; y < 4; y++)
+      for (let x = 0; x < 4; x++) {
+        pixel(
+          c,
+          180 + x * 85,
+          40 + y * 78,
+          76,
+          70,
+          (x + y) % 2 ? "#a8aa7c" : "#afb184",
+        );
+        pixel(c, 184 + x * 85, 44 + y * 78, 68, 2, "#bbc18a");
+      }
+    pixel(c, 208, 213, 9, 43, "#705337");
+    pixel(c, 196, 210, 21, 6, "#705337");
+    pixel(c, 215, 203, 16, 7, "#705337");
+    if (e.stage !== "search") {
+      pixel(c, 448, 137, 47, 27, "#795537");
+      pixel(c, 448, 137, 47, 8, "#ac8e57");
+      pixel(c, 466, 143, 10, 17, "#c3b072");
+      pixel(c, 469, 149, 4, 7, "#3f4433");
+    }
+  } else {
+    for (let i = 0; i < 9; i++) {
+      pixel(c, 65 + i * 75, 50, 59, 320, "#454c3e");
+      pixel(c, 69 + i * 75, 56, 48, 9, "#555b48");
+    }
+    pixel(c, 175, 150, 440, 160, "#92856b");
+    pixel(c, 200, 116, 13, 216, "#705337");
+    pixel(c, 575, 116, 13, 216, "#705337");
+    pixel(c, 198, 110, 391, 17, "#8b7351");
+    pixel(c, 228, 132, 9, 20, "#e5b45e");
+    if (e.stage === "gallery") {
+      pixel(c, 375, 237, 93, 36, "#806946");
+      pixel(c, 375, 270, 16, 16, "#434638");
+      pixel(c, 453, 270, 16, 16, "#434638");
+      pixel(c, 389, 219, 17, 17, "#a6a398");
+      pixel(c, 418, 222, 22, 16, "#8f9790");
+    }
+    if (e.stage === "vein") {
+      for (let i = 0; i < 8; i++)
+        pixel(
+          c,
+          410 + (i % 3) * 20,
+          163 + Math.floor(i / 3) * 20,
+          15,
+          12,
+          "#b8b1a0",
+        );
+    }
+  }
+  for (let i = 0; i < s.party.length; i++)
+    if (!s.party[i].dead)
+      drawCharacter(
+        c,
+        270 + i * 40,
+        340,
+        s.party[i].coat || partyCoats[i],
+        0,
+        s.party[i].role,
+        i,
+        s.party[i],
+      );
+  drawMapLabel(c, places[e.site].name, 384, 22);
 }

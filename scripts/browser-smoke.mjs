@@ -1,4 +1,4 @@
-import { enterGame } from "./smoke-menu.mjs";
+import { enterGame, exploreSite } from "./smoke-menu.mjs";
 import { readFileSync } from "node:fs";
 const { chromium } = await import(
   process.env.PLAYWRIGHT_MODULE || "playwright-core"
@@ -142,7 +142,7 @@ await page
   .first()
   .click();
 await walk(350, 145);
-await click("Explore · knowledge & materials");
+await exploreSite(page);
 await click("Engage raiders");
 await click("Nell");
 await click("Aimed shot · 2 valor");
@@ -322,7 +322,7 @@ assert.equal(
 );
 assert.ok((await state()).discovered.includes(10));
 const goldBeforeStash = (await state()).gold;
-await click("Explore · knowledge & materials");
+await exploreSite(page);
 assert.equal((await state()).gold, goldBeforeStash + 30);
 const charted = (await state()).charted;
 await page.reload();

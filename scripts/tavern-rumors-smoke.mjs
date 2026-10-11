@@ -1,4 +1,4 @@
-import { enterGame } from "./smoke-menu.mjs";
+import { enterGame, exploreSite } from "./smoke-menu.mjs";
 import assert from "node:assert/strict";
 import { fresh, places } from "../src/game.js";
 const { chromium } = await import(
@@ -74,7 +74,7 @@ try {
   heard = await state();
   arrive(heard, 10);
   await seed(heard);
-  await click("Explore · knowledge & materials");
+  await exploreSite(page);
   let found = await state();
   assert.equal(found.gold, 542);
   assert.equal(found.knowledge, 2);

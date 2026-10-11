@@ -16,3 +16,26 @@ export async function enterGame(page) {
       .click();
   }
 }
+export async function exploreSite(page) {
+  const stash = page.getByRole("button", {
+    name: "Enter Forgotten Stash",
+    exact: true,
+  });
+  if (await stash.count()) {
+    await stash.click();
+    await page.getByRole("button", { name: "Search 4,2", exact: true }).click();
+    for (const value of ["2", "4", "1"]) {
+      await page.getByRole("slider", { name: "Lockpick dial" }).fill(value);
+      await page
+        .getByRole("button", { name: "Test tension", exact: true })
+        .click();
+    }
+    await page.getByRole("button", { name: "Leave site", exact: true }).click();
+  } else
+    await page
+      .getByRole("button", {
+        name: "Explore · knowledge & materials",
+        exact: true,
+      })
+      .click();
+}

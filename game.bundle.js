@@ -148,6 +148,7 @@ function fresh() {
     hiredRecruits: [],
     lessonLedger: {},
     rumors: {},
+    siteProgress: {},
     cargo: { grain: 0, cloth: 0, salt: 0, iron: 0 },
     markets: {},
     reputation: { guild: 0, wardens: 0, freefolk: 0 },
@@ -754,6 +755,39 @@ function restore(raw) {
     if (Number.isInteger(day) && day >= 1 && day <= result.day)
       result.lessonLedger[id] = day;
   }
+  result.siteProgress = Object.fromEntries(
+    [4, 9]
+      .filter((id) => raw.siteProgress?.[`cart-${id}`] === true)
+      .map((id) => [`cart-${id}`, true]),
+  );
+  if (result.event?.kind === "site") {
+    const e = result.event;
+    result.event =
+      [4, 9, 10].includes(e.site) && e.site === raw.location
+        ? {
+            kind: "site",
+            site: e.site,
+            stage: (e.site === 10
+              ? ["search", "lock", "opened"]
+              : ["entrance", "gallery", "vein"]
+            ).includes(e.stage)
+              ? e.stage
+              : e.site === 10
+                ? "search"
+                : "entrance",
+            pin: Number.isInteger(e.pin) ? Math.max(0, Math.min(2, e.pin)) : 0,
+            strain: Number.isInteger(e.strain)
+              ? Math.max(0, Math.min(2, e.strain))
+              : 0,
+            message:
+              typeof e.message === "string"
+                ? safeCompanyName(e.message, "", 180)
+                : "",
+          }
+        : null;
+    if (result.event?.site === 10 && result.explored.includes(10))
+      result.event.stage = "opened";
+  }
   result.companyName = safeCompanyName(raw.companyName);
   result.banner = companyBanners.some((b) => b.id === raw.banner)
     ? raw.banner
@@ -871,6 +905,7 @@ function restore(raw) {
     fatigue: Number.isFinite(p.fatigue)
       ? Math.max(0, Math.min(100, p.fatigue))
       : 0,
+    ...avatarAppearance(p),
     name: safeCompanyName(p.name, `Companion ${id + 1}`, 18),
     coat: /^#[0-9a-f]{6}$/i.test(p.coat || "") ? p.coat : undefined,
     profession: p.profession || "Cook",
@@ -1451,6 +1486,10 @@ function heal(s, id) {
   return true;
 }
 function explore(s) {
+  if ([4, 9, 10].includes(s.location)) return false;
+  return awardExploration(s);
+}
+function awardExploration(s) {
   if (
     s.location < 0 ||
     s.battle ||
@@ -5561,7 +5600,10 @@ function createCompany(options) {
       traits: [p.trait],
       level: origin.veteran ? 2 : 1,
       points: origin.veteran ? 1 : 0,
-      coat: companyBanners.find((b) => b.id === options.banner).color,
+      ...avatarAppearance(p),
+      coat: companyBanners.some((b) => b.color === p.coat)
+        ? p.coat
+        : companyBanners.find((b) => b.id === options.banner).color,
     };
   });
   s.log = [
@@ -5592,6 +5634,148 @@ function isCompanySave(raw) {
         p.hp <= p.max,
     )
   );
+}
+
+const avatarSkins = ["#e2c396", "#bd946e", "#8f624b", "#614637"];
+const avatarHair = ["#4b4635", "#927344", "#b5a68a", "#a25e3b"];
+function avatarAppearance(p = {}) {
+  return {
+    sex: p.sex === "male" ? "male" : "female",
+    skin: avatarSkins.includes(p.skin) ? p.skin : avatarSkins[0],
+    hair: avatarHair.includes(p.hair) ? p.hair : avatarHair[0],
+    hairStyle: ["short", "long", "braid"].includes(p.hairStyle)
+      ? p.hairStyle
+      : "short",
+  };
+}
+function customizeAvatar(s, id, appearance) {
+  const p = s.party[id];
+  if (!p || p.dead || s.battle || s.event) return false;
+  Object.assign(p, avatarAppearance(appearance));
+  if (companyBanners.some((b) => b.color === appearance.coat))
+    p.coat = appearance.coat;
+  return true;
+}
+function enterSite(s) {
+  if (
+    s.battle ||
+    s.event ||
+    s.campOpen ||
+    s.destination ||
+    companyLost(s) ||
+    ![4, 9, 10].includes(s.location)
+  )
+    return false;
+  s.siteProgress ||= {};
+  s.event = {
+    kind: "site",
+    site: s.location,
+    stage:
+      s.location === 10
+        ? s.explored.includes(10)
+          ? "opened"
+          : "search"
+        : "entrance",
+    pin: 0,
+    strain: 0,
+    message: "",
+  };
+  return true;
+}
+function siteAction(s, action, value) {
+  const e = s.event;
+  if (e?.kind !== "site") return false;
+  if (action === "leave") {
+    s.event = null;
+    return true;
+  }
+  if (e.site === 10) {
+    if (
+      action === "search" &&
+      e.stage === "search" &&
+      Number.isInteger(value) &&
+      value >= 0 &&
+      value < 16
+    ) {
+      if (value === 7) {
+        e.stage = "lock";
+        e.message =
+          "A buried chest! Three pins hold the lock. Set each dial and test the tension.";
+      } else
+        e.message =
+          value === 8
+            ? "The broken oak stands here. Follow the scratched arrow east."
+            : "Disturbed soil, but no chest. Count from the broken oak.";
+      return true;
+    }
+    if (
+      action === "pick" &&
+      e.stage === "lock" &&
+      Number.isInteger(value) &&
+      value >= 0 &&
+      value <= 5
+    ) {
+      const target = [2, 4, 1][e.pin];
+      if (value === target) {
+        e.pin++;
+        e.strain = 0;
+        e.message = "Click! The pin holds.";
+        if (e.pin === 3) {
+          s.event = null;
+          awardExploration(s);
+          s.event = {
+            ...e,
+            stage: "opened",
+            message:
+              "The chest opens. Its contents have been added to your stores.",
+          };
+        }
+      } else {
+        e.strain++;
+        e.message =
+          value < target
+            ? "The pick catches: rotate the dial higher."
+            : "Too far: rotate the dial lower.";
+        if (e.strain === 3) {
+          e.pin = 0;
+          e.strain = 0;
+          e.message = "The lock resets. Repairing the pick takes one hour.";
+          spendHours(s, 1);
+          if (companyLost(s)) return true;
+        }
+      }
+      return true;
+    }
+    return false;
+  }
+  if (["entrance", "gallery", "vein"].includes(action)) {
+    e.stage = action;
+    e.message = "";
+    return true;
+  }
+  if (action === "cart" && e.stage === "gallery") {
+    const key = `cart-${e.site}`;
+    if (s.siteProgress[key]) return false;
+    s.siteProgress[key] = true;
+    s.inventory.ore += 2;
+    e.message = "Recovered two ore from the abandoned cart.";
+    return true;
+  }
+  if (action === "mine" && e.stage === "vein") {
+    if (s.explored.includes(e.site)) {
+      e.message =
+        "The exposed seam has been surveyed. Use fieldwork outside for further mining.";
+      return false;
+    }
+    s.event = null;
+    awardExploration(s);
+    s.event = {
+      ...e,
+      message: "Surveyed the seam and recovered ore, materials, and knowledge.",
+    };
+    return true;
+  }
+  return false;
 }
 
 // Original, hand-built pixel artwork. All coordinates are logical pixels.
@@ -5905,13 +6089,17 @@ function worldArtwork() {
   trees.sort((a, b) => a.y - b.y).forEach((p) => drawTree(c, p.x, p.y, p.i));
   return landscape;
 }
-function characterImage(role, coat, step, variant) {
-  const key = `${role}:${coat}:${step}:${variant}`;
+function characterImage(role, coat, step, variant, appearance = {}) {
+  const key = `${role}:${coat}:${step}:${variant}:${appearance.sex}:${appearance.skin}:${appearance.hair}:${appearance.hairStyle}`;
   if (characterImages.has(key)) return characterImages.get(key);
   const image = surface(26, 34),
     c = image.getContext("2d");
-  const skin = ["#d9b486", "#bd946e", "#e2c396", "#c69f78"][variant % 4];
-  const hair = ["#6b4c33", "#605c4b", "#927344", "#4b4635"][variant % 4];
+  const skin =
+    appearance.skin ||
+    ["#d9b486", "#bd946e", "#e2c396", "#c69f78"][variant % 4];
+  const hair =
+    appearance.hair ||
+    ["#6b4c33", "#605c4b", "#927344", "#4b4635"][variant % 4];
   steppedOval(c, 4, 28, 20, 5, "#63724b88");
   pixel(c, 8, 23 + step, 4, 8 - step, "#3e4135");
   pixel(c, 15, 23 - step, 4, 8 + step, "#3e4135");
@@ -5937,8 +6125,6 @@ function characterImage(role, coat, step, variant) {
   pixel(c, 9, 3, 10, 4, hair);
   pixel(c, 9, 7, 2, 3, hair);
   if (role === "Swordswoman") {
-    pixel(c, 9, 6, 1, 9, hair);
-    pixel(c, 18, 6, 2, 10, hair);
     pixel(c, 23, 12, 2, 13, "#d0d0ad");
     pixel(c, 23, 12, 1, 11, "#f0e2bd");
     pixel(c, 21, 23, 6, 2, "#a99b68");
@@ -5975,13 +6161,33 @@ function characterImage(role, coat, step, variant) {
     pixel(c, 11, 2, 7, 2, "#b6b99c");
     pixel(c, 11, 12, 6, 2, "#a57850");
   }
+  if (appearance.hairStyle === "long" || appearance.hairStyle === "braid") {
+    pixel(c, 9, 7, 2, 11, hair);
+    pixel(c, 18, 7, appearance.hairStyle === "braid" ? 1 : 2, 12, hair);
+  }
+  if (appearance.sex === "male") pixel(c, 11, 12, 7, 2, "#9b755c");
   characterImages.set(key, image);
   return image;
 }
-function drawCharacter(c, x, y, coat, step = 0, role = "", variant = 0) {
+function drawCharacter(
+  c,
+  x,
+  y,
+  coat,
+  step = 0,
+  role = "",
+  variant = 0,
+  appearance = {},
+) {
   c.imageSmoothingEnabled = false;
   c.drawImage(
-    characterImage(role, coat, step > 0 ? 1 : step < 0 ? -1 : 0, variant),
+    characterImage(
+      role,
+      coat,
+      step > 0 ? 1 : step < 0 ? -1 : 0,
+      variant,
+      appearance,
+    ),
     Math.round(x) - 13,
     Math.round(y) - 17,
   );
@@ -6007,6 +6213,7 @@ function portraitArtwork(p) {
       p.coat || partyCoats[p.id] || partyCoats[0],
       0,
       p.id,
+      p,
     ),
     6,
     1,
@@ -6637,6 +6844,7 @@ function drawCampScene(c, s) {
         0,
         p.role,
         p.id,
+        p,
       );
       drawLoadout(c, s, p, point.x, point.y);
       if (duty)
@@ -6668,6 +6876,75 @@ function drawLoadout(c, s, p, x, y) {
     pixel(c, x + 10, y - 14, 2, 24, "#c5c9ac");
     pixel(c, x + 7, y + 4, 8, 2, "#7b6844");
   }
+}
+
+function drawSiteInterior(c, s) {
+  const e = s.event;
+  pixel(c, 0, 0, 768, 432, e.site === 10 ? "#879064" : "#393e35");
+  if (e.site === 10) {
+    for (let y = 0; y < 4; y++)
+      for (let x = 0; x < 4; x++) {
+        pixel(
+          c,
+          180 + x * 85,
+          40 + y * 78,
+          76,
+          70,
+          (x + y) % 2 ? "#a8aa7c" : "#afb184",
+        );
+        pixel(c, 184 + x * 85, 44 + y * 78, 68, 2, "#bbc18a");
+      }
+    pixel(c, 208, 213, 9, 43, "#705337");
+    pixel(c, 196, 210, 21, 6, "#705337");
+    pixel(c, 215, 203, 16, 7, "#705337");
+    if (e.stage !== "search") {
+      pixel(c, 448, 137, 47, 27, "#795537");
+      pixel(c, 448, 137, 47, 8, "#ac8e57");
+      pixel(c, 466, 143, 10, 17, "#c3b072");
+      pixel(c, 469, 149, 4, 7, "#3f4433");
+    }
+  } else {
+    for (let i = 0; i < 9; i++) {
+      pixel(c, 65 + i * 75, 50, 59, 320, "#454c3e");
+      pixel(c, 69 + i * 75, 56, 48, 9, "#555b48");
+    }
+    pixel(c, 175, 150, 440, 160, "#92856b");
+    pixel(c, 200, 116, 13, 216, "#705337");
+    pixel(c, 575, 116, 13, 216, "#705337");
+    pixel(c, 198, 110, 391, 17, "#8b7351");
+    pixel(c, 228, 132, 9, 20, "#e5b45e");
+    if (e.stage === "gallery") {
+      pixel(c, 375, 237, 93, 36, "#806946");
+      pixel(c, 375, 270, 16, 16, "#434638");
+      pixel(c, 453, 270, 16, 16, "#434638");
+      pixel(c, 389, 219, 17, 17, "#a6a398");
+      pixel(c, 418, 222, 22, 16, "#8f9790");
+    }
+    if (e.stage === "vein") {
+      for (let i = 0; i < 8; i++)
+        pixel(
+          c,
+          410 + (i % 3) * 20,
+          163 + Math.floor(i / 3) * 20,
+          15,
+          12,
+          "#b8b1a0",
+        );
+    }
+  }
+  for (let i = 0; i < s.party.length; i++)
+    if (!s.party[i].dead)
+      drawCharacter(
+        c,
+        270 + i * 40,
+        340,
+        s.party[i].coat || partyCoats[i],
+        0,
+        s.party[i].role,
+        i,
+        s.party[i],
+      );
+  drawMapLabel(c, places[e.site].name, 384, 22);
 }
 
 let gameActive = false;
@@ -6852,6 +7129,7 @@ function render() {
   )
     tab = "Company";
 
+  document.body.classList.toggle("in-site", s.event?.kind === "site");
   document.body.classList.toggle("drawer-open", drawerOpen);
   document.body.classList.toggle("encounter", !!s.event);
   document.body.classList.toggle("in-battle", !!s.battle);
@@ -7086,6 +7364,57 @@ function render() {
         );
       const professionSelect = document.createElement("select");
       professionSelect.setAttribute("aria-label", `Profession for ${p.name}`);
+      const appearanceEditor = document.createElement("details");
+      appearanceEditor.dataset.avatar = String(p.id);
+      appearanceEditor.append(menuElement("summary", "Customize avatar"));
+      for (const [key, label, opts] of [
+        [
+          "sex",
+          "Sex",
+          [
+            ["male", "Male"],
+            ["female", "Female"],
+          ],
+        ],
+        ["coat", "Coat", companyBanners.map((b) => [b.color, b.name])],
+        ["skin", "Skin tone", avatarSkins.map((v, i) => [v, `Tone ${i + 1}`])],
+        [
+          "hair",
+          "Hair color",
+          avatarHair.map((v, i) => [
+            v,
+            ["Dark", "Blond", "Silver", "Auburn"][i],
+          ]),
+        ],
+        [
+          "hairStyle",
+          "Hairstyle",
+          [
+            ["short", "Short"],
+            ["long", "Long"],
+            ["braid", "Braid"],
+          ],
+        ],
+      ]) {
+        const input = creatorField(
+          appearanceEditor,
+          `${p.name} ${label}`,
+          key === "coat"
+            ? p.coat || companyBanners.find((b) => b.id === s.banner).color
+            : avatarAppearance(p)[key],
+          opts,
+        );
+        input.disabled = !!s.battle || !!s.event;
+        input.onchange = () => {
+          customizeAvatar(s, p.id, {
+            ...avatarAppearance(p),
+            [key]: input.value,
+          });
+          render();
+          document.querySelector(`details[data-avatar="${p.id}"]`).open = true;
+        };
+      }
+      c.append(appearanceEditor);
       professions.forEach((name) => {
         const option = document.createElement("option");
         option.value = name;
@@ -7971,7 +8300,85 @@ function render() {
   } else if (s.event) {
     const c = card(s.event.title, `<p>${s.event.text}</p>`);
     c.id = "event";
-    if (s.event.kind === "story") {
+    if (s.event.kind === "site") {
+      const e = s.event;
+      $("objective").textContent =
+        `Inside ${places[e.site].name} · ${e.stage}. ${e.message}`;
+      const c = card(
+        e.site === 10 ? "Buried stash" : "Mine interior",
+        e.site === 10
+          ? "<p>A broken oak marks the southwest square. The inscription reads: three squares east, one square north. Search the ground, then pick the chest’s three pins.</p>"
+          : "<p>Walk into the timbered gallery, inspect the abandoned cart, and enter the ore chamber to survey the exposed seam.</p>",
+      );
+      if (e.message) {
+        const feedback = document.createElement("p");
+        feedback.textContent = e.message;
+        c.append(feedback);
+      }
+      if (e.site === 10 && e.stage === "search") {
+        const grid = document.createElement("div");
+        grid.className = "stash-grid";
+        for (let i = 0; i < 16; i++)
+          grid.append(
+            button(
+              i === 8
+                ? "Broken oak"
+                : `Search ${(i % 4) + 1},${Math.floor(i / 4) + 1}`,
+              () => siteAction(s, "search", i),
+            ),
+          );
+        c.append(grid);
+      }
+      if (e.site === 10 && e.stage === "lock") {
+        c.append(
+          document.createTextNode(
+            `Pin ${e.pin + 1}/3 · Strain ${e.strain}/3. Listen to the tension feedback.`,
+          ),
+        );
+        const dial = document.createElement("input");
+        dial.type = "range";
+        dial.min = 0;
+        dial.max = 5;
+        dial.step = 1;
+        dial.value = 0;
+        dial.setAttribute("aria-label", "Lockpick dial");
+        const value = document.createElement("span");
+        value.textContent = "Dial 0";
+        dial.oninput = () => (value.textContent = `Dial ${dial.value}`);
+        c.append(
+          dial,
+          value,
+          button("Test tension", () =>
+            siteAction(s, "pick", Number(dial.value)),
+          ),
+        );
+      }
+      if (e.site !== 10) {
+        c.append(
+          button("Entrance", () => siteAction(s, "entrance")),
+          button("Enter gallery", () => siteAction(s, "gallery")),
+          button("Enter ore chamber", () => siteAction(s, "vein")),
+        );
+        if (e.stage === "gallery")
+          c.append(
+            button(
+              "Inspect abandoned cart",
+              () => siteAction(s, "cart"),
+              !!s.siteProgress[`cart-${e.site}`],
+            ),
+          );
+        if (e.stage === "vein")
+          c.append(
+            button(
+              "Survey ore seam",
+              () => siteAction(s, "mine"),
+              s.explored.includes(e.site),
+            ),
+          );
+      }
+      c.append(button("Leave site", () => siteAction(s, "leave")));
+      a.append(c);
+    } else if (s.event.kind === "story") {
       const story = regionalStories.find((q) => q.id === s.event.storyId);
       for (const choice of story.choices) {
         const row = card(choice.label, `<p>${choice.desc}</p>`),
@@ -8039,7 +8446,7 @@ function render() {
         button("Walk away", () => resolveEvent(s, "leave")),
       );
     }
-    a.append(c);
+    if (s.event.kind !== "site") a.append(c);
   } else if (s.battle) {
     a.append(
       button(
@@ -8131,11 +8538,13 @@ function render() {
     if (s.location >= 0 && places[s.location]?.type !== "town")
       a.append(
         button(
-          s.explored.includes(s.location)
-            ? "Site explored"
-            : "Explore · knowledge & materials",
-          () => explore(s),
-          s.explored.includes(s.location),
+          [4, 9, 10].includes(s.location)
+            ? `Enter ${places[s.location].name}`
+            : s.explored.includes(s.location)
+              ? "Site explored"
+              : "Explore · knowledge & materials",
+          () => ([4, 9, 10].includes(s.location) ? enterSite(s) : explore(s)),
+          s.explored.includes(s.location) && ![4, 9, 10].includes(s.location),
         ),
       );
     if (["forest", "mine"].includes(places[s.location]?.type))
@@ -8257,8 +8666,8 @@ function rect(x, y, w, h, c) {
   ctx.fillStyle = c;
   ctx.fillRect(x, y, w, h);
 }
-function person(x, y, c, step = 0, role = "", variant = 0) {
-  drawCharacter(ctx, x, y, c, step, role, variant);
+function person(x, y, c, step = 0, role = "", variant = 0, appearance = {}) {
+  drawCharacter(ctx, x, y, c, step, role, variant, appearance);
 }
 const view = { x: 0, y: 0, scale: 1 };
 function draw() {
@@ -8298,6 +8707,21 @@ function draw() {
     view.scale = Math.min(w / 560, Math.max(160, h - 180) / 400);
     view.x = 325 - w / view.scale / 2;
     view.y = 225 - Math.max(160, h - 180) / view.scale / 2;
+  }
+  if (s.event?.kind === "site") {
+    view.scale = Math.min(w / 768, Math.max(160, h - 160) / 432);
+    view.x = (768 - w / view.scale) / 2;
+    view.y = (432 - Math.max(160, h - 160) / view.scale) / 2;
+    ctx.setTransform(
+      view.scale,
+      0,
+      0,
+      view.scale,
+      -view.x * view.scale,
+      -view.y * view.scale,
+    );
+    drawSiteInterior(ctx, s);
+    return;
   }
   canvas.dataset.viewX = view.x;
   canvas.dataset.viewY = view.y;
@@ -8433,6 +8857,7 @@ function draw() {
           0,
           s.party[u.id].role,
           u.id,
+          s.party[u.id],
         );
         drawLoadout(ctx, s, s.party[u.id], 136 + u.x * 62, 28 + u.y * 60);
         ctx.font = "bold 9px monospace";
@@ -8485,6 +8910,12 @@ function draw() {
     .forEach((p) => {
       const hostile = p.kind !== "merchant" || p.hostile;
       const color = hostile ? "#a16c54" : "#b39d69";
+      if (p.kind === "wolves") {
+        drawWolf(ctx, p.x - 12, p.y, 1);
+        drawWolf(ctx, p.x + 10, p.y + 8, -1);
+        drawMapLabel(ctx, p.name, p.x, p.y - 37, true);
+        return;
+      }
       if (p.kind === "merchant") drawWagon(ctx, p.x - 9, p.y - 8, p.hostile);
       else
         person(
@@ -8534,6 +8965,7 @@ function draw() {
         step,
         s.party[p.i].role,
         p.i,
+        s.party[p.i],
       );
       drawLoadout(ctx, s, s.party[p.i], p.x, p.y);
     });
@@ -9110,7 +9542,10 @@ function showCompanyCreator() {
         c,
         `Founder ${i + 1} class`,
         p.role,
-        Object.keys(founderRoles).map((r) => [r, r]),
+        Object.keys(founderRoles).map((r) => [
+          r,
+          r === "Swordswoman" ? "Swordfighter" : r,
+        ]),
       ),
       profession: creatorField(
         c,
@@ -9125,6 +9560,31 @@ function showCompanyCreator() {
         companionTraits.map((t) => [t.id, t.name]),
       ),
     };
+    f.sex = creatorField(c, `Founder ${i + 1} sex`, i % 2 ? "male" : "female", [
+      ["male", "Male"],
+      ["female", "Female"],
+    ]);
+    f.skin = creatorField(
+      c,
+      `Founder ${i + 1} skin`,
+      avatarSkins[0],
+      avatarSkins.map((v, i) => [v, `Skin tone ${i + 1}`]),
+    );
+    f.hair = creatorField(
+      c,
+      `Founder ${i + 1} hair color`,
+      avatarHair[0],
+      avatarHair.map((v, i) => [v, ["Dark", "Blond", "Silver", "Auburn"][i]]),
+    );
+    f.hairStyle = creatorField(c, `Founder ${i + 1} hairstyle`, "short", [
+      ["short", "Short"],
+      ["long", "Long"],
+      ["braid", "Braid"],
+    ]);
+    f.coat = creatorField(c, `Founder ${i + 1} coat`, "", [
+      ["", "Company colors"],
+      ...companyBanners.map((b) => [b.color, b.name]),
+    ]);
     const portrait = document.createElement("div"),
       desc = menuElement("p");
     const update = () => {
@@ -9134,11 +9594,18 @@ function showCompanyCreator() {
       portrait.replaceChildren(
         portraitArtwork({
           ...p,
+          ...Object.fromEntries(
+            ["sex", "skin", "hair", "hairStyle"].map((k) => [k, f[k].value]),
+          ),
           role: f.role.value,
-          coat: companyBanners.find((b) => b.id === banner.value).color,
+          coat:
+            f.coat.value ||
+            companyBanners.find((b) => b.id === banner.value).color,
         }),
       );
     };
+    for (const key of ["sex", "skin", "hair", "hairStyle", "coat"])
+      f[key].onchange = update;
     portraitUpdates.push(update);
     f.role.onchange = update;
     f.trait.onchange = update;

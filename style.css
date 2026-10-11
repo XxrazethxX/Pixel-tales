@@ -888,3 +888,17 @@ nav button[data-count]::after {
     gap: 5px;
   }
 }
+
+.stash-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 5px;
+  margin: 12px 0;
+}
+.stash-grid button {
+  padding: 10px 3px;
+}
+
+.in-site .atlas-frame {
+  display: none;
+}

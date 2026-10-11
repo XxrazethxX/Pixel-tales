@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  enterSite,
+  siteAction,
   fresh,
   advanceClock,
   DAY_SECONDS,
@@ -361,7 +363,11 @@ test("hidden stashes pay once and new event choices have concrete effects", () =
   const s = fresh();
   s.location = 10;
   s.position = { x: 350, y: 620 };
-  assert.ok(explore(s));
+  assert.equal(explore(s), false);
+  enterSite(s);
+  siteAction(s, "search", 7);
+  for (const v of [2, 4, 1]) siteAction(s, "pick", v);
+  siteAction(s, "leave");
   assert.equal(s.gold, 150);
   assert.equal(explore(s), false);
   s.day = 6;

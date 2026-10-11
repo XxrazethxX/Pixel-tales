@@ -1,4 +1,10 @@
 import {
+  avatarSkins,
+  avatarHair,
+  avatarAppearance,
+  customizeAvatar,
+  enterSite,
+  siteAction,
   createCompany,
   companyBanners,
   companyOrigins,
@@ -171,6 +177,7 @@ import {
   partyCoats,
   drawCampScene,
   drawWolf,
+  drawSiteInterior,
   drawLighting,
   drawLoadout,
 } from "./art.js";
@@ -356,6 +363,7 @@ function render() {
   )
     tab = "Company";
 
+  document.body.classList.toggle("in-site", s.event?.kind === "site");
   document.body.classList.toggle("drawer-open", drawerOpen);
   document.body.classList.toggle("encounter", !!s.event);
   document.body.classList.toggle("in-battle", !!s.battle);
@@ -590,6 +598,57 @@ function render() {
         );
       const professionSelect = document.createElement("select");
       professionSelect.setAttribute("aria-label", `Profession for ${p.name}`);
+      const appearanceEditor = document.createElement("details");
+      appearanceEditor.dataset.avatar = String(p.id);
+      appearanceEditor.append(menuElement("summary", "Customize avatar"));
+      for (const [key, label, opts] of [
+        [
+          "sex",
+          "Sex",
+          [
+            ["male", "Male"],
+            ["female", "Female"],
+          ],
+        ],
+        ["coat", "Coat", companyBanners.map((b) => [b.color, b.name])],
+        ["skin", "Skin tone", avatarSkins.map((v, i) => [v, `Tone ${i + 1}`])],
+        [
+          "hair",
+          "Hair color",
+          avatarHair.map((v, i) => [
+            v,
+            ["Dark", "Blond", "Silver", "Auburn"][i],
+          ]),
+        ],
+        [
+          "hairStyle",
+          "Hairstyle",
+          [
+            ["short", "Short"],
+            ["long", "Long"],
+            ["braid", "Braid"],
+          ],
+        ],
+      ]) {
+        const input = creatorField(
+          appearanceEditor,
+          `${p.name} ${label}`,
+          key === "coat"
+            ? p.coat || companyBanners.find((b) => b.id === s.banner).color
+            : avatarAppearance(p)[key],
+          opts,
+        );
+        input.disabled = !!s.battle || !!s.event;
+        input.onchange = () => {
+          customizeAvatar(s, p.id, {
+            ...avatarAppearance(p),
+            [key]: input.value,
+          });
+          render();
+          document.querySelector(`details[data-avatar="${p.id}"]`).open = true;
+        };
+      }
+      c.append(appearanceEditor);
       professions.forEach((name) => {
         const option = document.createElement("option");
         option.value = name;
@@ -1475,7 +1534,85 @@ function render() {
   } else if (s.event) {
     const c = card(s.event.title, `<p>${s.event.text}</p>`);
     c.id = "event";
-    if (s.event.kind === "story") {
+    if (s.event.kind === "site") {
+      const e = s.event;
+      $("objective").textContent =
+        `Inside ${places[e.site].name} · ${e.stage}. ${e.message}`;
+      const c = card(
+        e.site === 10 ? "Buried stash" : "Mine interior",
+        e.site === 10
+          ? "<p>A broken oak marks the southwest square. The inscription reads: three squares east, one square north. Search the ground, then pick the chest’s three pins.</p>"
+          : "<p>Walk into the timbered gallery, inspect the abandoned cart, and enter the ore chamber to survey the exposed seam.</p>",
+      );
+      if (e.message) {
+        const feedback = document.createElement("p");
+        feedback.textContent = e.message;
+        c.append(feedback);
+      }
+      if (e.site === 10 && e.stage === "search") {
+        const grid = document.createElement("div");
+        grid.className = "stash-grid";
+        for (let i = 0; i < 16; i++)
+          grid.append(
+            button(
+              i === 8
+                ? "Broken oak"
+                : `Search ${(i % 4) + 1},${Math.floor(i / 4) + 1}`,
+              () => siteAction(s, "search", i),
+            ),
+          );
+        c.append(grid);
+      }
+      if (e.site === 10 && e.stage === "lock") {
+        c.append(
+          document.createTextNode(
+            `Pin ${e.pin + 1}/3 · Strain ${e.strain}/3. Listen to the tension feedback.`,
+          ),
+        );
+        const dial = document.createElement("input");
+        dial.type = "range";
+        dial.min = 0;
+        dial.max = 5;
+        dial.step = 1;
+        dial.value = 0;
+        dial.setAttribute("aria-label", "Lockpick dial");
+        const value = document.createElement("span");
+        value.textContent = "Dial 0";
+        dial.oninput = () => (value.textContent = `Dial ${dial.value}`);
+        c.append(
+          dial,
+          value,
+          button("Test tension", () =>
+            siteAction(s, "pick", Number(dial.value)),
+          ),
+        );
+      }
+      if (e.site !== 10) {
+        c.append(
+          button("Entrance", () => siteAction(s, "entrance")),
+          button("Enter gallery", () => siteAction(s, "gallery")),
+          button("Enter ore chamber", () => siteAction(s, "vein")),
+        );
+        if (e.stage === "gallery")
+          c.append(
+            button(
+              "Inspect abandoned cart",
+              () => siteAction(s, "cart"),
+              !!s.siteProgress[`cart-${e.site}`],
+            ),
+          );
+        if (e.stage === "vein")
+          c.append(
+            button(
+              "Survey ore seam",
+              () => siteAction(s, "mine"),
+              s.explored.includes(e.site),
+            ),
+          );
+      }
+      c.append(button("Leave site", () => siteAction(s, "leave")));
+      a.append(c);
+    } else if (s.event.kind === "story") {
       const story = regionalStories.find((q) => q.id === s.event.storyId);
       for (const choice of story.choices) {
         const row = card(choice.label, `<p>${choice.desc}</p>`),
@@ -1543,7 +1680,7 @@ function render() {
         button("Walk away", () => resolveEvent(s, "leave")),
       );
     }
-    a.append(c);
+    if (s.event.kind !== "site") a.append(c);
   } else if (s.battle) {
     a.append(
       button(
@@ -1635,11 +1772,13 @@ function render() {
     if (s.location >= 0 && places[s.location]?.type !== "town")
       a.append(
         button(
-          s.explored.includes(s.location)
-            ? "Site explored"
-            : "Explore · knowledge & materials",
-          () => explore(s),
-          s.explored.includes(s.location),
+          [4, 9, 10].includes(s.location)
+            ? `Enter ${places[s.location].name}`
+            : s.explored.includes(s.location)
+              ? "Site explored"
+              : "Explore · knowledge & materials",
+          () => ([4, 9, 10].includes(s.location) ? enterSite(s) : explore(s)),
+          s.explored.includes(s.location) && ![4, 9, 10].includes(s.location),
         ),
       );
     if (["forest", "mine"].includes(places[s.location]?.type))
@@ -1761,8 +1900,8 @@ function rect(x, y, w, h, c) {
   ctx.fillStyle = c;
   ctx.fillRect(x, y, w, h);
 }
-function person(x, y, c, step = 0, role = "", variant = 0) {
-  drawCharacter(ctx, x, y, c, step, role, variant);
+function person(x, y, c, step = 0, role = "", variant = 0, appearance = {}) {
+  drawCharacter(ctx, x, y, c, step, role, variant, appearance);
 }
 const view = { x: 0, y: 0, scale: 1 };
 function draw() {
@@ -1802,6 +1941,21 @@ function draw() {
     view.scale = Math.min(w / 560, Math.max(160, h - 180) / 400);
     view.x = 325 - w / view.scale / 2;
     view.y = 225 - Math.max(160, h - 180) / view.scale / 2;
+  }
+  if (s.event?.kind === "site") {
+    view.scale = Math.min(w / 768, Math.max(160, h - 160) / 432);
+    view.x = (768 - w / view.scale) / 2;
+    view.y = (432 - Math.max(160, h - 160) / view.scale) / 2;
+    ctx.setTransform(
+      view.scale,
+      0,
+      0,
+      view.scale,
+      -view.x * view.scale,
+      -view.y * view.scale,
+    );
+    drawSiteInterior(ctx, s);
+    return;
   }
   canvas.dataset.viewX = view.x;
   canvas.dataset.viewY = view.y;
@@ -1937,6 +2091,7 @@ function draw() {
           0,
           s.party[u.id].role,
           u.id,
+          s.party[u.id],
         );
         drawLoadout(ctx, s, s.party[u.id], 136 + u.x * 62, 28 + u.y * 60);
         ctx.font = "bold 9px monospace";
@@ -1989,6 +2144,12 @@ function draw() {
     .forEach((p) => {
       const hostile = p.kind !== "merchant" || p.hostile;
       const color = hostile ? "#a16c54" : "#b39d69";
+      if (p.kind === "wolves") {
+        drawWolf(ctx, p.x - 12, p.y, 1);
+        drawWolf(ctx, p.x + 10, p.y + 8, -1);
+        drawMapLabel(ctx, p.name, p.x, p.y - 37, true);
+        return;
+      }
       if (p.kind === "merchant") drawWagon(ctx, p.x - 9, p.y - 8, p.hostile);
       else
         person(
@@ -2038,6 +2199,7 @@ function draw() {
         step,
         s.party[p.i].role,
         p.i,
+        s.party[p.i],
       );
       drawLoadout(ctx, s, s.party[p.i], p.x, p.y);
     });
@@ -2614,7 +2776,10 @@ function showCompanyCreator() {
         c,
         `Founder ${i + 1} class`,
         p.role,
-        Object.keys(founderRoles).map((r) => [r, r]),
+        Object.keys(founderRoles).map((r) => [
+          r,
+          r === "Swordswoman" ? "Swordfighter" : r,
+        ]),
       ),
       profession: creatorField(
         c,
@@ -2629,6 +2794,31 @@ function showCompanyCreator() {
         companionTraits.map((t) => [t.id, t.name]),
       ),
     };
+    f.sex = creatorField(c, `Founder ${i + 1} sex`, i % 2 ? "male" : "female", [
+      ["male", "Male"],
+      ["female", "Female"],
+    ]);
+    f.skin = creatorField(
+      c,
+      `Founder ${i + 1} skin`,
+      avatarSkins[0],
+      avatarSkins.map((v, i) => [v, `Skin tone ${i + 1}`]),
+    );
+    f.hair = creatorField(
+      c,
+      `Founder ${i + 1} hair color`,
+      avatarHair[0],
+      avatarHair.map((v, i) => [v, ["Dark", "Blond", "Silver", "Auburn"][i]]),
+    );
+    f.hairStyle = creatorField(c, `Founder ${i + 1} hairstyle`, "short", [
+      ["short", "Short"],
+      ["long", "Long"],
+      ["braid", "Braid"],
+    ]);
+    f.coat = creatorField(c, `Founder ${i + 1} coat`, "", [
+      ["", "Company colors"],
+      ...companyBanners.map((b) => [b.color, b.name]),
+    ]);
     const portrait = document.createElement("div"),
       desc = menuElement("p");
     const update = () => {
@@ -2638,11 +2828,18 @@ function showCompanyCreator() {
       portrait.replaceChildren(
         portraitArtwork({
           ...p,
+          ...Object.fromEntries(
+            ["sex", "skin", "hair", "hairStyle"].map((k) => [k, f[k].value]),
+          ),
           role: f.role.value,
-          coat: companyBanners.find((b) => b.id === banner.value).color,
+          coat:
+            f.coat.value ||
+            companyBanners.find((b) => b.id === banner.value).color,
         }),
       );
     };
+    for (const key of ["sex", "skin", "hair", "hairStyle", "coat"])
+      f[key].onchange = update;
     portraitUpdates.push(update);
     f.role.onchange = update;
     f.trait.onchange = update;

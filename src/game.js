@@ -146,6 +146,7 @@ export function fresh() {
     hiredRecruits: [],
     lessonLedger: {},
     rumors: {},
+    siteProgress: {},
     cargo: { grain: 0, cloth: 0, salt: 0, iron: 0 },
     markets: {},
     reputation: { guild: 0, wardens: 0, freefolk: 0 },
@@ -752,6 +753,39 @@ export function restore(raw) {
     if (Number.isInteger(day) && day >= 1 && day <= result.day)
       result.lessonLedger[id] = day;
   }
+  result.siteProgress = Object.fromEntries(
+    [4, 9]
+      .filter((id) => raw.siteProgress?.[`cart-${id}`] === true)
+      .map((id) => [`cart-${id}`, true]),
+  );
+  if (result.event?.kind === "site") {
+    const e = result.event;
+    result.event =
+      [4, 9, 10].includes(e.site) && e.site === raw.location
+        ? {
+            kind: "site",
+            site: e.site,
+            stage: (e.site === 10
+              ? ["search", "lock", "opened"]
+              : ["entrance", "gallery", "vein"]
+            ).includes(e.stage)
+              ? e.stage
+              : e.site === 10
+                ? "search"
+                : "entrance",
+            pin: Number.isInteger(e.pin) ? Math.max(0, Math.min(2, e.pin)) : 0,
+            strain: Number.isInteger(e.strain)
+              ? Math.max(0, Math.min(2, e.strain))
+              : 0,
+            message:
+              typeof e.message === "string"
+                ? safeCompanyName(e.message, "", 180)
+                : "",
+          }
+        : null;
+    if (result.event?.site === 10 && result.explored.includes(10))
+      result.event.stage = "opened";
+  }
   result.companyName = safeCompanyName(raw.companyName);
   result.banner = companyBanners.some((b) => b.id === raw.banner)
     ? raw.banner
@@ -869,6 +903,7 @@ export function restore(raw) {
     fatigue: Number.isFinite(p.fatigue)
       ? Math.max(0, Math.min(100, p.fatigue))
       : 0,
+    ...avatarAppearance(p),
     name: safeCompanyName(p.name, `Companion ${id + 1}`, 18),
     coat: /^#[0-9a-f]{6}$/i.test(p.coat || "") ? p.coat : undefined,
     profession: p.profession || "Cook",
@@ -1449,6 +1484,10 @@ export function heal(s, id) {
   return true;
 }
 export function explore(s) {
+  if ([4, 9, 10].includes(s.location)) return false;
+  return awardExploration(s);
+}
+function awardExploration(s) {
   if (
     s.location < 0 ||
     s.battle ||
@@ -5559,7 +5598,10 @@ export function createCompany(options) {
       traits: [p.trait],
       level: origin.veteran ? 2 : 1,
       points: origin.veteran ? 1 : 0,
-      coat: companyBanners.find((b) => b.id === options.banner).color,
+      ...avatarAppearance(p),
+      coat: companyBanners.some((b) => b.color === p.coat)
+        ? p.coat
+        : companyBanners.find((b) => b.id === options.banner).color,
     };
   });
   s.log = [
@@ -5590,4 +5632,146 @@ export function isCompanySave(raw) {
         p.hp <= p.max,
     )
   );
+}
+
+export const avatarSkins = ["#e2c396", "#bd946e", "#8f624b", "#614637"];
+export const avatarHair = ["#4b4635", "#927344", "#b5a68a", "#a25e3b"];
+export function avatarAppearance(p = {}) {
+  return {
+    sex: p.sex === "male" ? "male" : "female",
+    skin: avatarSkins.includes(p.skin) ? p.skin : avatarSkins[0],
+    hair: avatarHair.includes(p.hair) ? p.hair : avatarHair[0],
+    hairStyle: ["short", "long", "braid"].includes(p.hairStyle)
+      ? p.hairStyle
+      : "short",
+  };
+}
+export function customizeAvatar(s, id, appearance) {
+  const p = s.party[id];
+  if (!p || p.dead || s.battle || s.event) return false;
+  Object.assign(p, avatarAppearance(appearance));
+  if (companyBanners.some((b) => b.color === appearance.coat))
+    p.coat = appearance.coat;
+  return true;
+}
+export function enterSite(s) {
+  if (
+    s.battle ||
+    s.event ||
+    s.campOpen ||
+    s.destination ||
+    companyLost(s) ||
+    ![4, 9, 10].includes(s.location)
+  )
+    return false;
+  s.siteProgress ||= {};
+  s.event = {
+    kind: "site",
+    site: s.location,
+    stage:
+      s.location === 10
+        ? s.explored.includes(10)
+          ? "opened"
+          : "search"
+        : "entrance",
+    pin: 0,
+    strain: 0,
+    message: "",
+  };
+  return true;
+}
+export function siteAction(s, action, value) {
+  const e = s.event;
+  if (e?.kind !== "site") return false;
+  if (action === "leave") {
+    s.event = null;
+    return true;
+  }
+  if (e.site === 10) {
+    if (
+      action === "search" &&
+      e.stage === "search" &&
+      Number.isInteger(value) &&
+      value >= 0 &&
+      value < 16
+    ) {
+      if (value === 7) {
+        e.stage = "lock";
+        e.message =
+          "A buried chest! Three pins hold the lock. Set each dial and test the tension.";
+      } else
+        e.message =
+          value === 8
+            ? "The broken oak stands here. Follow the scratched arrow east."
+            : "Disturbed soil, but no chest. Count from the broken oak.";
+      return true;
+    }
+    if (
+      action === "pick" &&
+      e.stage === "lock" &&
+      Number.isInteger(value) &&
+      value >= 0 &&
+      value <= 5
+    ) {
+      const target = [2, 4, 1][e.pin];
+      if (value === target) {
+        e.pin++;
+        e.strain = 0;
+        e.message = "Click! The pin holds.";
+        if (e.pin === 3) {
+          s.event = null;
+          awardExploration(s);
+          s.event = {
+            ...e,
+            stage: "opened",
+            message:
+              "The chest opens. Its contents have been added to your stores.",
+          };
+        }
+      } else {
+        e.strain++;
+        e.message =
+          value < target
+            ? "The pick catches: rotate the dial higher."
+            : "Too far: rotate the dial lower.";
+        if (e.strain === 3) {
+          e.pin = 0;
+          e.strain = 0;
+          e.message = "The lock resets. Repairing the pick takes one hour.";
+          spendHours(s, 1);
+          if (companyLost(s)) return true;
+        }
+      }
+      return true;
+    }
+    return false;
+  }
+  if (["entrance", "gallery", "vein"].includes(action)) {
+    e.stage = action;
+    e.message = "";
+    return true;
+  }
+  if (action === "cart" && e.stage === "gallery") {
+    const key = `cart-${e.site}`;
+    if (s.siteProgress[key]) return false;
+    s.siteProgress[key] = true;
+    s.inventory.ore += 2;
+    e.message = "Recovered two ore from the abandoned cart.";
+    return true;
+  }
+  if (action === "mine" && e.stage === "vein") {
+    if (s.explored.includes(e.site)) {
+      e.message =
+        "The exposed seam has been surveyed. Use fieldwork outside for further mining.";
+      return false;
+    }
+    s.event = null;
+    awardExploration(s);
+    s.event = {
+      ...e,
+      message: "Surveyed the seam and recovered ore, materials, and knowledge.",
+    };
+    return true;
+  }
+  return false;
 }

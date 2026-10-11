@@ -43,6 +43,18 @@ Choose **Begin adventure** to start in Greyhaven. If you already have a company,
 
 ![Company creation on mobile](docs/screenshots/company-creator-mobile.png)
 
+## Avatars and interactive sites
+
+Founders can be male or female independently of their class. Choose skin tone, hair color, short/long/braided hair, and individual coat colors in the company creator. Portraits, map sprites, camp companions, and combat sprites use these choices. Existing companions can be edited through **Company → Customize avatar** outside encounters and combat. Appearance does not change combat stats.
+
+At **Forgotten Stash**, choose **Enter Forgotten Stash**. The broken oak and inscription form a ground-search puzzle. Find the buried chest, then use the lockpick dial to set three pins. Test tension for directional feedback; three mistakes reset the pins and cost one hour. Progress survives reloads. Loot is awarded only after the chest opens, including any accepted rumor find, and cannot be collected twice.
+
+**Iron Hollow** and **Redstone Quarry** are enterable mines. Move between the entrance, timbered gallery, and ore chamber. Inspect the abandoned cart for a one-time ore find and survey the seam for normal exploration materials and knowledge. Leave the interior to resume free map travel or repeatable fieldwork. Site visits pause the exploration clock, while explicit lock repair costs still advance it.
+
+![Mine interior on mobile](docs/screenshots/mine-interior-mobile.png)
+
+Roaming wolf packs now use actual wolf sprites on the map as well as in tactical battles. Their existing pack hunting behavior and wolf rewards remain active.
+
 ## Free exploration
 
 The map fills the game screen. **Click or tap any ground** to set your own destination; the party walks there with animated companions following the route you actually took. Click again to redirect, use **Stop walking** to halt, or hold **WASD / arrow keys** to steer. There are no preset travel paths. Optional journal travel controls set a destination that you can redirect freely. The camera follows the company on narrow screens, keeping sprite proportions intact.
@@ -300,7 +312,7 @@ Visit **The Crooked Lantern** to buy a round and hear local rumors. Each costs *
 
 Rumors mark landmark locations while leaving nearby terrain unexplored. They coexist with your active contract and with each other. Open **Journal → Exploration leads** to review what you heard or walk toward its landmark. Travel still uses the open map and can be redirected or stopped.
 
-Use **Explore** at the rumored site to recover its extra one-time find: crowns, materials, or knowledge in addition to normal exploration rewards. The journal then records the day it was confirmed. Heard leads and completed finds survive reloads; rumors cannot be purchased twice. Taverns do not sell leads for sites you have already explored. Listening across midnight still incurs normal food and wage costs.
+Explore the rumored site (or complete its stash or mine interaction) to recover its extra one-time find: crowns, materials, or knowledge in addition to normal exploration rewards. The journal then records the day it was confirmed. Heard leads and completed finds survive reloads; rumors cannot be purchased twice. Taverns do not sell leads for sites you have already explored. Listening across midnight still incurs normal food and wage costs.
 
 ## Village training halls
 
@@ -385,6 +397,7 @@ PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node
 PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/training-halls-smoke.mjs
 PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/tavern-rumors-smoke.mjs
 PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/company-menu-smoke.mjs
+PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/sites-avatars-smoke.mjs
 ```
 
 It uses `/usr/bin/chromium` by default; override `CHROMIUM_PATH` or `GAME_URL` as needed. Desktop and mobile screenshots are written under `/tmp`. The village smoke test checks regional offers, renown locks and unlocks, resale, inn recovery, save persistence, and dangerous encounters. The equipment smoke test covers purchases, class restrictions, assignment and transfer, resale, research and crafting, combat restrictions, reloads, mobile layout, and new-company reset.
@@ -416,3 +429,5 @@ The training-hall smoke test checks regional tutors, lesson costs and practice, 
 The tavern-rumor smoke test checks local leads, landmark discovery without terrain reveal, unchanged active contracts, journal travel, one-time finds, reloads, renown locks, and mobile controls.
 
 The company-menu smoke test checks the title screen, customization and starting tradeoffs, paused time, manual slots, cancellation, replacement and loading, Continue, persisted settings, corrupt saves, blocked storage, and mobile controls. Existing gameplay smoke tests enter through the title menu using the shared helper.
+
+The sites-and-avatars smoke test covers founder appearance, stash searching and lockpicking, saved pins and one-time loot, mine rooms and rewards, mobile interiors, and roaming wolf combat.

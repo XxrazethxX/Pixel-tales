@@ -6,12 +6,27 @@ import {
   tavernRumors,
   hearRumor,
   rumorLock,
-  explore,
+  explore as exploreWorld,
+  enterSite,
+  siteAction,
   resolveRumors,
   restore,
   dailyWages,
   campCost,
 } from "../src/game.js";
+const explore = (s) => {
+  if (![4, 9, 10].includes(s.location)) return exploreWorld(s);
+  if (s.explored.includes(s.location) || !enterSite(s)) return false;
+  if (s.location === 10) {
+    siteAction(s, "search", 7);
+    for (const n of [2, 4, 1]) siteAction(s, "pick", n);
+  } else {
+    siteAction(s, "vein");
+    siteAction(s, "mine");
+  }
+  siteAction(s, "leave");
+  return true;
+};
 const arrive = (s, i) => {
   s.location = i;
   s.position = { x: places[i].x, y: places[i].y };
