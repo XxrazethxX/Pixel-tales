@@ -540,7 +540,7 @@ export function drawWagon(c, x, y, hostile = false, cargoType = "mixed") {
     steppedOval(c, x + 1, y - 14, 13, 15, "#596c73");
     pixel(c, x + 6, y - 12, 3, 11, "#bcb598");
     pixel(c, x + 13, y - 20, 2, 18, "#d3d0b5");
-  } else {
+  } else if (cargoType === "cloth") {
     for (let i = 0; i < 3; i++) {
       pixel(
         c,
@@ -1108,7 +1108,10 @@ export function drawCampScene(c, s) {
     }
   drawMapLabel(c, tents ? `Sleeping tents · ${tents}/2` : "Bedrolls", 205, 94);
   // Supplies and a portable cart are present before the first upgrade.
-  drawWagon(c, 393, 329);
+  if (s.wagon.owned) {
+    drawWagon(c, 393, 329);
+    drawMapLabel(c, "Company wagon", 393, 359);
+  }
   for (let i = 0; i < 3; i++) {
     pixel(c, 187 + i * 19, 275, 16, 13, "#917348");
     pixel(c, 188 + i * 19, 276, 14, 3, "#b79a60");
@@ -1438,4 +1441,46 @@ export function chestPreview(contents) {
       : "Empty open chest",
   );
   return canvas;
+}
+
+export function drawFantasyEnemy(c, kind, x, y) {
+  c.save();
+  pixel(c, x - 11, y + 13, 23, 4, "#46513b66");
+  if (kind === "skeleton") {
+    pixel(c, x - 6, y - 17, 13, 10, "#d6d3ad");
+    pixel(c, x - 4, y - 14, 3, 3, "#424b3c");
+    pixel(c, x + 2, y - 14, 3, 3, "#424b3c");
+    pixel(c, x - 3, y - 6, 7, 15, "#c6c6a3");
+    for (let i = 0; i < 3; i++)
+      pixel(c, x - 7, y - 4 + i * 4, 15, 2, "#e1daba");
+    pixel(c, x - 8, y - 5, 3, 15, "#c6c6a3");
+    pixel(c, x + 7, y - 5, 3, 15, "#c6c6a3");
+    pixel(c, x - 6, y + 9, 3, 7, "#d6d3ad");
+    pixel(c, x + 3, y + 9, 3, 7, "#d6d3ad");
+    pixel(c, x + 10, y - 12, 2, 24, "#c1bfa6");
+    pixel(c, x - 14, y, 7, 12, "#727d77");
+  } else if (kind === "goblin") {
+    pixel(c, x - 8, y - 13, 17, 11, "#8caa67");
+    pixel(c, x - 12, y - 10, 4, 5, "#8caa67");
+    pixel(c, x + 9, y - 10, 4, 5, "#8caa67");
+    pixel(c, x - 4, y - 10, 3, 2, "#353e2e");
+    pixel(c, x + 3, y - 10, 3, 2, "#353e2e");
+    pixel(c, x - 2, y - 4, 6, 2, "#e1d4ac");
+    pixel(c, x - 6, y - 2, 13, 13, "#8c7052");
+    pixel(c, x - 8, y + 1, 3, 8, "#729759");
+    pixel(c, x + 7, y + 1, 3, 8, "#729759");
+    pixel(c, x - 6, y + 11, 4, 5, "#4e5942");
+    pixel(c, x + 3, y + 11, 4, 5, "#4e5942");
+    pixel(c, x + 10, y - 2, 2, 13, "#c6c5a6");
+  } else {
+    pixel(c, x - 9, y - 22, 18, 9, "#6b5a84");
+    pixel(c, x - 5, y - 27, 10, 6, "#8c76a3");
+    pixel(c, x - 4, y - 13, 9, 7, "#bcaa88");
+    pixel(c, x - 8, y - 5, 17, 20, "#79618e");
+    pixel(c, x - 10, y + 13, 21, 4, "#594a70");
+    pixel(c, x + 14, y - 15, 2, 31, "#8e774f");
+    pixel(c, x + 11, y - 21, 8, 8, "#bd9dc5");
+    pixel(c, x + 13, y - 19, 4, 4, "#e5cbe9");
+  }
+  c.restore();
 }

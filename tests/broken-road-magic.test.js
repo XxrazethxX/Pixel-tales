@@ -406,7 +406,7 @@ test("old saves migrate safely and malformed campaign, quest, race and slot data
   s.party[0].spellSpent = { 1: -9, 2: 999 };
   s.party[0].personalQuest = { stage: 999, outcome: "evil" };
   const loaded = save(s);
-  assert.equal(loaded.version, 14);
+  assert.equal(loaded.version, 15);
   assert.equal(loaded.campaign.phase, "unstarted");
   assert.equal(loaded.party[0].race, "human");
   assert.equal(loaded.party[0].spellSpent[1], 0);

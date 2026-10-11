@@ -527,3 +527,43 @@ Battles also include **Deadfall trail** and **Hedgerow road**, with variations s
 ```sh
 GAME_URL=http://127.0.0.1:3002/ PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/roads-stealth-loot-smoke.mjs
 ```
+
+
+## Scouting, fantasy foes, and company wagons (v0.28)
+
+**Scouting requires a conscious Archer or a companion with the new Thief profession.** Assign an eligible companion to the travel scout duty for greater discovery range and faster concealment. Natural roadside events remain available to every company.
+
+Survey Briarhide within 110 pixels, then infiltrate while concealed: steal provisions, rescue Edda (an orc Spearman and Thief), spend two ore to sabotage the defenders, or open a drainage entrance into the stronghold. Each operation is a persistent, one-time consequence and reduces concealment. Sabotage weakens the captain and his sentries; the drainage route provides a different dungeon entry. Defeating the leader still ends the raids.
+
+Goblins lay visible snares, steal rations, and attempt to escape. Archers and Thieves can disarm adjacent snares. Skeletons hold formations and gain armor beside another skeleton. Spellbinders have two finite slots and mark the tile they will strike on their next turn: move away or interrupt the cast. New original pixel sprites distinguish these enemies on the road and battlefield.
+
+Caravan escort jobs appear at their issuing village's contract board. Protect wheat, armor, cloth, or mixed loads on a freely chosen route and collect payment at the destination. Bandits can attack merchants independently. Intervene, demand 15 crowns before fighting, or leave; abandoned raids resolve after three game hours and leave persistent, limited wreck loot. Taking wreck supplies carries crime consequences. Entrusted cargo cannot be traded or attacked during its escort.
+
+A company wagon is **purchased in a village for 250 crowns**, or **claimed free after completing Hungry Roads**. It follows the party and appears at camp and during battles. Owning it adds ten cargo spaces. Camp upgrades include:
+
+| Upgrade | Cost | Effect |
+| --- | --- | --- |
+| Cargo racks, up to two levels | 50 crowns, 5 wood, 1 ore each | Ten cargo spaces per level |
+| Portable workbench | 70 crowns, 4 wood, 3 ore | An assigned camp Smith repairs equipment without a forge and reduces fine crafting's ore cost |
+| Reinforced rails | 60 crowns, 4 wood, 4 ore | Reduce wagon damage and supply losses on retreat or defeat |
+
+Quartermasters save a daily ration; rear guards begin combat guarding and protect supplies during retreat. These travel duties require a wagon and each companion holds at most one travel duty. A conscious Smith can repair the wagon at camp for 20 crowns and two ore, taking two hours. A wrecked wagon's workbench and protection stop functioning until repaired; its cargo remains stored.
+
+At level two, Wizards and Clerics can spend a training point on a permanent magical school:
+
+| Class | School | Combat focus |
+| --- | --- | --- |
+| Wizard | Barrier scholar | Stronger wards and Bastion |
+| Wizard | Elementalist | Greater spell damage, burning, and Firestorm |
+| Wizard | Illusionist | Longer range and distracting Phantom/Mirage illusions |
+| Cleric | Beacon guardian | Stronger protection and Sanctuary |
+| Cleric | Restorer | Stronger healing, wound treatment, and Renewal |
+| Cleric | Dawn zealot | Greater spell damage and interrupting Rebuke |
+
+Specialized spells share the existing persistent spell slots and reagent costs. Level-two spells still require level three. Saves migrate through version 15 and preserve infiltration, wagon upgrades and duties, active escorts and raids, enemy casts and snares, and learned schools.
+
+[Company wagon on mobile](docs/screenshots/company-wagon-mobile.png) · [Stronghold infiltration](docs/screenshots/infiltration-mobile.png) · [Caravan defense](docs/screenshots/caravan-defense-mobile.png) · [Magic specialization](docs/screenshots/magic-specialization-mobile.png)
+
+```sh
+GAME_URL=http://127.0.0.1:3002/ PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/frontier-expansion-smoke.mjs
+```

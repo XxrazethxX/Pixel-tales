@@ -176,7 +176,7 @@ test("save migration retains duties, readiness and fatigue, and rejects invalid 
   s.preparedValor = 1;
   s.party[0].fatigue = 65;
   const loaded = restore(JSON.parse(JSON.stringify(s)));
-  assert.equal(loaded.version, 14);
+  assert.equal(loaded.version, 15);
   assert.equal(loaded.campOpen, false);
   assert.equal(loaded.campJobs.cook, 3);
   assert.equal(loaded.campJobs.smith, 0);

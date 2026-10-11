@@ -1,4 +1,32 @@
 import {
+  campJobReady,
+  companyScout,
+  travelRoles,
+  travelWorker,
+  assignTravelJob,
+  companyCargoCapacity,
+  buyCompanyWagon,
+  wagonUpgrades,
+  upgradeWagon,
+  repairWagon,
+  strongholdScoutLock,
+  scoutStronghold,
+  infiltrationLock,
+  infiltrateStronghold,
+  caravanEscortOffers,
+  acceptCaravanEscort,
+  claimCaravanEscort,
+  abandonCaravanEscort,
+  respondCaravanRaid,
+  interveneCaravan,
+  lootCaravanWreck,
+  spellSchools,
+  learnSpellSchool,
+  spellsFor,
+  spellRange,
+  enemyArmor,
+  enemyDescription,
+  disarmBattleSnare,
   toggleStealth,
   advanceStealth,
   isHidden,
@@ -218,6 +246,7 @@ import {
   venueArtwork,
   partyCoats,
   drawCampScene,
+  drawFantasyEnemy,
   drawWolf,
   chestPreview,
   drawSiteInterior,
@@ -613,6 +642,9 @@ function render() {
   const panel = $("panel");
   panel.replaceChildren();
   if (tab === "Company") {
+    appendTravelJobs(panel);
+    appendWagonPanel(panel);
+    if (s.caravanEscort) appendEscortPanel(panel);
     const guide = document.createElement("details");
     const guideTitle = document.createElement("summary");
     guideTitle.textContent = "Field guide · travel, combat and survival";
@@ -689,7 +721,7 @@ function render() {
       politics,
       card(
         "Trade cargo",
-        `<p>${cargoLoad(s)}/${cargoCapacity} capacity · ${tradeGoods.map((g) => `${g.name}: ${s.cargo[g.id]}`).join(" · ")}</p><p>Visit village markets or nearby caravans to trade.</p>`,
+        `<p>${cargoLoad(s)}/${companyCargoCapacity(s)} capacity · ${tradeGoods.map((g) => `${g.name}: ${s.cargo[g.id]}`).join(" · ")}</p><p>Visit village markets or nearby caravans to trade.</p>`,
       ),
     );
     if (s.wageDebt)
@@ -886,12 +918,38 @@ function render() {
       const ability = document.createElement("p");
       ability.className = "hint";
       ability.textContent = isCaster(p)
-        ? `Spell slots: level 1 ${spellSlots(p)[1]} · level 2 ${spellSlots(p)[2]}. Recharge at camp or Emberfall. ${spellBook
-            .filter((v) => v.role === p.role)
+        ? `Spell slots: level 1 ${spellSlots(p)[1]} · level 2 ${spellSlots(p)[2]}. Recharge at camp or Emberfall. ${spellsFor(
+            p,
+          )
             .map((v) => v.name)
             .join(", ")}`
         : `${skillFor(p).name} · ${skillFor(p).cost} valor · ${skillFor(p).desc}`;
       progression.append(ability);
+      if (isCaster(p)) {
+        const current = spellSchools.find((v) => v.id === p.spellSchool);
+        const text = document.createElement("p");
+        text.textContent = current
+          ? `${current.name}: ${current.desc}`
+          : "At level two, spend one training point on one permanent school.";
+        progression.append(text);
+        for (const school of spellSchools.filter((v) => v.role === p.role)) {
+          const row = card(school.name, `<p>${school.desc}</p>`);
+          row.append(
+            button(
+              p.spellSchool === school.id
+                ? `${school.name} learned`
+                : `Learn ${school.name} · 1 point`,
+              () => learnSpellSchool(s, p.id, school.id),
+              !!p.spellSchool ||
+                p.level < 2 ||
+                p.points < 1 ||
+                !!s.battle ||
+                !!s.event,
+            ),
+          );
+          progression.append(row);
+        }
+      }
       if (p.role === "Cleric" && !s.battle && !s.event && !s.campOpen)
         for (const target of livingParty(s).filter(
           (t) => t.hp > 0 && t.hp < t.max,
@@ -959,6 +1017,8 @@ function render() {
     });
   }
   if (tab === "Camp") {
+    appendWagonPanel(panel);
+    appendTravelJobs(panel);
     panel.append(
       card(
         "Campfire & company stores",
@@ -1110,7 +1170,7 @@ function render() {
       const worker = campWorker(s, role.id),
         row = card(
           role.name,
-          `<p>${role.desc}</p><p>${s.campUpgrades[role.building] ? (worker ? `${worker.name} on duty` : "Unstaffed") : `Requires ${campStructures.find((b) => b.id === role.building).name}`}</p>`,
+          `<p>${role.desc}</p><p>${campJobReady(s, role.id) ? (worker ? `${worker.name} on duty` : "Unstaffed") : `Requires ${campStructures.find((b) => b.id === role.building).name}`}</p>`,
         );
       const selector = document.createElement("select");
       selector.setAttribute("aria-label", role.name);
@@ -1126,7 +1186,7 @@ function render() {
           selector.add(option);
         });
       selector.value = worker ? String(worker.id) : "";
-      selector.disabled = !s.campUpgrades[role.building];
+      selector.disabled = !campJobReady(s, role.id);
       selector.onchange = () => {
         assignCampJob(
           s,
@@ -1284,6 +1344,23 @@ function render() {
     panel.append(chapter);
   }
   if (tab === "Contracts") {
+    if (s.caravanEscort) appendEscortPanel(panel);
+    for (const route of caravanEscortOffers(s)) {
+      const p = s.patrols.find((p) => p.id === route.patrolId);
+      const row = card(
+        `Escort: ${p.name}`,
+        `<p>Protect ${route.cargo} on your chosen route to ${places[route.destination].name}. ${route.reward} crowns on arrival. Bandits may attack the wagon; retreat abandons the escort.</p>`,
+      );
+      row.append(
+        button(
+          `Escort ${p.name} · ${route.reward} crowns`,
+          () => acceptCaravanEscort(s, route.patrolId),
+          false,
+          true,
+        ),
+      );
+      panel.append(row);
+    }
     panel.append(
       card(
         `The ${places[s.location].name} contract board`,
@@ -1534,6 +1611,8 @@ function render() {
             true,
           ),
         );
+      appendWagonPanel(panel);
+      if (s.caravanEscort?.status === "arrived") appendEscortPanel(panel);
       if (s.location === 6) {
         const magic = card(
           "Temple of the Beacon",
@@ -1691,7 +1770,7 @@ function render() {
       const stock = marketState(s),
         marketInfo = card(
           "Regional trade",
-          `<p>Cargo ${cargoLoad(s)}/${cargoCapacity}. ${stock.demand > 0 ? `Shortage: ${stock.shortage} · ${stock.demand} units still needed. Deliver goods to earn League reputation.` : "The regional shortage has been relieved."} Stocks and demand change every three days. Selling a bulk load quotes each unit as the shortage is filled.</p>`,
+          `<p>Cargo ${cargoLoad(s)}/${companyCargoCapacity(s)}. ${stock.demand > 0 ? `Shortage: ${stock.shortage} · ${stock.demand} units still needed. Deliver goods to earn League reputation.` : "The regional shortage has been relieved."} Stocks and demand change every three days. Selling a bulk load quotes each unit as the shortage is filled.</p>`,
         );
       panel.append(marketInfo);
       for (const good of tradeGoods) {
@@ -1707,7 +1786,7 @@ function render() {
               () => tradeGoodsAtVillage(s, good.id, quantity),
               s.gold < cost ||
                 stock.stock[good.id] < quantity ||
-                cargoLoad(s) + quantity > cargoCapacity,
+                cargoLoad(s) + quantity > companyCargoCapacity(s),
             ),
           );
         }
@@ -1888,7 +1967,7 @@ function render() {
       panel.append(
         card(
           caravan.name,
-          `<p>Carried cargo ${cargoLoad(s)}/${cargoCapacity}. Caravan food: ${caravan.foodStock} rations. Cargo purchases reduce its stock; raiding seizes remaining cargo and harms League and Warden reputation.</p>`,
+          `<p>Carried cargo ${cargoLoad(s)}/${companyCargoCapacity(s)}. Caravan food: ${caravan.foodStock} rations. Cargo purchases reduce its stock; raiding seizes remaining cargo and harms League and Warden reputation.</p>`,
         ),
       );
       for (const good of tradeGoods.filter((g) => caravan.cargo[g.id] > 0)) {
@@ -1903,7 +1982,7 @@ function render() {
             () => tradeCaravanCargo(s, caravan.id, good.id),
             s.gold < cost ||
               caravan.cargo[good.id] < 1 ||
-              cargoLoad(s) >= cargoCapacity,
+              cargoLoad(s) >= companyCargoCapacity(s),
           ),
         );
         panel.append(c);
@@ -1969,7 +2048,27 @@ function render() {
         : `<p>${s.event.text}</p>`,
     );
     c.id = "event";
-    if (bandits) {
+    const raided =
+      s.event.kind === "caravan-raid" &&
+      s.patrols.find((p) => p.id === s.event.patrolId);
+    if (raided) {
+      c.querySelector("h3").textContent = `${raided.name} under attack`;
+      c.querySelector("p").textContent =
+        "Bandits surround the wagon. Intervene to protect its cargo, demand fifteen crowns before helping, or leave. Without help the wagon will fall after three game hours, leaving a wreck.";
+      c.append(
+        button(
+          "Defend the caravan",
+          () => respondCaravanRaid(s, "help"),
+          false,
+          true,
+        ),
+        button("Demand 15 crowns, then defend", () =>
+          respondCaravanRaid(s, "payment"),
+        ),
+        button("Leave the caravan", () => respondCaravanRaid(s, "leave")),
+      );
+      heldKeys.clear();
+    } else if (bandits) {
       heldKeys.clear();
       c.append(
         button(
@@ -2349,9 +2448,9 @@ function render() {
       summary.textContent = `Spells · level 1 ${spellSlots(actor)[1]} / level 2 ${spellSlots(actor)[2]}`;
       magic.className = "combat-preview-menu";
       magic.append(summary);
-      for (const spell of spellBook.filter((v) => v.role === actor.role)) {
+      for (const spell of spellsFor(actor)) {
         const hint = document.createElement("p");
-        hint.textContent = `${spell.name}: ${spell.power} ${spell.kind === "damage" ? "base damage" : spell.kind === "heal" ? "healing + level" : "protection on the next hit"} · range ${spell.range + (actor.race === "elf" ? 1 : 0)}${spell.area ? " · adjacent area" : ""}${spell.piercing ? " · ignores armor" : ""}`;
+        hint.textContent = `${spell.name}: ${spell.power} ${spell.kind === "damage" ? "base damage" : spell.kind === "heal" ? "healing + level" : spell.kind === "illusion" ? "distraction: weaker attacks and no disengagement strikes" : "protection on the next hit"} · range ${spellRange(actor, spell)}${spell.area ? " · adjacent area" : ""}${spell.piercing ? " · ignores armor" : ""}`;
         magic.append(hint);
         magic.append(
           button(
@@ -2366,14 +2465,13 @@ function render() {
       }
       if (spellMode) {
         const spell = spellBook.find((v) => v.id === spellMode),
-          targets =
-            spell.kind === "damage"
-              ? s.battle.enemies.filter((e) => e.hp > 0)
-              : s.battle.units.filter((u) => s.party[u.id].hp > 0);
+          targets = ["damage", "illusion"].includes(spell.kind)
+            ? s.battle.enemies.filter((e) => e.hp > 0)
+            : s.battle.units.filter((u) => s.party[u.id].hp > 0);
         for (const target of targets)
           magic.append(
             button(
-              `Cast ${spell.name} on ${spell.kind === "damage" ? target.name || target.kind : s.party[target.id].name}`,
+              `Cast ${spell.name} on ${["damage", "illusion"].includes(spell.kind) ? target.name || target.kind : s.party[target.id].name}`,
               () => castSpell(s, selected, spell.id, target.x, target.y),
               !!spellLock(s, selected, spell.id, target.x, target.y),
             ),
@@ -2386,6 +2484,17 @@ function render() {
         magic.open = true;
       }
       a.append(magic);
+    }
+    for (const trap of (s.battle.traps || []).filter((t) => !t.used)) {
+      if (actor.role === "Archer" || actor.profession === "Thief")
+        a.append(
+          button(
+            `Disarm snare ${trap.x + 1},${trap.y + 1}`,
+            () => disarmBattleSnare(s, selected, trap.x, trap.y),
+            unit.acted ||
+              Math.abs(unit.x - trap.x) + Math.abs(unit.y - trap.y) > 1,
+          ),
+        );
     }
     if (actor.role === "Spearman")
       a.append(
@@ -2420,7 +2529,7 @@ function render() {
       const preview = combatPreview(s, selected, enemy.x, enemy.y, abilityMode);
       previewCard.append(
         button(
-          `${enemy.name || enemy.kind}: ${preview.text || preview.reason}`,
+          `${enemy.name || enemy.kind}: ${preview.text || preview.reason}${enemyDescription(s, enemy) ? ` · ${enemyDescription(s, enemy)}` : ""}`,
           () => {
             if (abilityMode) useSkill(s, selected, enemy.x, enemy.y);
             else act(s, selected, enemy.x, enemy.y);
@@ -2513,6 +2622,48 @@ function render() {
         !!s.ambushReady || (isHidden(s) && s.stealth.concealment >= 75),
       ),
     );
+    if (
+      Math.hypot(s.position.x - places[12].x, s.position.y - places[12].y) <=
+        110 &&
+      !s.strongholds.briar.cleared
+    ) {
+      const intel = card(
+        "Briarhide reconnaissance",
+        s.strongholdIntel.scouted
+          ? "<p>Captain Venn and three sentries guard the eastern vault. Concealment of sixty percent allows one covert action. Each action costs an hour and twenty-five concealment.</p>"
+          : "<p>An Archer or Thief can scout the stockade from this distance. Survey the guards and discover supplies, a prisoner, weak stores and an alternate entrance.</p>",
+      );
+      if (!s.strongholdIntel.scouted)
+        intel.append(
+          button(
+            "Scout Briarhide · 1 hour",
+            () => scoutStronghold(s),
+            !!strongholdScoutLock(s),
+          ),
+        );
+      else
+        for (const [id, label] of [
+          ["supplies", "Steal stronghold supplies"],
+          ["prisoner", "Rescue captive Edda"],
+          ["sabotaged", "Sabotage stores · 2 ore"],
+          ["entry", "Open drainage entrance"],
+        ]) {
+          const action = button(
+            s.strongholdIntel[id] ? `${label} · Done` : label,
+            () => infiltrateStronghold(s, id),
+            !!infiltrationLock(s, id),
+          );
+          action.title =
+            infiltrationLock(s, id) || "One hour, twenty-five concealment";
+          intel.append(action);
+        }
+      const details = document.createElement("details");
+      const summary = document.createElement("summary");
+      summary.textContent = "Stronghold scouting & infiltration";
+      details.append(summary, intel);
+      details.open = !s.strongholdIntel.scouted;
+      a.append(details);
+    }
     if (s.location === 12 && s.campaign.phase === "grain")
       a.append(
         button(
@@ -2613,6 +2764,24 @@ function render() {
         );
     }
     nearbyPatrols(s).forEach((p) => {
+      if (p.wreck && !p.wreck.looted) {
+        a.append(
+          button(`Search wreck: ${p.name}`, () => lootCaravanWreck(s, p.id)),
+        );
+        return;
+      }
+      if (p.raid) {
+        a.append(
+          button(
+            `Intervene: ${p.name}`,
+            () => interveneCaravan(s, p.id),
+            false,
+            true,
+          ),
+        );
+        return;
+      }
+      if (s.caravanEscort?.patrolId === p.id) return;
       if (p.kind === "merchant") {
         if (!p.hostile)
           a.append(
@@ -2797,12 +2966,40 @@ function draw() {
         ctx.fillText("FIRE NEXT", 111 + tile.x * 62, 54 + tile.y * 60);
       }
 
+    for (const trap of (s.battle.traps || []).filter((t) => !t.used)) {
+      rect(119 + trap.x * 62, 15 + trap.y * 60, 26, 3, "#ae6547");
+      rect(130 + trap.x * 62, 5 + trap.y * 60, 3, 25, "#ae6547");
+      drawMapLabel(ctx, "SNARE", 136 + trap.x * 62, 42 + trap.y * 60, true);
+    }
+    for (const enemy of s.battle.enemies.filter((e) => e.hp > 0 && e.casting)) {
+      ctx.strokeStyle = "#9261aa";
+      ctx.lineWidth = 3;
+      ctx.strokeRect(
+        108 + enemy.casting.x * 62,
+        3 + enemy.casting.y * 60,
+        54,
+        52,
+      );
+      drawMapLabel(
+        ctx,
+        "SPELL NEXT",
+        136 + enemy.casting.x * 62,
+        12 + enemy.casting.y * 60,
+        true,
+      );
+    }
+    if (s.wagon.owned) {
+      drawWagon(ctx, 48, 222, false, "mixed");
+      drawMapLabel(ctx, `WAGON ${Math.round(s.wagon.condition)}%`, 48, 256);
+    }
     const active = s.battle.units.find((u) => u.id === selected);
     if (active && (!active.acted || active.safeMove)) {
       const p = s.party[selected],
         range = spellMode
-          ? spellBook.find((v) => v.id === spellMode).range +
-            (p.race === "elf" ? 1 : 0)
+          ? spellRange(
+              p,
+              spellBook.find((v) => v.id === spellMode),
+            )
           : attackRange(p, abilityMode, s);
       for (let y = 0; y < 7; y++)
         for (let x = 0; x < 9; x++) {
@@ -2849,6 +3046,13 @@ function draw() {
         );
         if (e.kind === "wolf")
           drawWolf(ctx, 136 + visual.x * 62, 28 + visual.y * 60);
+        else if (["goblin", "skeleton", "mage"].includes(e.kind))
+          drawFantasyEnemy(
+            ctx,
+            e.kind,
+            136 + visual.x * 62,
+            28 + visual.y * 60,
+          );
         else
           person(
             136 + visual.x * 62,
@@ -2864,6 +3068,14 @@ function draw() {
               : e.kind === "brute"
                 ? "Shieldbearer"
                 : "Swordswoman",
+          );
+        if (e.kind === "mage")
+          drawMapLabel(
+            ctx,
+            `SLOTS ${e.mana || 0}/2`,
+            136 + visual.x * 62,
+            64 + visual.y * 60,
+            true,
           );
         ctx.fillStyle = "#4c4935";
         ctx.font = "9px monospace";
@@ -2975,7 +3187,7 @@ function draw() {
   s.patrols
     .filter(
       (p) =>
-        !p.cleared &&
+        (!p.cleared || (p.wreck && !p.wreck.looted)) &&
         Math.hypot(p.x - s.position.x, p.y - s.position.y) <
           Math.max(
             60,
@@ -2986,12 +3198,23 @@ function draw() {
     .forEach((p) => {
       const hostile = p.kind !== "merchant" || p.hostile;
       const color = hostile ? "#a16c54" : "#b39d69";
+      if (p.kind === "fantasy") {
+        drawFantasyEnemy(ctx, p.enemyFamily, p.x, p.y);
+        drawMapLabel(ctx, p.name, p.x, p.y - 37, true);
+        return;
+      }
       if (p.kind === "wolves") {
         drawWolf(ctx, p.x - 12, p.y, 1);
         drawWolf(ctx, p.x + 10, p.y + 8, -1);
         drawMapLabel(ctx, p.name, p.x, p.y - 37, true);
         return;
       }
+      if (p.wreck) {
+        drawWagon(ctx, p.x, p.y, true, "empty");
+        drawMapLabel(ctx, "WAGON WRECK", p.x, p.y - 37, true);
+        return;
+      }
+      if (p.raid) drawMapLabel(ctx, "UNDER ATTACK", p.x, p.y + 38, true);
       if (p.kind === "merchant")
         drawWagon(ctx, p.x - 9, p.y - 8, p.hostile, p.caravanType);
       else
@@ -3050,6 +3273,10 @@ function draw() {
   ctx.globalAlpha = 1;
   if (isHidden(s))
     drawMapLabel(ctx, "HIDDEN", s.position.x, s.position.y - 35, true);
+  if (s.wagon.owned) {
+    drawWagon(ctx, s.position.x - 55, s.position.y + 45, false, "mixed");
+    drawMapLabel(ctx, "Company wagon", s.position.x - 55, s.position.y + 70);
+  }
   if (s.travelers.merrit === "escorting") {
     drawWagon(ctx, s.position.x - 45, s.position.y + 28, false);
     person(s.position.x - 23, s.position.y + 28, "#bc9b65", 0, "", 2);
@@ -3200,9 +3427,14 @@ function animate(time) {
     !document.hidden
   ) {
     const dayBefore = s.day;
+    const hiddenBefore = isHidden(s);
     const ambushBefore = isHidden(s) && s.stealth.concealment >= 75;
     advanceStealth(s, seconds, heldKeys.size > 0 || !!s.destination);
-    if (ambushBefore !== (isHidden(s) && s.stealth.concealment >= 75)) render();
+    if (
+      hiddenBefore !== isHidden(s) ||
+      ambushBefore !== (isHidden(s) && s.stealth.concealment >= 75)
+    )
+      render();
     advanceClock(s, seconds * (menuSettings.slowDays ? 0.5 : 1));
     if (dayBefore !== s.day || s.event || companyLost(s)) render();
     updateClockUI();
@@ -3361,7 +3593,7 @@ canvas.addEventListener("pointermove", (event) => {
   }
   if (enemy)
     $("map-label").textContent =
-      `${enemy.name || enemy.kind || "raider"} · HP ${enemy.hp}/${enemy.max} · Armor ${enemy.armor || 0} · Range ${enemy.kind === "archer" ? 4 : 1}${enemy.kind === "wolf" ? ` · Rush ${enemy.bossId === "ashfang" ? 3 : 2} · pack hunter` : enemy.kind === "archer" ? " · Keeps distance" : " · Melee flanking +2"}${enemy.stun ? " · Stunned" : ""}${enemy.bleed ? " · Bleeding" : ""}${enemy.bossId ? ` · ${namedAdversaries.find((boss) => boss.id === enemy.bossId)?.mechanic || "Named adversary"}` : ""}`;
+      `${enemy.name || enemy.kind || "raider"} · HP ${enemy.hp}/${enemy.max} · Armor ${enemyArmor(s, enemy)} · Range ${enemy.kind === "archer" ? 4 : 1}${enemy.kind === "wolf" ? ` · Rush ${enemy.bossId === "ashfang" ? 3 : 2} · pack hunter` : enemy.kind === "archer" ? " · Keeps distance" : " · Melee flanking +2"}${enemyDescription(s, enemy) ? ` · ${enemyDescription(s, enemy)}` : ""}${enemy.stun ? " · Stunned" : ""}${enemy.bleed ? " · Bleeding" : ""}${enemy.bossId ? ` · ${namedAdversaries.find((boss) => boss.id === enemy.bossId)?.mechanic || "Named adversary"}` : ""}`;
   if (x >= 0 && x < 9 && y >= 0 && y < 7) {
     const preview = combatPreview(s, selected, x, y, abilityMode);
     $("map-label").textContent += ` · ${preview.text || preview.reason}`;
@@ -3842,4 +4074,124 @@ function drawWeather(c, s) {
     c.fillRect(0, 0, c.canvas.width, c.canvas.height);
   }
   c.restore();
+}
+
+function appendTravelJobs(panel) {
+  const row = card(
+    "Travel duties",
+    `<p>${companyScout(s) ? `${companyScout(s).name} can scout as an Archer or Thief.` : "Recruit an Archer or assign the Thief profession to unlock scouting."} A companion can hold one travel duty; camp jobs are assigned separately.</p>`,
+  );
+  for (const role of travelRoles) {
+    const label = document.createElement("p");
+    label.textContent = `${role.name}: ${role.desc}`;
+    row.append(label);
+    const select = document.createElement("select");
+    select.setAttribute("aria-label", `${role.name} travel duty`);
+    select.add(new Option("Unassigned", ""));
+    for (const p of livingParty(s).filter((p) => p.hp > 0)) {
+      const option = new Option(p.name, String(p.id));
+      option.disabled =
+        role.id === "scout"
+          ? !(p.role === "Archer" || p.profession === "Thief")
+          : !s.wagon.owned || (role.id === "rearguard" && isCaster(p));
+      select.add(option);
+    }
+    select.value = travelWorker(s, role.id)?.id ?? "";
+    select.disabled = !!s.battle || !!s.event;
+    select.onchange = () => {
+      assignTravelJob(
+        s,
+        role.id,
+        select.value === "" ? null : Number(select.value),
+      );
+      render();
+    };
+    row.append(select);
+  }
+  panel.append(row);
+}
+function appendWagonPanel(panel) {
+  if (!s.wagon.owned) {
+    const row = card(
+      "Company wagon",
+      "<p>Purchase a wagon for 250 crowns at a village, or claim one after completing Hungry Roads. It adds ten cargo spaces, follows your company and supports travel duties and camp upgrades.</p>",
+    );
+    if (places[s.location]?.type === "town" && !s.campOpen) {
+      row.append(
+        button(
+          "Buy company wagon · 250 crowns",
+          () => buyCompanyWagon(s),
+          s.gold < 250 || !!s.battle || !!s.event,
+        ),
+      );
+      if (s.campaign.phase === "completed")
+        row.append(
+          button(
+            "Claim earned company wagon",
+            () => buyCompanyWagon(s, true),
+            !!s.battle || !!s.event,
+          ),
+        );
+    }
+    panel.append(row);
+    return;
+  }
+  const row = card(
+    "Company wagon",
+    `<p>Condition ${Math.round(s.wagon.condition)}/100 · cargo ${cargoLoad(s)}/${companyCargoCapacity(s)}. Quartermasters save food; rear guards and rails protect supplies during retreat. A camp Smith can maintain the wagon.</p>`,
+  );
+  if (s.campOpen) {
+    for (const upgrade of wagonUpgrades) {
+      const text = document.createElement("p");
+      text.textContent = `${upgrade.name} ${s.wagon[upgrade.id]}/${upgrade.max}: ${upgrade.desc}`;
+      row.append(text);
+      row.append(
+        button(
+          `Build ${upgrade.name} · ${upgrade.gold} crowns / ${upgrade.wood} wood / ${upgrade.ore} ore`,
+          () => upgradeWagon(s, upgrade.id),
+          s.wagon[upgrade.id] >= upgrade.max ||
+            s.gold < upgrade.gold ||
+            s.inventory.wood < upgrade.wood ||
+            s.inventory.ore < upgrade.ore,
+        ),
+      );
+    }
+    row.append(
+      button(
+        "Repair wagon · 20 crowns / 2 ore / 2 hours",
+        () => repairWagon(s),
+        s.wagon.condition >= 100 ||
+          !professional(s, "Smith") ||
+          s.gold < 20 ||
+          s.inventory.ore < 2,
+      ),
+    );
+  }
+  panel.append(row);
+}
+function appendEscortPanel(panel) {
+  const escort = s.caravanEscort;
+  if (!escort) return;
+  const name =
+    s.patrols.find((p) => p.id === escort.patrolId)?.name || "Caravan";
+  const row = card(
+    `Escort: ${name}`,
+    `<p>${escort.status === "arrived" ? "Arrived safely." : "Protect this wagon while travelling freely."} Destination ${places[escort.destination].name} · reward ${escort.reward} crowns.</p>`,
+  );
+  if (escort.status === "arrived" && s.location === escort.destination)
+    row.append(
+      button(
+        "Collect caravan escort payment",
+        () => claimCaravanEscort(s),
+        !!s.battle || !!s.event,
+      ),
+    );
+  row.append(
+    button(
+      "Abandon caravan escort",
+      () => abandonCaravanEscort(s),
+      !!s.battle || !!s.event,
+    ),
+  );
+  panel.append(row);
 }
