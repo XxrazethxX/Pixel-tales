@@ -7,7 +7,7 @@ import math
 import subprocess
 import numpy as np
 from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter
-from menu_sprite_frames import draw_fire, draw_chimney
+from menu_sprite_frames import draw_fire, draw_chimney, draw_lantern, draw_river
 
 ROOT = Path(__file__).resolve().parent.parent
 SIZE = (1600, 900)
@@ -41,8 +41,6 @@ orbbox = (1461, 541, 1510, 590)
 orb = sprite(orbbox, True)
 staffbox = (1601, 483, 1633, 521)
 staff = sprite(staffbox, True)
-lanterns = [((27, 270, 53, 315), sprite((27, 270, 53, 315))),
-            ((865, 332, 889, 372), sprite((865, 332, 889, 372)))]
 glow_cache = {}
 
 def glow(frame, x, y, radius, color, strength, stretch=1):
@@ -109,15 +107,31 @@ def water_layer(box, polygon, blue_only=True):
 
 
 waters = [
-    water_layer((1210, 839, 1515, 941), [(1357, 878), (1390, 861), (1490, 850),
-        (1508, 870), (1480, 894), (1434, 908), (1345, 933), (1275, 940),
-        (1225, 940), (1301, 920), (1360, 900)]),
+    water_layer((1210, 839, 1515, 941), [(1292, 860), (1320, 857), (1360, 860),
+        (1400, 850), (1514, 850), (1514, 916), (1490, 910), (1455, 916),
+        (1440, 940), (1360, 940), (1370, 916), (1335, 894), (1290, 884)]),
     water_layer((1380, 460, 1505, 511), [(1402, 466), (1424, 471), (1466, 482),
         (1496, 486), (1476, 502), (1420, 489), (1394, 478)]),
     water_layer((1140, 240, 1465, 286), [(1145, 259), (1198, 250), (1265, 248),
         (1320, 244), (1400, 255), (1460, 264), (1420, 275), (1355, 268),
         (1300, 279), (1228, 273), (1170, 275)], False),
 ]
+
+# Explicit boulder silhouettes supplement the color mask: cool gray rock
+# faces can share the river's blue palette and must still stay stationary.
+rock_mask = Image.fromarray(waters[0][1][..., 3])
+rock_draw = ImageDraw.Draw(rock_mask)
+for polygon in [
+    [(1392, 835), (1418, 821), (1456, 838), (1480, 846), (1486, 865),
+     (1472, 875), (1435, 879), (1397, 876), (1390, 858)],
+    [(1284, 900), (1310, 883), (1330, 879), (1366, 883), (1385, 895),
+     (1400, 904), (1405, 936), (1356, 941), (1295, 935), (1285, 918)],
+    [(1407, 921), (1420, 912), (1440, 912), (1450, 922), (1445, 937),
+     (1422, 940), (1410, 936)],
+    [(1395, 908), (1408, 900), (1418, 902), (1420, 911), (1407, 917)],
+]:
+    rock_draw.polygon([(x - 1210, y - 839) for x, y in polygon], fill=0)
+waters[0][1][..., 3] = np.asarray(rock_mask)
 
 # Find existing warm window pixels instead of scattering invented lights over
 # rooftops. Connected components isolate each independently flickering window.
@@ -158,16 +172,7 @@ for py, px in zip(*np.nonzero(window_mask)):
 
 def animate_environment(frame, phase, q):
     for number, (box, water) in enumerate(waters):
-        yy, xx = np.indices(water.shape[:2], dtype=float)
-        # The current carries texture diagonally; smaller crossing waves and
-        # moving luminance ridges add ripples without moving banks or rocks.
-        dx = 2.2 * np.sin(q * 3 + yy * .12) + .8 * np.sin(q * 5 + xx * .1)
-        dy = 1.1 * np.sin(q * 2 + xx * .08)
-        flowing = displace(water, dx, dy)
-        flowing[..., 3] = np.minimum(flowing[..., 3], water[..., 3])
-        reflection = 1 + .09 * np.sin((xx - yy) * .15 + q * 3 + number)
-        flowing[..., :3] = np.clip(flowing[..., :3].astype(float) * reflection[..., None], 0, 255)
-        paste(frame, flowing, box)
+        draw_river(frame, phase, number, box, water[..., 3], SX, SY)
     draw_chimney(frame, phase, SX, SY)
     for number, (box, smoke) in enumerate(smoke_sources):
         if number == 0:
@@ -221,11 +226,9 @@ def render(index):
         age = (phase * 2 + i / 5) % 1
         glow(frame, 1486 + math.sin(age * 6 + i * 2) * (5 + age * 12), 576 - age * 30,
              2, (125, 196, 255), math.sin(age * math.pi) ** 2 * .5)
-    for i, (box, pixels) in enumerate(lanterns):
-        strength = .71 + .16 * math.sin(q * 5 + i) + .1 * math.sin(q * 9 + i * 2)
-        paste(frame, pixels, box, strength)
-        x, y = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
-        glow(frame, x, y, 33, (244, 172, 76), .12 + strength * .08)
+    for i, (x, y) in enumerate([(40, 291), (877, 352)]):
+        energy = draw_lantern(frame, phase, i, SX, SY)
+        glow(frame, x, y, 33, (244, 172, 76), .1 + energy * .32)
     glow(frame, 1450, 106, 38, (91, 142, 240), .04 + .025 * math.sin(q))
     for i in range(16):
         x = 640 + i * 67 % 950 + math.sin(q + i) * 5

@@ -39,7 +39,7 @@ for name, (x, y, r, b) in regions.items():
     assert movement > .08, f'{name} has no meaningful motion: {movement}'
     print(f'{name}: decoded motion verified ({movement:.3f})')
 # The nearby shield bearer's face and bridge masonry must not warp with water.
-for name, (x, y, r, b) in {'companion face': (653, 521, 695, 558), 'bridge': (1400, 445, 1460, 460)}.items():
+for name, (x, y, r, b) in {'companion face': (653, 521, 695, 558), 'bridge': (1400, 445, 1460, 460), 'foreground boulder': (1318, 890, 1360, 920), 'upper river rock': (1410, 847, 1450, 865)}.items():
     crop = frames[:, round(y * sy):round(b * sy), round(x * sx):round(r * sx)].astype(float)
     assert float(np.std(crop, axis=0).mean()) < .5, f'{name} moves unintentionally'
 seam = float(np.abs(frames[0].astype(float) - frames[-1].astype(float)).mean())
