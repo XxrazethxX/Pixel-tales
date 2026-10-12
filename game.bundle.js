@@ -17950,7 +17950,7 @@ function drawArcanePassage(c, s) {
 let gameActive = false;
 let hasSessionCompany = false;
 let menuSettings = { largeText: false, reduceMotion: false, slowDays: false };
-let menuEffectCanvas = null, menuEffectFrame = null, menuEffectLast = -Infinity;
+let menuEffectVideo = null, menuPlaybackRequest = 0;
 const menuMotionPreference = window.matchMedia("(prefers-reduced-motion: reduce)");
 try {
   const saved = JSON.parse(localStorage.getItem("pixel-tales-settings"));
@@ -21553,111 +21553,51 @@ canvas.addEventListener("pointermove", (event) => {
   }
 });
 
-// Coordinates use the backdrop's original 1672 × 941 pixels. Match CSS cover
-// and its mobile crop so sparks stay attached to their source on every screen.
-function drawMenuEffects(time) {
-  const c = menuEffectCanvas, g = c.getContext("2d");
-  const width = innerWidth, height = innerHeight;
-  if (c.width !== width || c.height !== height) {
-    c.width = width;
-    c.height = height;
-  }
-  g.setTransform(1, 0, 0, 1, 0, 0);
-  g.clearRect(0, 0, width, height);
-  const scale = Math.max(width / 1672, height / 941);
-  const crop = width <= 600 ? 0.62 : 0.5;
-  const offsetX = (width - 1672 * scale) * crop;
-  const offsetY = (height - 941 * scale) * 0.5;
-  g.setTransform(scale, 0, 0, scale, offsetX, offsetY);
-  c.dataset.scale = scale.toFixed(5);
-  c.dataset.offsetX = offsetX.toFixed(2);
-  c.dataset.offsetY = offsetY.toFixed(2);
-  const t = time / 1000;
-  // Screen blending brightens the painted sources without laying opaque
-  // replacement shapes over them. Every effect fades all the way at its edge.
-  g.globalCompositeOperation = "screen";
-  const glow = (x, y, radius, color, strength, stretch = 1) => {
-    g.save();
-    g.translate(x, y);
-    g.scale(1, stretch);
-    const gradient = g.createRadialGradient(0, 0, 0, 0, 0, radius);
-    gradient.addColorStop(0, color);
-    gradient.addColorStop(0.28, color);
-    gradient.addColorStop(1, "transparent");
-    g.globalAlpha = strength;
-    g.fillStyle = gradient;
-    g.fillRect(-radius, -radius, radius * 2, radius * 2);
-    g.restore();
-  };
-  const flicker = 0.5 + 0.22 * Math.sin(t * 4.1) +
-    0.17 * Math.sin(t * 7.3 + 1.2) + 0.11 * Math.sin(t * 11.7 + 2.8);
-  // Keep the image's flame silhouette; move faint warmth within it, then let
-  // its reflected light breathe across the hearth and nearby equipment.
-  glow(946, 688, 84, "#ed8932", 0.025 + flicker * 0.045, 0.65);
-  glow(948 + Math.sin(t * 2.8) * 2, 672 + Math.sin(t * 3.9) * 3,
-    18, "#ffd082", 0.055 + flicker * 0.075, 1.4);
-  glow(934, 694, 13, "#fca44e", 0.025 + flicker * 0.035);
-  for (let i = 0; i < 7; i++) {
-    const age = (t * (0.13 + i * 0.006) + i * 0.137) % 1;
-    const fade = Math.sin(age * Math.PI) ** 2;
-    const x = 944 + Math.sin(i * 12.7) * 15 + Math.sin(age * 5 + i) * age * 12;
-    const y = 679 - age * (45 + (i % 4) * 12);
-    glow(x, y, 1.6, "#efb56c", fade * 0.32, 1.35);
-  }
-  // Diffuse smoke, never the hard horizontal rectangles of the first pass.
-  for (let i = 0; i < 4; i++) {
-    const age = (t * 0.055 + i / 4) % 1;
-    glow(944 + Math.sin(age * 4 + i) * 10, 653 - age * 83,
-      10 + age * 17, "#aaa99c", Math.sin(age * Math.PI) ** 2 * 0.018, 0.8);
-  }
-  const magic = (1 + Math.sin(t * 1.6)) / 2;
-  glow(1488, 572, 29, "#508bd8", 0.035 + magic * 0.055);
-  glow(1488, 572, 7, "#91c8ff", 0.045 + magic * 0.06);
-  glow(1617, 503, 16, "#4e82c8", 0.02 + magic * 0.03);
-  // A few wisps drift out and vanish; no evenly spaced orbiting ring.
-  for (let i = 0; i < 3; i++) {
-    const age = (t * 0.12 + i * 0.31) % 1;
-    glow(1488 + Math.sin(age * 4 + i * 2) * (4 + age * 10),
-      574 - age * 24, 1.5, "#93c5ed", Math.sin(age * Math.PI) ** 2 * 0.18);
-  }
-  for (const [x, y] of [[40, 291], [877, 354]])
-    glow(x, y, 24, "#eeb369", 0.025 + flicker * 0.025);
-  glow(1450, 106, 26, "#759cd3", 0.015 + 0.01 * Math.sin(t * 0.7));
-  for (let i = 0; i < 7; i++) {
-    const x = 680 + ((i * 139) % 790) + Math.sin(t * 0.22 + i) * 4;
-    const y = 475 + ((i * 61) % 190) + Math.cos(t * 0.27 + i) * 4;
-    glow(x, y, 1.6, "#c6bd86", Math.max(0, Math.sin(t * 0.55 + i * 2)) ** 2 * 0.2);
-  }
-  g.globalAlpha = 1;
-  g.globalCompositeOperation = "source-over";
+// A complete pre-rendered scene replaces the former procedural overlays.
+// Browsers decode the lightweight loop; the GIF is a downloadable art preview.
+function menuAnimationAllowed() {
+  return !$("front-menu").hidden && !document.hidden &&
+    !menuSettings.reduceMotion && !menuMotionPreference.matches;
 }
 function syncMenuEffects() {
-  if (!menuEffectCanvas) {
-    menuEffectCanvas = document.createElement("canvas");
-    menuEffectCanvas.id = "menu-effects";
-    menuEffectCanvas.setAttribute("aria-hidden", "true");
-    $("front-menu").prepend(menuEffectCanvas);
+  if (!menuEffectVideo) {
+    menuEffectVideo = document.createElement("video");
+    menuEffectVideo.id = "menu-scene";
+    menuEffectVideo.setAttribute("aria-hidden", "true");
+    menuEffectVideo.setAttribute("playsinline", "");
+    menuEffectVideo.setAttribute("muted", "");
+    menuEffectVideo.muted = true;
+    menuEffectVideo.loop = true;
+    menuEffectVideo.preload = "none";
+    menuEffectVideo.hidden = true;
+    menuEffectVideo.poster = "assets/main-menu-camp.png";
+    menuEffectVideo.onerror = () => {
+      menuEffectVideo.hidden = true;
+      menuEffectVideo.dataset.animating = "false";
+    };
+    $("front-menu").prepend(menuEffectVideo);
   }
-  const active = !$("front-menu").hidden && !document.hidden &&
-    !menuSettings.reduceMotion && !menuMotionPreference.matches;
-  menuEffectCanvas.hidden = !active;
-  menuEffectCanvas.dataset.animating = String(active);
-  if (menuEffectFrame !== null) cancelAnimationFrame(menuEffectFrame);
-  menuEffectFrame = null;
-  if (!active) return;
-  const frame = (time) => {
-    if (time - menuEffectLast >= 32) {
-      drawMenuEffects(time);
-      menuEffectLast = time;
-    }
-    menuEffectFrame = requestAnimationFrame(frame);
-  };
-  menuEffectLast = -Infinity;
-  menuEffectFrame = requestAnimationFrame(frame);
+  const request = ++menuPlaybackRequest;
+  if (!menuAnimationAllowed()) {
+    menuEffectVideo.pause();
+    menuEffectVideo.hidden = true;
+    menuEffectVideo.dataset.animating = "false";
+    return;
+  }
+  if (!menuEffectVideo.getAttribute("src"))
+    menuEffectVideo.src = "assets/main-menu-loop.mp4";
+  menuEffectVideo.play().then(() => {
+    if (request !== menuPlaybackRequest || !menuAnimationAllowed()) return;
+    menuEffectVideo.hidden = false;
+    menuEffectVideo.dataset.animating = "true";
+  }).catch(() => {
+    if (request !== menuPlaybackRequest) return;
+    menuEffectVideo.hidden = true;
+    menuEffectVideo.dataset.animating = "false";
+  });
 }
 menuMotionPreference.addEventListener("change", syncMenuEffects);
 document.addEventListener("visibilitychange", syncMenuEffects);
-window.addEventListener("resize", () => { menuEffectLast = -Infinity; });
 
 function menuRead(key, fallback = null) {
   try {
@@ -21798,7 +21738,7 @@ function showCreditsMenu() {
   root.append(
     menuElement("p", "Pixel Tales · The Ashen Company", "menu-intro"),
     menuElement("p", "An original high-fantasy company RPG, created for XxrazethxX."),
-    menuElement("p", "Game artwork is drawn locally. The main-menu campsite is original AI-generated concept artwork, adapted into an interactive interface."),
+    menuElement("p", "Game artwork is drawn locally. The main-menu campsite is original AI-generated artwork, animated as a complete rendered scene with working interface controls."),
     menuElement("p", "Inspired by the company adventures of Wartales and the compact overworld presentation of Occidental Heroes. No assets from those games are used."),
     menuButton("Back", showFrontMenu),
   );

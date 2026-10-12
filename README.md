@@ -4,7 +4,11 @@ An original, playable high-fantasy mercenary-company RPG with compact pixel visu
 
 The latest update, **v0.33**, adds prepared magic and fantasy classes, a flag-bearer unlock, grouped camp and village menus, draggable camp furnishings, camp expansion and crowding, secure lodges, direct dungeon controls, varied battle terrain, and centered after-action reports. The next campaign chapter remains deferred.
 
-The title screen now brings the campsite concept into the game, with working Continue, New Company, Load Game, Settings, Credits, and Quit controls. It adapts to mobile and keeps existing company saves intact. Soft, screen-blended lighting animates the painted fire and mage orb, with faint embers, diffuse smoke, lantern flicker, fireflies, and distant city shimmer. The original flame silhouette remains intact. Effects match the mobile crop, run at about 30 frames per second, pause during gameplay and in hidden tabs, and respect both the game’s Reduced motion setting and the operating system’s motion preference.
+The title screen now brings the campsite concept into the game, with working Continue, New Company, Load Game, Settings, Credits, and Quit controls. It adapts to mobile and keeps existing company saves intact. The menu now plays a complete eight-second animated scene: painted flames bend and stretch, embers rise, smoke drifts, the mage’s orb moves and pulses, both lanterns flicker, fireflies drift, and the city shimmers. A silent, looping 1280 × 720 MP4 replaces the old procedural overlays; the menu buttons remain interactive HTML. Playback pauses during gameplay and in hidden tabs. Reduced motion and media-loading failures use the original still image. The video is loaded only when animation is allowed.
+
+[View the animated menu GIF](docs/screenshots/main-menu-animation.gif) · [Download the scene video](assets/main-menu-loop.mp4)
+
+Optional art export (not needed to play): `python3 scripts/render-menu-loop.py` rebuilds the scene using Pillow, NumPy, and FFmpeg. With the development server running, `GAME_URL=http://127.0.0.1:3000/ node scripts/export-menu-gif.mjs` exports the GIF using Playwright and Chromium.
 
 [Main menu desktop preview](docs/screenshots/main-menu-desktop.png) · [Main menu mobile preview](docs/screenshots/main-menu-mobile.png)
 

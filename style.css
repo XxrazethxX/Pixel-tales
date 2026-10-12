@@ -1325,14 +1325,19 @@ nav button[data-count]::after {
   .title-home .menu-controls button { min-height: 40px; padding: 6px; font-size: 21px; }
 }
 
-#menu-effects {
+#menu-scene {
   position: fixed;
   inset: 0;
   width: 100%;
   height: 100%;
+  object-fit: cover;
+  object-position: center;
   pointer-events: none;
-  image-rendering: auto;
+  filter: brightness(.84);
   z-index: 0;
 }
-#menu-effects[hidden] { display: none; }
+#menu-scene[hidden] { display: none; }
 .front-menu .menu-content { position: relative; z-index: 1; }
+@media (max-width: 600px) {
+  #menu-scene { object-position: 62% center; }
+}
