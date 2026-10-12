@@ -7,6 +7,7 @@ import math
 import subprocess
 import numpy as np
 from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter
+from menu_sprite_frames import draw_fire, draw_chimney
 
 ROOT = Path(__file__).resolve().parent.parent
 SIZE = (1600, 900)
@@ -36,8 +37,6 @@ def sprite(box, blue=False):
     alpha = np.asarray(Image.fromarray((alpha * 255).astype('uint8')).filter(ImageFilter.GaussianBlur(.45)))
     return np.dstack((raw.astype('uint8'), alpha))
 
-firebox = (887, 608, 1012, 720)
-fire = sprite(firebox)
 orbbox = (1461, 541, 1510, 590)
 orb = sprite(orbbox, True)
 staffbox = (1601, 483, 1633, 521)
@@ -169,7 +168,10 @@ def animate_environment(frame, phase, q):
         reflection = 1 + .09 * np.sin((xx - yy) * .15 + q * 3 + number)
         flowing[..., :3] = np.clip(flowing[..., :3].astype(float) * reflection[..., None], 0, 255)
         paste(frame, flowing, box)
+    draw_chimney(frame, phase, SX, SY)
     for number, (box, smoke) in enumerate(smoke_sources):
+        if number == 0:
+            continue  # Main chimney now uses separately drawn puff frames.
         yy, xx = np.indices(smoke.shape[:2], dtype=float)
         tip = 1 - yy / smoke.shape[0]
         dx = tip * (3 * np.sin(q + yy * .08 + number) + 1.5 * np.sin(q * 2 + xx * .1))
@@ -195,14 +197,9 @@ def render(index):
     q = phase * math.tau
     frame = plate.copy()
     animate_environment(frame, phase, q)
-    # Warp the actual painted flame texture. The base stays fixed on the logs;
-    # its tips bend and stretch independently rather than pulsing rectangles.
-    yy, xx = np.indices(fire.shape[:2])
-    tip = np.clip((100 - yy) / 100, 0, 1)
-    xshift = tip ** 1.5 * (4 * np.sin(q * 5 + yy * .09) + 2 * np.sin(q * 9 + xx * .1))
-    yshift = tip * (4 * np.sin(q * 7 + xx * .13) + 2 * np.sin(q * 3))
+    # The fire is sixteen separately drawn silhouettes, anchored on the logs.
+    draw_fire(frame, phase, SX, SY)
     flicker = .78 + .12 * math.sin(q * 7) + .08 * math.sin(q * 11 + 1)
-    paste(frame, displace(fire, xshift, yshift), firebox, flicker)
     glow(frame, 950, 680, 85, (250, 142, 55), .13 + .06 * flicker, .7)
     for i in range(14):
         age = (phase * (1 + i % 3) + i * .137) % 1
@@ -236,21 +233,25 @@ def render(index):
         glow(frame, x, y, 2, (232, 209, 112), max(0, math.sin(q + i * 2)) ** 2 * .5)
     return frame
 
-out = ROOT / 'assets/main-menu-loop.mp4'
-command = ['ffmpeg', '-y', '-loglevel', 'error', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', f'{SIZE[0]}x{SIZE[1]}',
-           '-r', str(FPS), '-i', '-', '-an', '-c:v', 'libx264', '-preset', 'medium', '-crf', '16',
-           '-pix_fmt', 'yuv420p', '-movflags', '+faststart', str(out)]
-process = subprocess.Popen(command, stdin=subprocess.PIPE)
-try:
-    for index in range(FPS * SECONDS):
-        frame = render(index)
-        process.stdin.write(frame.tobytes())
-        if index in (0, 60, 120, 180):
-            frame.save(f'/tmp/menu-loop-frame-{index}.png')
-        if index % FPS == 0:
-            print(f'Rendered {index // FPS}/{SECONDS} seconds', flush=True)
-finally:
-    process.stdin.close()
-if process.wait() != 0:
-    raise SystemExit('FFmpeg encoding failed')
-print(f'Encoded {out.name}: {out.stat().st_size:,} bytes', flush=True)
+def main():
+    out = ROOT / 'assets/main-menu-loop.mp4'
+    command = ['ffmpeg', '-y', '-loglevel', 'error', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', f'{SIZE[0]}x{SIZE[1]}',
+               '-r', str(FPS), '-i', '-', '-an', '-c:v', 'libx264', '-preset', 'medium', '-crf', '16',
+               '-pix_fmt', 'yuv420p', '-movflags', '+faststart', str(out)]
+    process = subprocess.Popen(command, stdin=subprocess.PIPE)
+    try:
+        for index in range(FPS * SECONDS):
+            frame = render(index)
+            process.stdin.write(frame.tobytes())
+            if index in (0, 60, 120, 180):
+                frame.save(f'/tmp/menu-loop-frame-{index}.png')
+            if index % FPS == 0:
+                print(f'Rendered {index // FPS}/{SECONDS} seconds', flush=True)
+    finally:
+        process.stdin.close()
+    if process.wait() != 0:
+        raise SystemExit('FFmpeg encoding failed')
+    print(f'Encoded {out.name}: {out.stat().st_size:,} bytes', flush=True)
+
+if __name__ == "__main__":
+    main()
