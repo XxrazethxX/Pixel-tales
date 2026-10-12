@@ -24,6 +24,7 @@ try {
       .isDisabled(),
     true,
   );
+  await page.evaluate(() => document.fonts.ready);
   assert.equal(await state(), null);
   assert.equal(await page.evaluate(async () => {
     const image = new Image();

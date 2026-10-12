@@ -30,7 +30,7 @@ regions = {
     'castle lights': (1405, 112, 1420, 130),
     'far hamlet lights': (1098, 290, 1118, 302),
     'foreground river': (1355, 868, 1488, 918),
-    'distant river': (1380, 460, 1505, 511),
+    'distant river': (1495, 475, 1575, 504),
     'lake reflections': (1190, 247, 1400, 278),
 }
 for name, (x, y, r, b) in regions.items():
@@ -39,7 +39,7 @@ for name, (x, y, r, b) in regions.items():
     assert movement > .08, f'{name} has no meaningful motion: {movement}'
     print(f'{name}: decoded motion verified ({movement:.3f})')
 # The nearby shield bearer's face and bridge masonry must not warp with water.
-for name, (x, y, r, b) in {'companion face': (653, 521, 695, 558), 'bridge': (1400, 445, 1460, 460), 'foreground boulder': (1318, 890, 1360, 920), 'upper river rock': (1410, 847, 1450, 865)}.items():
+for name, (x, y, r, b) in {'companion face': (653, 521, 695, 558), 'bridge': (1400, 445, 1460, 460), 'foreground boulder': (1318, 890, 1360, 920), 'upper river rock': (1410, 847, 1450, 865), 'road below bridge': (1410, 478, 1460, 494)}.items():
     crop = frames[:, round(y * sy):round(b * sy), round(x * sx):round(r * sx)].astype(float)
     assert float(np.std(crop, axis=0).mean()) < .5, f'{name} moves unintentionally'
 seam = float(np.abs(frames[0].astype(float) - frames[-1].astype(float)).mean())

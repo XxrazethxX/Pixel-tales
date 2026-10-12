@@ -26,6 +26,18 @@ d.polygon([(1628, 357), (1633, 330), (1642, 310), (1662, 309), (1669, 327),
 clean = Image.composite(smoke_plate, original_plate, clean_mask.filter(ImageFilter.GaussianBlur(2)))
 plate = clean.resize(SIZE, Image.Resampling.LANCZOS)
 SX, SY = SIZE[0] / source.width, SIZE[1] / source.height
+PIXEL_SIZE = (640, 360)
+# Fixed colors and an integer-like pixel grid avoid palette shimmer between frames.
+PIXEL_PALETTE = source.resize(PIXEL_SIZE, Image.Resampling.BOX).quantize(colors=176, dither=Image.Dither.NONE)
+# Reserve sixteen sprite colors so the reference's yellow/cream core does not
+# get mapped to a skin or timber color by the much larger background image.
+flame_rgba = np.asarray(Image.open(ROOT / 'assets/animation/campfire-frames.png').convert('RGBA'))
+flame_pixels = flame_rgba[flame_rgba[..., 3] > 200, :3]
+flame_palette = Image.fromarray(flame_pixels[None, ...]).quantize(colors=16, dither=Image.Dither.NONE).getpalette()
+colors = PIXEL_PALETTE.getpalette()
+colors[176 * 3:192 * 3] = flame_palette[:16 * 3]
+colors[192 * 3:] = colors[:64 * 3]  # Duplicate valid colors instead of unused black slots.
+PIXEL_PALETTE.putpalette(colors)
 
 def sprite(box, blue=False):
     raw = np.asarray(source.crop(box)).astype(float)
@@ -110,8 +122,9 @@ waters = [
     water_layer((1210, 839, 1515, 941), [(1292, 860), (1320, 857), (1360, 860),
         (1400, 850), (1514, 850), (1514, 916), (1490, 910), (1455, 916),
         (1440, 940), (1360, 940), (1370, 916), (1335, 894), (1290, 884)]),
-    water_layer((1380, 460, 1505, 511), [(1402, 466), (1424, 471), (1466, 482),
-        (1496, 486), (1476, 502), (1420, 489), (1394, 478)]),
+    water_layer((1485, 469, 1590, 512), [(1490, 476), (1513, 476), (1539, 483),
+        (1550, 485), (1560, 474), (1585, 478), (1585, 508), (1555, 507),
+        (1535, 499), (1520, 498), (1510, 490), (1490, 489)]),
     water_layer((1140, 240, 1465, 286), [(1145, 259), (1198, 250), (1265, 248),
         (1320, 244), (1400, 255), (1460, 264), (1420, 275), (1355, 268),
         (1300, 279), (1228, 273), (1170, 275)], False),
@@ -205,7 +218,7 @@ def render(index):
     # The fire is sixteen separately drawn silhouettes, anchored on the logs.
     draw_fire(frame, phase, SX, SY)
     flicker = .78 + .12 * math.sin(q * 7) + .08 * math.sin(q * 11 + 1)
-    glow(frame, 950, 680, 85, (250, 142, 55), .13 + .06 * flicker, .7)
+    glow(frame, 950, 680, 85, (250, 142, 55), .08 + .025 * flicker, .7)
     for i in range(14):
         age = (phase * (1 + i % 3) + i * .137) % 1
         fade = math.sin(age * math.pi) ** 2
@@ -234,7 +247,8 @@ def render(index):
         x = 640 + i * 67 % 950 + math.sin(q + i) * 5
         y = 447 + i * 43 % 285 + math.cos(q + i) * 4
         glow(frame, x, y, 2, (232, 209, 112), max(0, math.sin(q + i * 2)) ** 2 * .5)
-    return frame
+    return frame.resize(PIXEL_SIZE, Image.Resampling.BOX).quantize(
+        palette=PIXEL_PALETTE, dither=Image.Dither.NONE).convert('RGB').resize(SIZE, Image.Resampling.NEAREST)
 
 def main():
     out = ROOT / 'assets/main-menu-loop.mp4'
@@ -246,6 +260,8 @@ def main():
         for index in range(FPS * SECONDS):
             frame = render(index)
             process.stdin.write(frame.tobytes())
+            if index == 0:
+                frame.save(ROOT / 'assets/main-menu-pixel-still.png')
             if index in (0, 60, 120, 180):
                 frame.save(f'/tmp/menu-loop-frame-{index}.png')
             if index % FPS == 0:

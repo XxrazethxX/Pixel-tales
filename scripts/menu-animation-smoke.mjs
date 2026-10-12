@@ -12,6 +12,8 @@ try {
     return v.dataset.animating === "true" && !v.paused && v.readyState >= 2;
   });
   await waitPlaying();
+  await page.evaluate(() => document.fonts.ready);
+  assert.equal(await page.evaluate(() => document.fonts.check("16px Silkscreen")), true);
   assert.equal(await scene.evaluate(v => v.videoWidth), 1600);
   assert.equal(await scene.evaluate(v => v.videoHeight), 900);
   assert.equal(await scene.evaluate(v => v.loop && v.muted && v.playsInline), true);

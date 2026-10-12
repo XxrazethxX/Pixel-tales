@@ -27,14 +27,18 @@ for kind in ('fire', 'smoke', 'lantern', 'river'):
     silhouettes = [rgba[..., 3] > 40 for rgba in sequence]
     assert len({hashlib.sha256(mask.tobytes()).digest() for mask in silhouettes}) == 16
     areas = [int(mask.sum()) for mask in silhouettes]
-    assert max(areas) > areas[0] * 2, f'{kind} does not grow'
+    if kind in ('fire', 'lantern'):
+        heights = [np.ptp(np.nonzero(mask)[0]) for mask in silhouettes]
+        assert max(heights) < min(heights) * 1.6, 'Campfire height changes too dramatically'
+    else:
+        assert max(areas) > areas[0] * 2, f'{kind} does not grow'
     if kind in ('smoke', 'river'):
         assert areas[-1] < max(areas) * .15, f'{kind} must dissipate'
         assert max(components(mask) for mask in silhouettes[9:]) > 1, f'Late {kind} must break into fragments'
     else:
         bottoms = [np.nonzero(mask)[0].max() for mask in silhouettes]
         assert max(bottoms) - min(bottoms) <= 1, 'Flame base drifts off logs'
-    print(f'{kind}: sixteen distinct silhouettes, growth and ' + ('dissipation/fragmentation' if kind in ('smoke', 'river') else 'fixed flame base') + ' verified')
+    print(f'{kind}: sixteen distinct silhouettes, ' + ('steady height and ' if kind in ('fire', 'lantern') else 'growth and ') + ('dissipation/fragmentation' if kind in ('smoke', 'river') else 'fixed flame base') + ' verified')
 
 
 from menu_sprite_frames import draw_river, river_position

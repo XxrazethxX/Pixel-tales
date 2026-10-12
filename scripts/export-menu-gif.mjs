@@ -10,6 +10,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1600, height: 900 } });
   await page.goto(process.env.GAME_URL || "http://127.0.0.1:3002/");
   await page.waitForFunction(() => document.querySelector("#menu-scene").dataset.animating === "true");
+  await page.evaluate(() => document.fonts.ready);
   const panel = page.locator("#menu-content");
   const bounds = await panel.boundingBox();
   const image = join(temporary, "menu-panel.png");

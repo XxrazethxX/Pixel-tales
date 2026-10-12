@@ -4031,7 +4031,7 @@ function syncMenuEffects() {
     menuEffectVideo.loop = true;
     menuEffectVideo.preload = "none";
     menuEffectVideo.hidden = true;
-    menuEffectVideo.poster = "assets/main-menu-camp.png";
+    menuEffectVideo.poster = "assets/main-menu-pixel-still.png";
     menuEffectVideo.onerror = () => {
       menuEffectVideo.hidden = true;
       menuEffectVideo.dataset.animating = "false";
