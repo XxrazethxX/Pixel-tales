@@ -816,3 +816,6 @@ GAME_URL=http://127.0.0.1:3002/ PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_module
 ```
 
 [Formation](docs/screenshots/field-life-formation.png) · [Combat route](docs/screenshots/field-life-battle.png) · [Combat animation](docs/screenshots/field-life-attack.png) · [Camp routines](docs/screenshots/field-life-camp.png) · [Blacksmith](docs/screenshots/field-life-smith.png) · [Tavern](docs/screenshots/field-life-tavern.png) · [Academy](docs/screenshots/field-life-academy.png) · [Travel safety](docs/screenshots/field-life-travel.png) · [Mobile](docs/screenshots/field-life-mobile.png)
+
+
+The ground art pass adds smoothly shaded meadow, forest, haunted, quarry, riverbank and worn-earth textures, with clustered grass, moss, leaf litter, stones and soil patches. Roads include embedded gravel and worn tracks; fields have shaded furrows and individual crop stems. Camp clearings use scuffed earth, and battlefields share continuous material textures beneath a quieter tactical grid. Textures are cached per scene and biome. Movement, cover, terrain costs and saves are unchanged.

@@ -529,50 +529,7 @@ export function worldArtwork() {
   landscape = surface(WORLD.width, WORLD.height);
   const c = landscape.getContext("2d");
   pixel(c, 0, 0, WORLD.width, WORLD.height, artPalette.meadow);
-  // Low contrast patches make open land readable without a conspicuous tile grid.
-  for (let y = 0; y < WORLD.height; y += 8)
-    for (let x = 0; x < WORLD.width; x += 8) {
-      const highlands = terrainAt({ x, y }) === "highlands",
-        region = regionAt({ x, y });
-      const n = noise(Math.floor(x / 48), Math.floor(y / 48));
-      pixel(
-        c,
-        x,
-        y,
-        8,
-        8,
-        highlands
-          ? ["#a1a4ad", "#adb0b9", "#a7abb3"][Math.floor(n * 2.99)]
-          : region.id === "haunted"
-            ? ["#909994", "#899591", "#98a198"][Math.floor(n * 2.99)]
-            : region.id === "city"
-              ? ["#b0aa87", "#aaa57e", "#b6b08d"][Math.floor(n * 2.99)]
-              : ["#98a16a", "#929b64", "#a1a977"][Math.floor(n * 2.99)],
-      );
-      if (noise(x, y) > 0.7) {
-        pixel(c, x + 2, y + 5, 3, 1, highlands ? "#959779" : "#8c9867");
-        pixel(c, x + 3, y + 3, 1, 3, highlands ? "#bdb897" : "#b7bb87");
-      }
-    }
-  // Fine ground details stay quiet under figures, but give the map the same
-  // worn, layered materials as the menu: grass blades, petals and small stones.
-  for (let i = 0; i < 1600; i++) {
-    const x = Math.floor(noise(i, 41) * WORLD.width),
-      y = Math.floor(noise(i, 42) * WORLD.height);
-    if (terrainAt({ x, y }) === "water") continue;
-    pixel(c, x, y, 2, 1, i % 9 ? "#7d8b59" : "#ccb681");
-    if (i % 4 === 0) pixel(c, x + 1, y - 2, 1, 2, "#aeb879");
-    if (i % 17 === 0) pixel(c, x - 1, y - 3, 2, 1, "#d1bd95");
-  }
-  // Soft-edged woodland ground, with individual trees layered over it below.
-  for (const forest of places.filter((p) => p.type === "forest")) {
-    for (let y = forest.y - 82; y < forest.y + 82; y += 4)
-      for (let x = forest.x - 92; x < forest.x + 92; x += 4) {
-        const d = Math.hypot((x - forest.x) / 92, (y - forest.y) / 82);
-        if (d < 0.88 + noise(x, y) * 0.22)
-          pixel(c, x, y, 4, 4, noise(x, y, 2) > 0.7 ? "#96a16c" : "#899666");
-      }
-  }
+  paintGround(c, WORLD.width, WORLD.height, "world");
   // Footpaths are scenery only: travel remains unrestricted.
   function path(points, width, color) {
     c.strokeStyle = color;
@@ -582,6 +539,44 @@ export function worldArtwork() {
     c.beginPath();
     points.forEach((p, i) => (i ? c.lineTo(p.x, p.y) : c.moveTo(p.x, p.y)));
     c.stroke();
+    if (width < 5) return;
+    // Embedded gravel, two worn wheel ruts, and broken grassy verges.
+    for (let i = 1; i < points.length; i++) {
+      const a = points[i - 1],
+        b = points[i],
+        length = Math.hypot(b.x - a.x, b.y - a.y),
+        nx = -(b.y - a.y) / length,
+        ny = (b.x - a.x) / length;
+      for (let d = 0; d < length; d += 3) {
+        const t = d / length,
+          x = a.x + (b.x - a.x) * t,
+          y = a.y + (b.y - a.y) * t,
+          n = noise(Math.round(x), Math.round(y), 19);
+        const offset = (n - 0.5) * width * 0.72;
+        pixel(
+          c,
+          x + nx * offset,
+          y + ny * offset,
+          n > 0.7 ? 2 : 1,
+          1,
+          n > 0.65 ? "#d5c5a0" : "#a1936d",
+        );
+        if (width >= 7 && n > 0.35)
+          for (const side of [-1, 1])
+            pixel(c, x + nx * 2 * side, y + ny * 2 * side, 2, 1, "#a89a75");
+        if (width >= 7 && n > 0.7)
+          for (const side of [-1, 1]) {
+            pixel(
+              c,
+              x + nx * (width / 2 + 1) * side,
+              y + ny * (width / 2 + 1) * side,
+              2,
+              2,
+              "#83915c",
+            );
+          }
+      }
+    }
   }
   const road = [
     { x: 0, y: 320 },
@@ -598,7 +593,7 @@ export function worldArtwork() {
   ];
   path(road, 11, "#9c9568");
   path(road, 7, "#c6ba85");
-  path(road, 2, "#d1c591");
+  // The centre stays worn and irregular rather than a painted bright stripe.
   path([places[0], { x: 255, y: 223 }, places[1]], 5, "#bbb07d");
   path([places[3], { x: 606, y: 242 }, places[5]], 5, "#bbb07d");
   // Raster river follows the same curve as the game's shallow-water terrain.
@@ -608,6 +603,14 @@ export function worldArtwork() {
     pixel(c, x - 15, y, 30, 1, artPalette.bank);
     pixel(c, x - 12, y, 25, 1, "#84aaa0");
     pixel(c, x - 9, y, 19, 1, artPalette.water);
+    const bankNoise = noise(x, y, 31);
+    if (bankNoise > 0.73) {
+      for (const side of [-1, 1]) {
+        pixel(c, x + side * 14, y, 3, 2, "#8d8d72");
+        pixel(c, x + side * 14, y - 1, 2, 1, "#c9c2a0");
+      }
+    }
+    if (bankNoise > 0.5) pixel(c, x - 19, y, 2, 3, "#617d5b");
     if (y % 17 === 0) pixel(c, x - 3, y, 7, 1, "#a4c0aa");
     if (y % 29 === 0) pixel(c, x + 5, y, 4, 1, "#c2d2b6");
   }
@@ -647,9 +650,23 @@ export function worldArtwork() {
     for (let col = 0; col < 3; col++) {
       const x = 52 + col * 78,
         y = 365 + row * 30;
-      pixel(c, x, y, 65, 22, "#aaa16a");
-      for (let furrow = 0; furrow < 5; furrow++)
-        pixel(c, x + furrow * 12, y + 3, 2, 16, "#c4b576");
+      pixel(c, x, y, 65, 22, "#938b60");
+      for (let furrow = 0; furrow < 5; furrow++) {
+        const fx = x + furrow * 12;
+        pixel(c, fx, y + 2, 2, 18, "#756f50");
+        for (let stem = 0; stem < 5; stem++) {
+          const yy = y + 3 + stem * 3,
+            xx = fx + 3 + (stem % 2);
+          pixel(c, xx, yy, 1, 4, "#aaa36b");
+          pixel(c, xx - 1, yy, 3, 1, "#c5b77e");
+          pixel(c, xx + 1, yy + 1, 2, 1, "#b7a568");
+        }
+      }
+      for (let k = 0; k < 30; k++) {
+        const xx = x + Math.floor(noise(k, row * 3 + col) * 65),
+          yy = y + Math.floor(noise(k, 87) * 22);
+        pixel(c, xx, yy, 1, 1, "#aba278");
+      }
     }
   for (let i = 0; i < 70; i++) {
     const x = 520 + Math.floor(noise(i, 1) * 950),
@@ -1187,34 +1204,13 @@ export function drawBattlefield(c, s) {
       river: ["#7d927d", "#9aa88c", "#acb398"],
       meadow: ["#879064", "#a8aa7c", "#afb184"],
     }[style];
-  pixel(c, 0, 0, 768, 432, colors[0]);
-  for (let i = 0; i < 360; i++) {
-    const x = Math.floor(noise(i, 8) * 768),
-      y = Math.floor(noise(i, 9) * 432);
-    pixel(c, x, y, 3, 1, i % 2 ? "#9eaa79" : "#758356");
-  }
+  c.drawImage(groundTexture(768, 432, style), 0, 0);
+  c.save();
+  c.strokeStyle = "#ddd4a33b";
+  c.lineWidth = 1;
   for (let y = 0; y < 7; y++)
-    for (let x = 0; x < 9; x++) {
-      pixel(
-        c,
-        105 + x * 62,
-        y * 60,
-        60,
-        58,
-        (x + y) % 2 ? colors[1] : colors[2],
-      );
-      pixel(c, 106 + x * 62, 1 + y * 60, 58, 1, "#bdbe8f");
-      for (let k = 0; k < 5; k++)
-        pixel(
-          c,
-          110 + x * 62 + ((k * 17) % 48),
-          8 + y * 60 + ((k * 13) % 39),
-          2,
-          1,
-          "#969e70",
-        );
-      pixel(c, 106 + x * 62, 57 + y * 60, 58, 1, "#899568");
-    }
+    for (let x = 0; x < 9; x++) c.strokeRect(105 + x * 62, y * 60, 60, 58);
+  c.restore();
   if (s)
     for (const tile of battleTerrain(s)) {
       const x = 105 + tile.x * 62,
@@ -1411,9 +1407,13 @@ export function drawCampScene(c, s, motion = true) {
   if (!campGround) {
     campGround = surface(768, 432);
     const g = campGround.getContext("2d");
-    pixel(g, 0, 0, 768, 432, "#8d9b6e");
-    steppedOval(g, 126, 54, 446, 352, "#a5a579");
-    steppedOval(g, 156, 82, 396, 288, "#b7b080");
+    g.drawImage(groundTexture(768, 432, "forest"), 0, 0);
+    g.save();
+    g.beginPath();
+    g.ellipse(349, 230, 222, 174, 0, 0, Math.PI * 2);
+    g.clip();
+    g.drawImage(groundTexture(768, 432, "camp"), 0, 0);
+    g.restore();
     for (let i = 0; i < 600; i++) {
       const x = Math.floor(noise(i, 7) * 768),
         y = Math.floor(noise(i, 8) * 432);
@@ -1430,17 +1430,25 @@ export function drawCampScene(c, s, motion = true) {
     for (let i = 0; i < 8; i++) rock(g, 230 + i * 27, 353 + (i % 2) * 5);
   }
   c.imageSmoothingEnabled = false;
+  c.fillStyle = c.createPattern(groundTexture(768, 432, "forest"), "repeat");
+  c.fillRect(-768, -432, 2304, 1296);
   c.drawImage(campGround, 0, 0);
   if (s.fieldwork.campSize) {
     const b = campBounds(s);
-    steppedOval(
-      c,
-      b.left - 20,
-      b.top - 30,
-      b.right - b.left + 60,
-      b.bottom - b.top + 70,
-      "#b1aa7b",
+    c.save();
+    c.beginPath();
+    c.ellipse(
+      (b.left + b.right) / 2 + 10,
+      (b.top + b.bottom) / 2 + 5,
+      (b.right - b.left + 60) / 2,
+      (b.bottom - b.top + 70) / 2,
+      0,
+      0,
+      Math.PI * 2,
     );
+    c.clip();
+    c.drawImage(groundTexture(768, 432, "camp"), 0, 0);
+    c.restore();
     for (let i = 4; i < campCapacity(s); i++) {
       pixel(c, 145 + (i - 4) * 30, 225, 20, 26, "#7b815c");
       pixel(c, 147 + (i - 4) * 30, 228, 16, 20, "#c4b78c");
@@ -2598,4 +2606,158 @@ export function drawVillageRoom(c, kind, s, focus = null) {
     s.party[0],
   );
   return spots;
+}
+
+// Layered ground is baked once per scene; gameplay draws cached logical pixels.
+const groundTextures = new Map();
+function groundTexture(width, height, style) {
+  const key = `${width}:${height}:${style}`;
+  if (!groundTextures.has(key)) {
+    const image = surface(width, height);
+    paintGround(image.getContext("2d"), width, height, style);
+    groundTextures.set(key, image);
+  }
+  return groundTextures.get(key);
+}
+function groundNoise(x, y, scale, seed) {
+  const xx = x / scale,
+    yy = y / scale,
+    ix = Math.floor(xx),
+    iy = Math.floor(yy);
+  let fx = xx - ix,
+    fy = yy - iy;
+  fx = fx * fx * (3 - 2 * fx);
+  fy = fy * fy * (3 - 2 * fy);
+  const a = noise(ix, iy, seed) * (1 - fx) + noise(ix + 1, iy, seed) * fx;
+  const b =
+    noise(ix, iy + 1, seed) * (1 - fx) + noise(ix + 1, iy + 1, seed) * fx;
+  return a * (1 - fy) + b * fy;
+}
+function groundMaterial(x, y, style) {
+  if (style === "world") {
+    const biome = terrainAt({ x, y }),
+      region = regionAt({ x, y });
+    if (biome === "highlands") return "quarry";
+    if (biome === "forest") return "forest";
+    if (region.id === "haunted") return "haunted";
+    if (region.id === "city") return "road";
+    return "meadow";
+  }
+  return style;
+}
+function paintGround(c, width, height, style) {
+  const palettes = {
+    meadow: ["#808e59", "#89975f", "#929e69", "#9ba673", "#a2ac7b", "#aab182"],
+    forest: ["#687c50", "#728457", "#7b8c5e", "#849467", "#8e9d70", "#9aa77c"],
+    haunted: ["#73867a", "#7c8d80", "#869588", "#8e9d8e", "#98a598", "#a1aea0"],
+    road: ["#8b8864", "#96916b", "#a09973", "#aaa27e", "#b4aa89", "#bdb494"],
+    camp: ["#938766", "#9d9270", "#a79c7a", "#b0a483", "#b7ad8c", "#bfb594"],
+    ruin: ["#858571", "#908c78", "#999581", "#a29e89", "#aca791", "#b5b29d"],
+    quarry: ["#888573", "#93917e", "#9e9a87", "#a8a291", "#b2ad9b", "#bbb6a5"],
+    river: ["#6f8b73", "#7b947d", "#869c85", "#90a58e", "#9aae99", "#a4b6a1"],
+  };
+  // Three smoothly interpolated scales avoid rectangular repeating patches.
+  for (let y = 0; y < height; y += 2)
+    for (let x = 0; x < width; x += 2) {
+      const material = groundMaterial(
+          style === "world"
+            ? x + (noise(Math.floor(x / 3), Math.floor(y / 3), 82) - 0.5) * 30
+            : x,
+          style === "world"
+            ? y + (noise(Math.floor(x / 3), Math.floor(y / 3), 83) - 0.5) * 30
+            : y,
+          style,
+        ),
+        colors = palettes[material] || palettes.meadow;
+      const n =
+        groundNoise(x, y, 95, 14) * 0.48 +
+        groundNoise(x, y, 27, 28) * 0.32 +
+        groundNoise(x, y, 7, 7) * 0.2;
+      pixel(c, x, y, 2, 2, colors[Math.min(5, Math.floor(n * 6))]);
+    }
+  // Irregular clusters of grass, soil, slate, roots and leaf litter.
+  for (let i = 0; i < Math.floor((width * height) / 72); i++) {
+    const x = Math.floor(noise(i, 51) * width),
+      y = Math.floor(noise(i, 52) * height),
+      material = groundMaterial(x, y, style);
+    const lush = ["meadow", "forest", "haunted", "river"].includes(material);
+    const cluster = groundNoise(x, y, 42, 66),
+      r = noise(i, 53);
+    if (lush && r < 0.7) {
+      if (cluster < 0.34) continue;
+      const dark =
+        material === "forest"
+          ? "#526d43"
+          : material === "haunted"
+            ? "#647e70"
+            : "#73854f";
+      const light = material === "haunted" ? "#a9b9a4" : "#b0bb82";
+      pixel(c, x - 2, y + 2, 5, 1, dark);
+      pixel(c, x, y - 2, 1, 4, dark);
+      pixel(c, x - 2, y, 1, 2, light);
+      pixel(c, x + 2, y - 1, 1, 3, light);
+      if (r < 0.15) {
+        pixel(c, x - 4, y + 1, 1, 2, dark);
+        pixel(c, x + 4, y, 1, 3, dark);
+      }
+      if (material === "forest" && r > 0.5) {
+        pixel(c, x + 4, y + 3, 2, 1, "#a49165");
+        pixel(c, x + 5, y + 4, 1, 1, "#746344");
+      }
+      if (material === "meadow" && r < 0.035) {
+        pixel(c, x, y - 3, 2, 1, "#d9c396");
+        pixel(c, x + 4, y - 1, 1, 1, "#c8b991");
+      }
+    } else if (r > 0.7) {
+      pixel(c, x, y, 3, 2, material === "quarry" ? "#7f8178" : "#8c856b");
+      pixel(c, x, y, 2, 1, material === "quarry" ? "#c3c4b1" : "#c0b796");
+      pixel(
+        c,
+        x + 2,
+        y + 2,
+        2,
+        1,
+        material === "quarry" ? "#777b70" : "#807e60",
+      );
+      if (material === "quarry" && r > 0.96) {
+        pixel(c, x - 3, y - 1, 6, 1, "#777c73");
+        pixel(c, x - 2, y - 2, 4, 1, "#bbbcaa");
+      }
+    } else if (!lush) {
+      pixel(
+        c,
+        x,
+        y,
+        2 + Math.floor(r * 5),
+        1,
+        material === "camp" ? "#8f805f" : "#8e8c76",
+      );
+      if (r < 0.25) pixel(c, x + 1, y - 1, 3, 1, "#c1b89d");
+    }
+  }
+  // Larger soil clearings and moss patches are stippled, with broken edges.
+  for (let i = 0; i < Math.floor((width * height) / 5500); i++) {
+    const x = Math.floor(noise(i, 61) * width),
+      y = Math.floor(noise(i, 62) * height),
+      material = groundMaterial(x, y, style);
+    for (let dy = -7; dy <= 7; dy++)
+      for (let dx = -12; dx <= 12; dx++) {
+        const edge = (dx * dx) / 144 + (dy * dy) / 49;
+        if (edge < 1 && noise(x + dx, y + dy, 71) > 0.55 + edge * 0.28)
+          pixel(
+            c,
+            x + dx,
+            y + dy,
+            1,
+            1,
+            material === "forest"
+              ? "#667749"
+              : material === "meadow"
+                ? "#a09a70"
+                : material === "quarry"
+                  ? "#85877b"
+                  : "#9c9376",
+          );
+      }
+  }
 }
