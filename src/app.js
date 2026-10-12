@@ -411,6 +411,8 @@ import {
 let gameActive = false;
 let hasSessionCompany = false;
 let menuSettings = { largeText: false, reduceMotion: false, slowDays: false };
+let menuEffectCanvas = null, menuEffectFrame = null, menuEffectLast = -Infinity;
+const menuMotionPreference = window.matchMedia("(prefers-reduced-motion: reduce)");
 try {
   const saved = JSON.parse(localStorage.getItem("pixel-tales-settings"));
   for (const key of Object.keys(menuSettings))
@@ -4012,6 +4014,108 @@ canvas.addEventListener("pointermove", (event) => {
   }
 });
 
+// Coordinates use the backdrop's original 1672 × 941 pixels. Match CSS cover
+// and its mobile crop so sparks stay attached to their source on every screen.
+function drawMenuEffects(time) {
+  const c = menuEffectCanvas, g = c.getContext("2d");
+  const width = innerWidth, height = innerHeight;
+  const w = Math.ceil(width / 2), h = Math.ceil(height / 2);
+  if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.clearRect(0, 0, w, h);
+  const scale = Math.max(width / 1672, height / 941);
+  const crop = width <= 600 ? 0.62 : 0.5;
+  const offsetX = (width - 1672 * scale) * crop;
+  const offsetY = (height - 941 * scale) * 0.5;
+  g.setTransform(scale / 2, 0, 0, scale / 2, offsetX / 2, offsetY / 2);
+  c.dataset.scale = scale.toFixed(5);
+  c.dataset.offsetX = offsetX.toFixed(2);
+  c.dataset.offsetY = offsetY.toFixed(2);
+  const t = time / 1000;
+  const glow = (x, y, radius, color, strength) => {
+    const gradient = g.createRadialGradient(x, y, 0, x, y, radius);
+    gradient.addColorStop(0, color); gradient.addColorStop(1, "transparent");
+    g.globalAlpha = strength; g.fillStyle = gradient;
+    g.fillRect(x - radius, y - radius, radius * 2, radius * 2);
+    g.globalAlpha = 1;
+  };
+  glow(946, 695, 100, "#ff9c35", 0.11 + 0.04 * Math.sin(t * 7));
+  // Small stepped flame tongues blend into the existing fire rather than
+  // covering the surrounding characters with a replacement sprite.
+  for (let i = 0; i < 7; i++) {
+    const x = 922 + i * 7;
+    const height = 12 + Math.round(8 * (1 + Math.sin(t * 9 + i * 2.4)));
+    g.globalAlpha = 0.35;
+    g.fillStyle = i % 2 ? "#ffa139" : "#ffce65";
+    g.fillRect(x, 699 - height, 6, height);
+    g.fillRect(x + 2, 694 - height, 3, 8);
+    g.fillStyle = "#fff0a4";
+    g.fillRect(x + 2, 691, 3, 7);
+  }
+  for (let i = 0; i < 13; i++) {
+    const age = (t * 0.22 + i / 13) % 1;
+    const x = 940 + Math.sin(i * 12.7) * 20 + Math.sin(age * 7 + i) * age * 18;
+    const y = 681 - age * (70 + (i % 4) * 12);
+    g.globalAlpha = (1 - age) * 0.75;
+    g.fillStyle = i % 3 ? "#efac54" : "#ffdd84";
+    g.fillRect(Math.round(x), Math.round(y), 2, 3);
+  }
+  // Faint drifting smoke and fireflies keep the scene calm.
+  for (let i = 0; i < 6; i++) {
+    const age = (t * 0.07 + i / 6) % 1;
+    g.globalAlpha = Math.sin(age * Math.PI) * 0.035;
+    g.fillStyle = "#c0b9a4";
+    g.fillRect(932 + Math.sin(age * 5 + i) * 14, 650 - age * 100, 12 + age * 18, 7);
+  }
+  glow(1488, 572, 38, "#438eff", 0.17 + Math.sin(t * 2.7) * 0.07);
+  glow(1617, 503, 22, "#3979e8", 0.11 + Math.sin(t * 2.7 + 0.7) * 0.05);
+  for (let i = 0; i < 8; i++) {
+    const a = t * 0.8 + i * Math.PI / 4;
+    const r = 12 + Math.sin(t * 1.5 + i) * 4;
+    g.globalAlpha = 0.35 + 0.25 * Math.sin(t * 2 + i);
+    g.fillStyle = i % 2 ? "#8dcaff" : "#c8e8ff";
+    g.fillRect(Math.round(1488 + Math.cos(a) * r), Math.round(572 + Math.sin(a) * r), 2, 2);
+  }
+  for (const [x, y] of [[40, 291], [869, 352]])
+    glow(x, y, 29, "#ffc35b", 0.10 + 0.04 * Math.sin(t * 5 + x));
+  glow(1450, 106, 36, "#6f9eff", 0.055 + 0.025 * Math.sin(t));
+  for (let i = 0; i < 15; i++) {
+    const x = 650 + ((i * 139) % 850) + Math.sin(t * 0.3 + i) * 5;
+    const y = 470 + ((i * 61) % 220) + Math.cos(t * 0.4 + i) * 5;
+    g.globalAlpha = Math.max(0, Math.sin(t * 0.7 + i * 2)) * 0.45;
+    g.fillStyle = "#ead88e";
+    g.fillRect(Math.round(x), Math.round(y), 2, 2);
+  }
+  g.globalAlpha = 1;
+}
+function syncMenuEffects() {
+  if (!menuEffectCanvas) {
+    menuEffectCanvas = document.createElement("canvas");
+    menuEffectCanvas.id = "menu-effects";
+    menuEffectCanvas.setAttribute("aria-hidden", "true");
+    $("front-menu").prepend(menuEffectCanvas);
+  }
+  const active = !$("front-menu").hidden && !document.hidden &&
+    !menuSettings.reduceMotion && !menuMotionPreference.matches;
+  menuEffectCanvas.hidden = !active;
+  menuEffectCanvas.dataset.animating = String(active);
+  if (menuEffectFrame !== null) cancelAnimationFrame(menuEffectFrame);
+  menuEffectFrame = null;
+  if (!active) return;
+  const frame = (time) => {
+    if (time - menuEffectLast >= 80) {
+      drawMenuEffects(time);
+      menuEffectLast = time;
+    }
+    menuEffectFrame = requestAnimationFrame(frame);
+  };
+  menuEffectLast = -Infinity;
+  menuEffectFrame = requestAnimationFrame(frame);
+}
+menuMotionPreference.addEventListener("change", syncMenuEffects);
+document.addEventListener("visibilitychange", syncMenuEffects);
+window.addEventListener("resize", () => { menuEffectLast = -Infinity; });
+
 function menuRead(key, fallback = null) {
   try {
     return JSON.parse(localStorage.getItem(key)) ?? fallback;
@@ -4073,6 +4177,7 @@ function menuShell(title) {
 function applyMenuSettings() {
   document.body.classList.toggle("large-text", menuSettings.largeText);
   document.body.classList.toggle("reduce-motion", menuSettings.reduceMotion);
+  syncMenuEffects();
 }
 function beginPlaying(company) {
   hasSessionCompany = true;
@@ -4086,6 +4191,7 @@ function beginPlaying(company) {
   tab = "Company";
   heldKeys.clear();
   $("front-menu").hidden = true;
+  syncMenuEffects();
   document.body.classList.remove("menu-open");
   for (const e of document.querySelectorAll(
     "body > header, body > main, body > footer",
