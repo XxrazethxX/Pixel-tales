@@ -4,7 +4,7 @@ An original, playable high-fantasy mercenary-company RPG with compact pixel visu
 
 The latest update, **v0.33**, adds prepared magic and fantasy classes, a flag-bearer unlock, grouped camp and village menus, draggable camp furnishings, camp expansion and crowding, secure lodges, direct dungeon controls, varied battle terrain, and centered after-action reports. The next campaign chapter remains deferred.
 
-The title screen now brings the campsite concept into the game, with working Continue, New Company, Load Game, Settings, Credits, and Quit controls. It adapts to mobile and keeps existing company saves intact. Pixel flames, rising embers, subtle smoke, pulsing mage magic, flickering lanterns, fireflies, and a distant city shimmer animate over the backdrop. Effects match the mobile crop, run at about 12 frames per second, pause during gameplay and in hidden tabs, and respect both the game’s Reduced motion setting and the operating system’s motion preference.
+The title screen now brings the campsite concept into the game, with working Continue, New Company, Load Game, Settings, Credits, and Quit controls. It adapts to mobile and keeps existing company saves intact. Soft, screen-blended lighting animates the painted fire and mage orb, with faint embers, diffuse smoke, lantern flicker, fireflies, and distant city shimmer. The original flame silhouette remains intact. Effects match the mobile crop, run at about 30 frames per second, pause during gameplay and in hidden tabs, and respect both the game’s Reduced motion setting and the operating system’s motion preference.
 
 [Main menu desktop preview](docs/screenshots/main-menu-desktop.png) · [Main menu mobile preview](docs/screenshots/main-menu-mobile.png)
 

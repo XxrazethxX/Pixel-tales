@@ -4019,74 +4019,78 @@ canvas.addEventListener("pointermove", (event) => {
 function drawMenuEffects(time) {
   const c = menuEffectCanvas, g = c.getContext("2d");
   const width = innerWidth, height = innerHeight;
-  const w = Math.ceil(width / 2), h = Math.ceil(height / 2);
-  if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+  if (c.width !== width || c.height !== height) {
+    c.width = width;
+    c.height = height;
+  }
   g.setTransform(1, 0, 0, 1, 0, 0);
-  g.clearRect(0, 0, w, h);
+  g.clearRect(0, 0, width, height);
   const scale = Math.max(width / 1672, height / 941);
   const crop = width <= 600 ? 0.62 : 0.5;
   const offsetX = (width - 1672 * scale) * crop;
   const offsetY = (height - 941 * scale) * 0.5;
-  g.setTransform(scale / 2, 0, 0, scale / 2, offsetX / 2, offsetY / 2);
+  g.setTransform(scale, 0, 0, scale, offsetX, offsetY);
   c.dataset.scale = scale.toFixed(5);
   c.dataset.offsetX = offsetX.toFixed(2);
   c.dataset.offsetY = offsetY.toFixed(2);
   const t = time / 1000;
-  const glow = (x, y, radius, color, strength) => {
-    const gradient = g.createRadialGradient(x, y, 0, x, y, radius);
-    gradient.addColorStop(0, color); gradient.addColorStop(1, "transparent");
-    g.globalAlpha = strength; g.fillStyle = gradient;
-    g.fillRect(x - radius, y - radius, radius * 2, radius * 2);
-    g.globalAlpha = 1;
+  // Screen blending brightens the painted sources without laying opaque
+  // replacement shapes over them. Every effect fades all the way at its edge.
+  g.globalCompositeOperation = "screen";
+  const glow = (x, y, radius, color, strength, stretch = 1) => {
+    g.save();
+    g.translate(x, y);
+    g.scale(1, stretch);
+    const gradient = g.createRadialGradient(0, 0, 0, 0, 0, radius);
+    gradient.addColorStop(0, color);
+    gradient.addColorStop(0.28, color);
+    gradient.addColorStop(1, "transparent");
+    g.globalAlpha = strength;
+    g.fillStyle = gradient;
+    g.fillRect(-radius, -radius, radius * 2, radius * 2);
+    g.restore();
   };
-  glow(946, 695, 100, "#ff9c35", 0.11 + 0.04 * Math.sin(t * 7));
-  // Small stepped flame tongues blend into the existing fire rather than
-  // covering the surrounding characters with a replacement sprite.
+  const flicker = 0.5 + 0.22 * Math.sin(t * 4.1) +
+    0.17 * Math.sin(t * 7.3 + 1.2) + 0.11 * Math.sin(t * 11.7 + 2.8);
+  // Keep the image's flame silhouette; move faint warmth within it, then let
+  // its reflected light breathe across the hearth and nearby equipment.
+  glow(946, 688, 84, "#ed8932", 0.025 + flicker * 0.045, 0.65);
+  glow(948 + Math.sin(t * 2.8) * 2, 672 + Math.sin(t * 3.9) * 3,
+    18, "#ffd082", 0.055 + flicker * 0.075, 1.4);
+  glow(934, 694, 13, "#fca44e", 0.025 + flicker * 0.035);
   for (let i = 0; i < 7; i++) {
-    const x = 922 + i * 7;
-    const height = 12 + Math.round(8 * (1 + Math.sin(t * 9 + i * 2.4)));
-    g.globalAlpha = 0.35;
-    g.fillStyle = i % 2 ? "#ffa139" : "#ffce65";
-    g.fillRect(x, 699 - height, 6, height);
-    g.fillRect(x + 2, 694 - height, 3, 8);
-    g.fillStyle = "#fff0a4";
-    g.fillRect(x + 2, 691, 3, 7);
+    const age = (t * (0.13 + i * 0.006) + i * 0.137) % 1;
+    const fade = Math.sin(age * Math.PI) ** 2;
+    const x = 944 + Math.sin(i * 12.7) * 15 + Math.sin(age * 5 + i) * age * 12;
+    const y = 679 - age * (45 + (i % 4) * 12);
+    glow(x, y, 1.6, "#efb56c", fade * 0.32, 1.35);
   }
-  for (let i = 0; i < 13; i++) {
-    const age = (t * 0.22 + i / 13) % 1;
-    const x = 940 + Math.sin(i * 12.7) * 20 + Math.sin(age * 7 + i) * age * 18;
-    const y = 681 - age * (70 + (i % 4) * 12);
-    g.globalAlpha = (1 - age) * 0.75;
-    g.fillStyle = i % 3 ? "#efac54" : "#ffdd84";
-    g.fillRect(Math.round(x), Math.round(y), 2, 3);
+  // Diffuse smoke, never the hard horizontal rectangles of the first pass.
+  for (let i = 0; i < 4; i++) {
+    const age = (t * 0.055 + i / 4) % 1;
+    glow(944 + Math.sin(age * 4 + i) * 10, 653 - age * 83,
+      10 + age * 17, "#aaa99c", Math.sin(age * Math.PI) ** 2 * 0.018, 0.8);
   }
-  // Faint drifting smoke and fireflies keep the scene calm.
-  for (let i = 0; i < 6; i++) {
-    const age = (t * 0.07 + i / 6) % 1;
-    g.globalAlpha = Math.sin(age * Math.PI) * 0.035;
-    g.fillStyle = "#c0b9a4";
-    g.fillRect(932 + Math.sin(age * 5 + i) * 14, 650 - age * 100, 12 + age * 18, 7);
+  const magic = (1 + Math.sin(t * 1.6)) / 2;
+  glow(1488, 572, 29, "#508bd8", 0.035 + magic * 0.055);
+  glow(1488, 572, 7, "#91c8ff", 0.045 + magic * 0.06);
+  glow(1617, 503, 16, "#4e82c8", 0.02 + magic * 0.03);
+  // A few wisps drift out and vanish; no evenly spaced orbiting ring.
+  for (let i = 0; i < 3; i++) {
+    const age = (t * 0.12 + i * 0.31) % 1;
+    glow(1488 + Math.sin(age * 4 + i * 2) * (4 + age * 10),
+      574 - age * 24, 1.5, "#93c5ed", Math.sin(age * Math.PI) ** 2 * 0.18);
   }
-  glow(1488, 572, 38, "#438eff", 0.17 + Math.sin(t * 2.7) * 0.07);
-  glow(1617, 503, 22, "#3979e8", 0.11 + Math.sin(t * 2.7 + 0.7) * 0.05);
-  for (let i = 0; i < 8; i++) {
-    const a = t * 0.8 + i * Math.PI / 4;
-    const r = 12 + Math.sin(t * 1.5 + i) * 4;
-    g.globalAlpha = 0.35 + 0.25 * Math.sin(t * 2 + i);
-    g.fillStyle = i % 2 ? "#8dcaff" : "#c8e8ff";
-    g.fillRect(Math.round(1488 + Math.cos(a) * r), Math.round(572 + Math.sin(a) * r), 2, 2);
-  }
-  for (const [x, y] of [[40, 291], [869, 352]])
-    glow(x, y, 29, "#ffc35b", 0.10 + 0.04 * Math.sin(t * 5 + x));
-  glow(1450, 106, 36, "#6f9eff", 0.055 + 0.025 * Math.sin(t));
-  for (let i = 0; i < 15; i++) {
-    const x = 650 + ((i * 139) % 850) + Math.sin(t * 0.3 + i) * 5;
-    const y = 470 + ((i * 61) % 220) + Math.cos(t * 0.4 + i) * 5;
-    g.globalAlpha = Math.max(0, Math.sin(t * 0.7 + i * 2)) * 0.45;
-    g.fillStyle = "#ead88e";
-    g.fillRect(Math.round(x), Math.round(y), 2, 2);
+  for (const [x, y] of [[40, 291], [877, 354]])
+    glow(x, y, 24, "#eeb369", 0.025 + flicker * 0.025);
+  glow(1450, 106, 26, "#759cd3", 0.015 + 0.01 * Math.sin(t * 0.7));
+  for (let i = 0; i < 7; i++) {
+    const x = 680 + ((i * 139) % 790) + Math.sin(t * 0.22 + i) * 4;
+    const y = 475 + ((i * 61) % 190) + Math.cos(t * 0.27 + i) * 4;
+    glow(x, y, 1.6, "#c6bd86", Math.max(0, Math.sin(t * 0.55 + i * 2)) ** 2 * 0.2);
   }
   g.globalAlpha = 1;
+  g.globalCompositeOperation = "source-over";
 }
 function syncMenuEffects() {
   if (!menuEffectCanvas) {
@@ -4103,7 +4107,7 @@ function syncMenuEffects() {
   menuEffectFrame = null;
   if (!active) return;
   const frame = (time) => {
-    if (time - menuEffectLast >= 80) {
+    if (time - menuEffectLast >= 32) {
       drawMenuEffects(time);
       menuEffectLast = time;
     }

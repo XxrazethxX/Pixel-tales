@@ -1331,7 +1331,7 @@ nav button[data-count]::after {
   width: 100%;
   height: 100%;
   pointer-events: none;
-  image-rendering: pixelated;
+  image-rendering: auto;
   z-index: 0;
 }
 #menu-effects[hidden] { display: none; }
