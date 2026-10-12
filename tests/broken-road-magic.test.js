@@ -55,6 +55,8 @@ function fight(s = fresh()) {
   arrive(s, 1);
   s.contract = { target: 1, reward: 65 };
   assert.ok(startBattle(s));
+  // Fixed terrain fixture for coordinate-specific tactical assertions.
+  delete s.battle.fieldSeed;
   return s;
 }
 function magical() {

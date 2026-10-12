@@ -264,7 +264,7 @@ test("battle terrain changes between fights, stays connected and survives saves"
   const layouts = [];
   for (let i = 0; i < 3; i++) {
     const s = rich();
-    s.skirmishes = i;
+    s.fieldLife.encounter = i;
     const p = patrol(s, "caravan");
     startBattle(s, p.id);
     layouts.push(JSON.stringify(battleTerrain(s)));

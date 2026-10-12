@@ -1389,3 +1389,12 @@ nav button[data-count]::after {
 .map-frame { box-shadow: inset 0 0 0 3px #776b4b, 0 3px 0 #222b20; }
 #drawer { border-color: #927b53; }
 button { border-radius: 0; }
+.travel-controls { display:flex; flex-wrap:wrap; gap:8px; align-items:center; background:#e4d5ad; border:1px solid #9b8b62; padding:6px; }
+.travel-controls label { display:flex; align-items:center; gap:4px; }
+.travel-controls span { font-size:11px; }
+.combat-preview { padding:8px; background:#eee0b9; color:#423b2c; border:2px solid #967a4d; max-width:700px; }
+.combat-preview button { margin:5px 4px 0 0; }
+.formation-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:3px; margin:8px 0; }
+.formation-grid span { border:1px solid #94825e; padding:5px; text-align:center; overflow:hidden; }
+.village-interior { display:block; width:100%; height:auto; image-rendering:pixelated; border:2px solid #6d5a40; touch-action:manipulation; cursor:pointer; }
+.travel-controls select { width:130px; flex:0 0 130px; }

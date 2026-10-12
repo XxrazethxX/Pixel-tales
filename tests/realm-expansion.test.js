@@ -57,6 +57,8 @@ function fight(role = "Wizard") {
   arrive(s, 1);
   s.contract = { target: 1, tier: 1, reward: 65 };
   assert.ok(startBattle(s));
+  // Fixed terrain fixture for coordinate-specific tactical assertions.
+  delete s.battle.fieldSeed;
   s.battle.layout = "legacy";
   s.battle.units[0].x = 2;
   s.battle.units[0].y = 2;

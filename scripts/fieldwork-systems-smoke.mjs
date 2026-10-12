@@ -243,6 +243,7 @@ try {
   Object.assign(battle.battle.units[0], { x: 1, y: 1 });
   await seed(battle);
   await tile(2, 1);
+  await click("Confirm combat action");
   await page.getByRole("dialog", { name: "After-action report" }).waitFor();
   assert.ok(
     await page

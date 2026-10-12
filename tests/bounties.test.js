@@ -27,6 +27,8 @@ const bounty = (id = "rook") => {
   s.location = boss.target;
   s.position = { x: places[boss.target].x, y: places[boss.target].y };
   assert.equal(startBattle(s), true);
+  // Fixed terrain fixture for coordinate-specific tactical assertions.
+  delete s.battle.fieldSeed;
   return s;
 };
 const win = (s) => {

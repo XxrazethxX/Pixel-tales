@@ -24,6 +24,8 @@ const fight = (location = 2, tier = 1, day = 1) => {
   s.day = day;
   s.contract = { target: location, reward: 65, tier };
   assert.equal(startBattle(s), true);
+  // Keep the catalog-layout tests independent of encounter generation.
+  delete s.battle.fieldSeed;
   return s;
 };
 test("battle context chooses forest, ruin, mine, road and river fields, while starter deployments stay familiar", () => {

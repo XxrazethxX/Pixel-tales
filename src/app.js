@@ -1,3 +1,16 @@
+import {
+  companyOrder,
+  reorderCompany,
+  autoFormation,
+  setDeployment,
+  setTravelSpeed,
+  resumeTravel,
+  updateTravelSafety,
+  advanceEcology,
+  recoverFieldCache,
+  rescueCompanion,
+} from "./game.js";
+import { drawVillageRoom, drawDeer, drawScenery } from "./art.js";
 import { resolveCampPersonalQuest } from "./game.js";
 import { resolveCampOpportunity } from "./game.js";
 import { companyLockpicker } from "./game.js";
@@ -535,6 +548,15 @@ function repairButton(item) {
   return b;
 }
 function objective() {
+  if (
+    !s.battle &&
+    !s.event &&
+    !s.campOpen &&
+    drawerOpen &&
+    (["Market", "Blacksmith", "Tavern"].includes(tab) ||
+      (tab === "Town" && roomChoice === "Academy"))
+  )
+    return "Village interior · Click a highlighted person or station to browse services. Review costs in the service panel before purchasing.";
   if (s.event)
     return "A roadside encounter awaits your decision. Choose how to respond below.";
   if (s.battle) {
@@ -563,11 +585,13 @@ let battleVisual = null,
   combatMotion = new Map(),
   attackEffects = [],
   lastCue = 0;
+const combatFalls = new Map();
 function captureCombatFeedback() {
   if (battleVisual !== s.battle) {
     battleVisual = s.battle;
     visualSnapshot = new Map();
     combatMotion.clear();
+    combatFalls.clear();
     combatEffects = [];
     attackEffects = [];
     lastCue = 0;
@@ -585,10 +609,33 @@ function captureCombatFeedback() {
   ];
   for (const e of entities) {
     const old = visualSnapshot.get(e.key);
-    if (old && (old.x !== e.x || old.y !== e.y) && !menuSettings.reduceMotion)
-      combatMotion.set(e.key, { from: old, to: e, start: now });
+    if (old && (old.x !== e.x || old.y !== e.y) && !menuSettings.reduceMotion) {
+      const route =
+        e.walkRoute?.[0]?.x === old.x &&
+        e.walkRoute?.[0]?.y === old.y &&
+        e.walkRoute.at(-1).x === e.x &&
+        e.walkRoute.at(-1).y === e.y
+          ? e.walkRoute
+          : [old, e];
+      combatMotion.set(e.key, {
+        from: old,
+        to: e,
+        route,
+        start: now,
+        duration: Math.min(900, (route.length - 1) * 180),
+      });
+    }
     if (old && old.hp !== e.hp)
-      combatEffects.push({ x: e.x, y: e.y, amount: e.hp - old.hp, start: now });
+      combatEffects.push({
+        x: e.x,
+        y: e.y,
+        amount: e.hp - old.hp,
+        start: now,
+        key: e.key,
+      });
+    if (e.hp > 0) combatFalls.delete(e.key);
+    else if (!old || old.hp > 0)
+      combatFalls.set(e.key, { ...e, start: old ? now : now - 600 });
     next.set(e.key, { x: e.x, y: e.y, hp: e.hp });
   }
   visualSnapshot = next;
@@ -601,12 +648,16 @@ function captureCombatFeedback() {
 function combatPosition(key, entity) {
   const motion = combatMotion.get(key);
   if (!motion || menuSettings.reduceMotion) return entity;
-  const t = Math.min(1, (performance.now() - motion.start) / 320),
-    ease = t * t * (3 - 2 * t);
+  const t = Math.min(1, (performance.now() - motion.start) / motion.duration),
+    progress = t * (motion.route.length - 1),
+    segment = Math.min(motion.route.length - 2, Math.floor(progress)),
+    fraction = progress - segment,
+    from = motion.route[segment],
+    to = motion.route[segment + 1];
   if (t === 1) combatMotion.delete(key);
   return {
-    x: motion.from.x + (motion.to.x - motion.from.x) * ease,
-    y: motion.from.y + (motion.to.y - motion.from.y) * ease,
+    x: from.x + (to.x - from.x) * fraction,
+    y: from.y + (to.y - from.y) * fraction,
   };
 }
 function drawCombatEffects() {
@@ -3153,6 +3204,7 @@ function render() {
       key = `${tab}:${summary?.textContent}`;
     if (drawerFoldState.has(key)) d.open = drawerFoldState.get(key);
   }
+  appendFieldLifeUI(panel, a);
   positionObjective();
   draw();
   renderAfterAction();
@@ -3168,7 +3220,9 @@ function rect(x, y, w, h, c) {
   ctx.fillRect(x, y, w, h);
 }
 function person(x, y, c, step = 0, role = "", variant = 0, appearance = {}) {
-  drawCharacter(ctx, x, y, c, step, role, variant, appearance);
+  fieldEntityPose(x, y, (attackStep) =>
+    drawCharacter(ctx, x, y, c, step || attackStep, role, variant, appearance),
+  );
 }
 const view = { x: 0, y: 0, scale: 1 };
 function draw() {
@@ -3208,6 +3262,38 @@ function draw() {
     view.scale = Math.min(w / 560, Math.max(160, h - 180) / 400);
     view.x = 325 - w / view.scale / 2;
     view.y = 225 - Math.max(160, h - 180) / view.scale / 2;
+  }
+  activeRoomHotspots = null;
+  const interiorKind =
+    !s.battle && !s.event && !s.campOpen && drawerOpen
+      ? ["Market", "Blacksmith", "Tavern"].includes(tab)
+        ? tab
+        : tab === "Town" && roomChoice === "Academy"
+          ? "Academy"
+          : null
+      : null;
+  if (interiorKind) {
+    const drawerWidth =
+      innerWidth > 700 ? $("drawer").getBoundingClientRect().width : 0;
+    view.scale = Math.min(
+      Math.max(200, w - drawerWidth) / 400,
+      Math.max(160, h - 160) / 270,
+    );
+    view.x = 170 - (w - drawerWidth) / view.scale / 2;
+    view.y = 110 - (h - 160) / view.scale / 2;
+    ctx.setTransform(
+      view.scale,
+      0,
+      0,
+      view.scale,
+      -view.x * view.scale,
+      -view.y * view.scale,
+    );
+    canvas.dataset.viewX = view.x;
+    canvas.dataset.viewY = view.y;
+    canvas.dataset.scale = view.scale;
+    activeRoomHotspots = drawVillageRoom(ctx, interiorKind, s, roomFocus);
+    return;
   }
   if (
     ["site", "dungeon", "farm", "home", "arcane-passage"].includes(
@@ -3256,7 +3342,7 @@ function draw() {
     s.campOpen ? "#8d9b6e" : "#a3a775",
   );
   if (s.campOpen) {
-    drawCampScene(ctx, s);
+    drawCampScene(ctx, s, !menuSettings.reduceMotion);
     drawCompanyBanner(ctx, s, 610, 230, 2);
     drawCampLayoutOverlay();
     return;
@@ -3370,6 +3456,7 @@ function draw() {
           }
         }
     }
+    drawAttackRangeMarkers();
     s.battle.enemies
       .filter((e) => e.hp > 0)
       .forEach((e) => {
@@ -3378,7 +3465,17 @@ function draw() {
           e,
         );
         if (e.kind === "wolf")
-          drawWolf(ctx, 136 + visual.x * 62, 28 + visual.y * 60);
+          fieldEntityPose(136 + visual.x * 62, 28 + visual.y * 60, (step) =>
+            drawWolf(
+              ctx,
+              136 + visual.x * 62,
+              28 + visual.y * 60,
+              step ||
+                (combatMotion.has(`enemy-${s.battle.enemies.indexOf(e)}`)
+                  ? Math.sin(performance.now() / 65)
+                  : 0),
+            ),
+          );
         else if (
           [
             "goblin",
@@ -3393,14 +3490,14 @@ function draw() {
             "sorcerer",
           ].includes(e.kind)
         )
-          drawFantasyEnemy(
+          drawAnimatedBattleEnemy(
             ctx,
             e.kind,
             136 + visual.x * 62,
             28 + visual.y * 60,
           );
         else
-          drawFantasyEnemy(
+          drawAnimatedBattleEnemy(
             ctx,
             e.kind,
             136 + visual.x * 62,
@@ -3453,7 +3550,11 @@ function draw() {
             136 + visual.x * 62,
             28 + visual.y * 60,
             u.acted ? "#889079" : s.party[u.id].coat || partyCoats[u.id],
-            0,
+            combatMotion.has(`party-${u.id}`) && !menuSettings.reduceMotion
+              ? Math.sin(performance.now() / 65) > 0
+                ? 1
+                : -1
+              : 0,
             s.party[u.id].role,
             u.id,
             s.party[u.id],
@@ -3484,6 +3585,8 @@ function draw() {
           "#a2b477",
         );
       });
+    drawFallenCombatants();
+    drawFieldBattleOverlay();
     drawBattleSignals();
     drawCombatEffects();
     drawLighting(ctx, s, canvas.width, canvas.height);
@@ -3558,8 +3661,18 @@ function draw() {
         return;
       }
       if (p.kind === "wolves") {
-        drawWolf(ctx, p.x - 12, p.y, 1);
-        drawWolf(ctx, p.x + 10, p.y + 8, -1);
+        drawWolf(
+          ctx,
+          p.x - 12,
+          p.y,
+          menuSettings.reduceMotion ? 0 : Math.sin(performance.now() / 180),
+        );
+        drawWolf(
+          ctx,
+          p.x + 10,
+          p.y + 8,
+          menuSettings.reduceMotion ? 0 : Math.sin(performance.now() / 180 + 2),
+        );
         drawMapLabel(ctx, p.name, p.x, p.y - 37, true);
         return;
       }
@@ -3590,6 +3703,7 @@ function draw() {
       );
       drawMapLabel(ctx, p.name, p.x, p.y - 37, hostile);
     });
+  drawFieldLifeWorld();
   drawAtlas();
   if (s.destination) {
     const goal = s.destination;
@@ -3609,9 +3723,9 @@ function draw() {
     .forEach((p) => {
       const step =
         s.destination && !menuSettings.reduceMotion
-          ? Math.sin(performance.now() / 100 + p.i * 1.7) > 0
-            ? 2
-            : -2
+          ? [0, 1, 2, 1, 0, -1, -2, -1][
+              Math.floor(performance.now() / 90 + p.i * 1.7) % 8
+            ]
           : 0;
       person(
         p.x,
@@ -3656,6 +3770,20 @@ canvas.onclick = (e) => {
   const r = canvas.getBoundingClientRect(),
     x = view.x + (e.clientX - r.left) / view.scale,
     y = view.y + (e.clientY - r.top) / view.scale;
+  if (activeRoomHotspots) {
+    const spot = activeRoomHotspots.find(
+      (v) => Math.hypot(v.x - x, v.y - y) < 45,
+    );
+    if (spot) {
+      roomFocus = spot.id;
+      render();
+      const b = [...$("panel").querySelectorAll("button")].find(
+        (b) => b.textContent === `Inspect ${spot.name}`,
+      );
+      if (b) b.click();
+    }
+    return;
+  }
   if (s.event?.kind === "dungeon") {
     const tx = Math.floor((x - 105) / 62),
       ty = Math.floor(y / 60);
@@ -3670,10 +3798,27 @@ canvas.onclick = (e) => {
         (u) => u.x === tx && u.y === ty && s.party[u.id].hp > 0,
       );
     if (ally && !spellMode) {
+      fieldPending = null;
       selected = ally.id;
       abilityMode = false;
       spellMode = null;
     } else {
+      if (
+        spellMode ||
+        combatPreview(s, selected, tx, ty, abilityMode).allowed
+      ) {
+        fieldHover = { x: tx, y: ty };
+        fieldPending = {
+          x: tx,
+          y: ty,
+          id: selected,
+          turn: s.battle.turn,
+          ability: abilityMode,
+          spell: spellMode,
+        };
+        render();
+        return;
+      }
       const success = spellMode
         ? castSpell(s, selected, spellMode, tx, ty)
         : abilityMode
@@ -3750,7 +3895,8 @@ function animate(time) {
     !s.event &&
     !s.campOpen &&
     !companyLost(s) &&
-    !drawerOpen
+    !drawerOpen &&
+    !s.fieldLife.paused
   ) {
     const x =
       (heldKeys.has("d") || heldKeys.has("ArrowRight") ? 1 : 0) -
@@ -3764,14 +3910,16 @@ function animate(time) {
     ? Math.min((time - previousFrame) / 1000, 0.1)
     : 0;
   previousFrame = time;
-  if (s.destination && !document.hidden) {
+  const pace = s.fieldLife.speed;
+  if (updateTravelSafety(s)) render();
+  if (s.destination && !document.hidden && !s.fieldLife.paused && !drawerOpen) {
     const before = {
       day: s.day,
       location: s.location,
       moving: !!s.destination,
       discovered: s.discovered.length,
     };
-    advanceMovement(s, seconds);
+    advanceMovement(s, seconds * pace);
     if (
       before.day !== s.day ||
       before.location !== s.location ||
@@ -3797,7 +3945,8 @@ function animate(time) {
     !s.campOpen &&
     !companyLost(s) &&
     !drawerOpen &&
-    !document.hidden
+    !document.hidden &&
+    !s.fieldLife.paused
   ) {
     const dayBefore = s.day;
     const hiddenBefore = isHidden(s);
@@ -3808,13 +3957,15 @@ function animate(time) {
       ambushBefore !== (isHidden(s) && s.stealth.concealment >= 75)
     )
       render();
-    advanceClock(s, seconds * (menuSettings.slowDays ? 0.5 : 1));
+    advanceClock(s, seconds * pace * (menuSettings.slowDays ? 0.5 : 1));
     if (dayBefore !== s.day || s.event || companyLost(s)) render();
     updateClockUI();
     const nearbyBefore = nearbyPatrols(s)
       .map((p) => p.id)
       .join(",");
-    advancePatrols(s, seconds);
+    advanceEcology(s, seconds * pace);
+    advancePatrols(s, seconds * pace);
+    if (updateTravelSafety(s)) render();
     if (
       s.battle ||
       s.event ||
@@ -3833,10 +3984,13 @@ function animate(time) {
     }
   }
   for (const [key, motion] of combatMotion)
-    if (time - motion.start >= 320) combatMotion.delete(key);
+    if (time - motion.start >= motion.duration) combatMotion.delete(key);
   if (
     s.battle &&
-    (combatEffects.length || attackEffects.length || combatMotion.size) &&
+    (combatEffects.length ||
+      attackEffects.length ||
+      combatMotion.size ||
+      [...combatFalls.values()].some((e) => time - e.start < 600)) &&
     !document.hidden
   )
     draw();
@@ -4003,7 +4157,11 @@ canvas.addEventListener("pointermove", (event) => {
     $("map-label").textContent =
       `${enemy.name || enemy.kind || "raider"} · HP ${enemy.hp}/${enemy.max} · Armor ${enemyArmor(s, enemy)} · Range ${["archer", "mage", "cultist", "necromancer", "shaman", "sorcerer"].includes(enemy.kind) ? 4 : 1}${enemy.kind === "wolf" ? ` · Rush ${enemy.bossId === "ashfang" ? 3 : 2} · pack hunter` : enemy.kind === "archer" ? " · Keeps distance" : " · Melee flanking +2"}${enemyDescription(s, enemy) ? ` · ${enemyDescription(s, enemy)}` : ""}${enemy.stun ? " · Stunned" : ""}${enemy.bleed ? " · Bleeding" : ""}${enemy.bossId ? ` · ${namedAdversaries.find((boss) => boss.id === enemy.bossId)?.mechanic || "Named adversary"}` : ""}`;
   if (x >= 0 && x < 9 && y >= 0 && y < 7) {
+    fieldHover = { x, y };
     const preview = combatPreview(s, selected, x, y, abilityMode);
+    const box = document.getElementById("combat-route-preview");
+    if (box && !fieldPending) box.textContent = preview.text || preview.reason;
+    draw();
     $("map-label").textContent += ` · ${preview.text || preview.reason}`;
   }
 });
@@ -5996,11 +6154,36 @@ function drawAttackEffects() {
       const f = menuSettings.reduceMotion ? 1 : Math.min(1, t * 2),
         x = from.x + (to.x - from.x) * f,
         y = from.y + (to.y - from.y) * f;
+      const angle = Math.atan2(to.y - from.y, to.x - from.x);
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(angle);
+      ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.moveTo(x - 9, y + 3);
-      ctx.lineTo(x + 9, y - 3);
+      ctx.moveTo(-9, 0);
+      ctx.lineTo(6, 0);
       ctx.stroke();
-      ctx.fillRect(x + 5, y - 5, 4, 4);
+      ctx.beginPath();
+      ctx.moveTo(9, 0);
+      ctx.lineTo(4, -3);
+      ctx.lineTo(4, 3);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+      if (t < 0.3) {
+        ctx.strokeStyle = "#b89661";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(from.x + 8, from.y, 12, -1.1, 1.1);
+        ctx.stroke();
+        ctx.strokeStyle = "#e3d8ae";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(from.x + 13, from.y - 11);
+        ctx.lineTo(from.x + 3 - t * 10, from.y);
+        ctx.lineTo(from.x + 13, from.y + 11);
+        ctx.stroke();
+      }
     } else if (e.type === "strike") {
       ctx.beginPath();
       ctx.arc(
@@ -6012,6 +6195,23 @@ function drawAttackEffects() {
       );
       ctx.stroke();
     } else {
+      ctx.strokeStyle = e.type === "heal" ? "#88b584" : "#b899cf";
+      ctx.beginPath();
+      ctx.arc(
+        from.x,
+        from.y + 12,
+        8 + Math.sin(t * Math.PI) * 9,
+        0,
+        Math.PI * 2,
+      );
+      ctx.stroke();
+      for (let i = 0; i < 5; i++)
+        ctx.fillRect(
+          from.x - 12 + i * 6,
+          from.y - 8 - Math.sin(t * Math.PI + i) * 8,
+          2,
+          2,
+        );
       for (let i = 0; i < 8; i++) {
         const a = (i * Math.PI) / 4,
           r = menuSettings.reduceMotion ? 15 : 8 + t * 24;
@@ -6679,6 +6879,31 @@ function drawCampLayoutOverlay() {
     ctx.globalAlpha = 0.7;
     ctx.fillStyle = valid ? "#758f59" : "#b1654d";
     ctx.fillRect(campDrag.x, campDrag.y, 34, 26);
+    ctx.strokeStyle = valid ? "#c9dfa3" : "#efb79e";
+    ctx.strokeRect(campDrag.x, campDrag.y, 34, 26);
+    const gx = campDrag.x,
+      gy = campDrag.y;
+    if (campDrag.id === "table") {
+      rect(gx + 1, gy + 4, 32, 10, "#a88455");
+      rect(gx + 4, gy + 14, 3, 10, "#70573a");
+      rect(gx + 27, gy + 14, 3, 10, "#70573a");
+    } else if (campDrag.id === "rack") {
+      rect(gx + 3, gy + 2, 3, 24, "#6f5b40");
+      rect(gx + 27, gy + 2, 3, 24, "#6f5b40");
+      rect(gx + 3, gy + 3, 27, 3, "#ab8e60");
+      for (let i = 0; i < 3; i++)
+        rect(gx + 9 + i * 7, gy + 8, 2, 13, "#c1c3a5");
+    } else {
+      rect(gx + 5, gy + 18, 24, 5, "#6b6e5b");
+      rect(gx + 10, gy + 7, 15, 11, "#d4a04c");
+      rect(gx + 14, gy + 4, 5, 10, "#efcc78");
+    }
+    drawMapLabel(
+      ctx,
+      valid ? "Release to place" : "Cannot place here",
+      gx + 17,
+      gy - 7,
+    );
   }
   ctx.restore();
 }
@@ -6711,3 +6936,528 @@ function drawDungeonHighlights() {
 window.addEventListener("pixel-art-ready", () => {
   if (gameActive) render();
 });
+
+// Field-life controls and readable, direct scene interactions.
+let fieldHover = null,
+  fieldPending = null,
+  roomChoice = null,
+  roomFocus = null,
+  activeRoomHotspots = null;
+function appendFieldLifeUI(panel, actions) {
+  const insideRoom =
+    drawerOpen &&
+    !s.battle &&
+    !s.event &&
+    !s.campOpen &&
+    (["Market", "Blacksmith", "Tavern"].includes(tab) ||
+      (tab === "Town" && roomChoice === "Academy"));
+  if (insideRoom)
+    actions.replaceChildren(
+      button("Leave village interior", () => {
+        tab = "Town";
+        roomChoice = null;
+        roomFocus = null;
+      }),
+    );
+  if (tab === "Company") {
+    const f = fold("Company formation · travel order and deployment", true);
+    f.append(
+      button(
+        "Arrange shields forward and ranged companions behind",
+        () => autoFormation(s),
+        !!s.battle || !!s.event,
+      ),
+    );
+    for (const id of companyOrder(s)) {
+      const p = s.party[id],
+        row = card(`${p.name} · ${p.role}`),
+        pos = s.fieldLife.deployment[id];
+      row.append(
+        button(
+          `Move ${p.name} forward`,
+          () => reorderCompany(s, id, -1),
+          !!s.battle || !!s.event || companyOrder(s)[0] === id,
+        ),
+        button(
+          `Move ${p.name} back`,
+          () => reorderCompany(s, id, 1),
+          !!s.battle || !!s.event || companyOrder(s).at(-1) === id,
+        ),
+      );
+      const select = document.createElement("select");
+      select.setAttribute("aria-label", `Deployment for ${p.name}`);
+      const unset = document.createElement("option");
+      unset.textContent = "Default deployment";
+      unset.value = "";
+      select.append(unset);
+      for (let x = 0; x < 3; x++)
+        for (let y = 0; y < 7; y++) {
+          const o = document.createElement("option");
+          o.value = `${x},${y}`;
+          o.textContent = `${["Rear", "Middle", "Front"][x]} · lane ${y + 1}`;
+          select.append(o);
+        }
+      select.value = pos ? `${pos.x},${pos.y}` : "";
+      select.disabled = !!s.battle || !!s.event;
+      select.onchange = () => {
+        if (select.value) {
+          const [x, y] = select.value.split(",").map(Number);
+          setDeployment(s, id, x, y);
+        } else delete s.fieldLife.deployment[id];
+        render();
+      };
+      row.append(select);
+      f.append(row);
+    }
+    const grid = document.createElement("div");
+    grid.className = "formation-grid";
+    grid.setAttribute("aria-label", "Combat deployment preview");
+    for (let y = 0; y < 7; y++)
+      for (let x = 0; x < 3; x++) {
+        const cell = document.createElement("span");
+        const id = companyOrder(s).find(
+          (id) =>
+            s.fieldLife.deployment[id]?.x === x &&
+            s.fieldLife.deployment[id]?.y === y,
+        );
+        cell.textContent = id === undefined ? "·" : s.party[id].name;
+        grid.append(cell);
+      }
+    f.append(grid);
+    panel.prepend(f);
+    const recovery = fold(
+      "Recovery · incapacitated companions and lost supplies",
+      true,
+    );
+    for (const p of s.party.filter((p) => !p.dead && p.hp === 0))
+      recovery.append(
+        button(
+          `Stabilize ${p.name} · 1 medicine, 2h`,
+          () => rescueCompanion(s, p.id),
+          s.inventory.medicine < 1 || !!s.battle || !!s.event,
+        ),
+      );
+    for (const cache of s.fieldLife.losses.filter((v) => !v.claimed))
+      recovery.append(
+        card(
+          "Abandoned battlefield supplies",
+          `<p>${cache.food} rations · Day ${cache.day} · ${Math.round(cache.x)}, ${Math.round(cache.y)}. Walk back to recover them.</p>`,
+        ),
+      );
+    if (!recovery.querySelector(".card,button"))
+      recovery.append(
+        document.createTextNode(
+          "No companions need emergency treatment; no supplies remain behind.",
+        ),
+      );
+    panel.append(recovery);
+    if (s.fieldLife.ecology.length)
+      panel.append(
+        card(
+          "Recent wildlife activity",
+          s.fieldLife.ecology.map((v) => `<p>${v}</p>`).join(""),
+        ),
+      );
+  }
+  if (!s.battle && !s.event && !s.campOpen && !insideRoom) {
+    const controls = document.createElement("div");
+    controls.className = "travel-controls";
+    controls.setAttribute("aria-label", "Travel controls");
+    const select = document.createElement("select");
+    select.setAttribute("aria-label", "Travel speed");
+    for (const speed of [0.5, 1, 2, 3]) {
+      const o = document.createElement("option");
+      o.value = speed;
+      o.textContent = `Travel ${speed}×`;
+      select.append(o);
+    }
+    select.value = s.fieldLife.speed;
+    select.onchange = () => {
+      setTravelSpeed(s, Number(select.value));
+      render();
+    };
+    const pause = document.createElement("button");
+    pause.textContent = s.fieldLife.paused ? "Resume travel" : "Pause travel";
+    pause.onclick = () => {
+      heldKeys.clear();
+      if (s.fieldLife.paused) resumeTravel(s);
+      else s.fieldLife.paused = true;
+      render();
+    };
+    controls.append(select, pause);
+    const label = document.createElement("label"),
+      check = document.createElement("input");
+    check.type = "checkbox";
+    check.checked = s.fieldLife.autoPause;
+    check.onchange = () => (s.fieldLife.autoPause = check.checked);
+    label.append(check, document.createTextNode("Pause for threats"));
+    controls.append(label);
+    const scout = companyScout(s),
+      status = document.createElement("span");
+    status.textContent = `${s.fieldLife.paused ? "PAUSED · " : ""}${isHidden(s) ? "Hidden" : "Visible"} ${Math.round(concealmentLevel(s))}% · ${scout ? `Scout: ${scout.name}` : "No scout"}${s.location !== null && places[s.location] ? ` · Enter ${places[s.location].name} nearby` : ""}`;
+    controls.append(status);
+    actions.prepend(controls);
+    for (const cache of s.fieldLife.losses.filter(
+      (v) =>
+        !v.claimed && Math.hypot(v.x - s.position.x, v.y - s.position.y) <= 55,
+    ))
+      actions.append(
+        button(
+          "Recover abandoned supplies",
+          () => recoverFieldCache(s, cache.id),
+          cargoLoad(s) + Object.values(cache.cargo).reduce((a, b) => a + b, 0) >
+            companyCargoCapacity(s),
+        ),
+      );
+  }
+  if (s.battle) {
+    if (
+      fieldPending &&
+      (fieldPending.id !== selected ||
+        fieldPending.turn !== s.battle.turn ||
+        fieldPending.ability !== abilityMode ||
+        fieldPending.spell !== spellMode)
+    )
+      fieldPending = null;
+    const preview = document.createElement("div");
+    preview.id = "combat-route-preview";
+    preview.className = "combat-preview";
+    preview.setAttribute("aria-live", "polite");
+    const p =
+      fieldHover &&
+      (spellMode
+        ? {
+            text:
+              spellLock(s, selected, spellMode, fieldHover.x, fieldHover.y) ||
+              `${spellBook.find((v) => v.id === spellMode)?.name} · ${spellBook.find((v) => v.id === spellMode)?.desc || "Consumes a prepared spell slot."}`,
+          }
+        : combatPreview(s, selected, fieldHover.x, fieldHover.y, abilityMode));
+    preview.textContent = p
+      ? p.text || p.reason
+      : "Hover a tile for a route or attack preview. Arrows show facing; red lines show blocked sight.";
+    if (p?.reactions)
+      preview.textContent += ` · Retaliation: ${p.reactors
+        .map((id) => s.battle.enemies.find((e) => e.id === id))
+        .filter(Boolean)
+        .map((e) => e.name || e.kind)
+        .join(", ")}`;
+    if (fieldPending) {
+      preview.append(
+        button("Confirm combat action", () => {
+          const v = fieldPending;
+          fieldPending = null;
+          const ok = spellMode
+            ? castSpell(s, selected, spellMode, v.x, v.y)
+            : abilityMode
+              ? useSkill(s, selected, v.x, v.y)
+              : act(s, selected, v.x, v.y);
+          if (!ok) note(s, "Action unavailable; preview the target again.");
+        }),
+      );
+      preview.append(
+        button("Cancel combat action", () => (fieldPending = null)),
+      );
+    }
+    actions.prepend(preview);
+  } else fieldPending = null;
+  if (
+    places[s.location]?.type === "town" &&
+    !s.battle &&
+    !s.event &&
+    !s.campOpen
+  ) {
+    if (["Market", "Blacksmith", "Tavern"].includes(tab))
+      appendVillageInterior(panel, tab);
+    if (tab === "Town" && s.location === 6)
+      panel.prepend(
+        button("Enter academy interior", () => {
+          roomChoice = "Academy";
+          roomFocus = null;
+        }),
+      );
+    if (tab === "Town" && roomChoice === "Academy")
+      appendVillageInterior(panel, "Academy");
+  } else {
+    roomChoice = null;
+    roomFocus = null;
+  }
+}
+function appendVillageInterior(panel, kind) {
+  const room = card(`${kind} interior`),
+    scene = document.createElement("canvas");
+  scene.width = 340;
+  scene.height = 220;
+  scene.className = "village-interior";
+  scene.setAttribute(
+    "aria-label",
+    `${kind}: interact with highlighted objects`,
+  );
+  const hotspots = drawVillageRoom(scene.getContext("2d"), kind, s, roomFocus);
+  const use = (spot) => {
+    roomFocus = spot.id;
+    const patterns = {
+      wares: /Buy|Sell|Food|Rations|Reagents/i,
+      smith: /Buy|Repair|Craft/i,
+      recruits: /Hire|Recruit/i,
+      rest: /Rest|Roof|Sleep/i,
+      tomes: /Grimoire|tome|spellbook|Buy/i,
+      tuition: /tuition|temple|Restore spell/i,
+    };
+    const match = [...panel.querySelectorAll("button")].find(
+      (b) => !room.contains(b) && patterns[spot.id]?.test(b.textContent),
+    );
+    if (match) {
+      const parent = match.closest("details");
+      if (parent) parent.open = true;
+      match.scrollIntoView({ block: "center", behavior: "smooth" });
+      match.focus();
+    }
+    const hint = room.querySelector(".room-hint");
+    hint.textContent =
+      spot.text + " Choose a service below to confirm its cost.";
+    drawVillageRoom(scene.getContext("2d"), kind, s, spot.id);
+  };
+  scene.onclick = (e) => {
+    const r = scene.getBoundingClientRect(),
+      x = ((e.clientX - r.left) * 340) / r.width,
+      y = ((e.clientY - r.top) * 220) / r.height;
+    const spot = hotspots.find((v) => Math.hypot(v.x - x, v.y - y) < 45);
+    if (spot) use(spot);
+  };
+  room.append(scene);
+  const hint = document.createElement("p");
+  hint.className = "room-hint";
+  hint.textContent =
+    (hotspots.find((v) => v.id === roomFocus)?.text ||
+      "Click a person or highlighted station to browse its services.") +
+    (roomFocus ? " Choose a service below to confirm its cost." : "");
+  room.append(hint);
+  for (const spot of hotspots)
+    room.append(button(`Inspect ${spot.name}`, () => use(spot)));
+  if (kind === "Academy")
+    room.append(
+      button("Leave academy interior", () => {
+        roomChoice = null;
+        roomFocus = null;
+      }),
+    );
+  panel.prepend(room);
+}
+function drawFacingArrow(x, y, angle, color = "#ead69b") {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(Number.isFinite(angle) ? angle : 0);
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(15, 0);
+  ctx.lineTo(8, -4);
+  ctx.lineTo(8, 4);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+function drawFieldBattleOverlay() {
+  const b = s.battle,
+    u = b.units.find((u) => u.id === selected);
+  if (!u) return;
+  for (const ally of b.units.filter((v) => s.party[v.id].hp > 0))
+    drawFacingArrow(
+      136 + ally.x * 62,
+      46 + ally.y * 60,
+      ally.facing,
+      "#e8d49c",
+    );
+  for (const e of b.enemies.filter((e) => e.hp > 0))
+    drawFacingArrow(
+      136 + e.x * 62,
+      46 + e.y * 60,
+      e.facing ?? Math.PI,
+      "#b05b45",
+    );
+  if (!fieldHover) return;
+  const target = { x: 136 + fieldHover.x * 62, y: 28 + fieldHover.y * 60 },
+    from = { x: 136 + u.x * 62, y: 28 + u.y * 60 };
+  const path =
+    !u.moved && !abilityMode && !spellMode
+      ? battlePath(s, u, fieldHover.x, fieldHover.y)
+      : null;
+  ctx.save();
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = "#ead49b";
+  ctx.setLineDash([4, 3]);
+  ctx.beginPath();
+  ctx.moveTo(from.x, from.y);
+  if (path?.length) {
+    for (const point of path) ctx.lineTo(136 + point.x * 62, 28 + point.y * 60);
+    ctx.stroke();
+    for (const point of path)
+      rect(134 + point.x * 62, 26 + point.y * 60, 4, 4, "#f5e9b6");
+  } else if (
+    b.enemies.some(
+      (e) => e.hp > 0 && e.x === fieldHover.x && e.y === fieldHover.y,
+    )
+  ) {
+    ctx.strokeStyle = hasLineOfSight(s, u, fieldHover) ? "#dca16b" : "#af4939";
+    ctx.lineTo(target.x, target.y);
+    ctx.stroke();
+    if (!hasLineOfSight(s, u, fieldHover)) {
+      ctx.font = "10px monospace";
+      ctx.fillStyle = "#af4939";
+      ctx.fillText(
+        "SIGHT BLOCKED",
+        (from.x + target.x) / 2,
+        (from.y + target.y) / 2,
+      );
+    }
+  }
+  ctx.setLineDash([]);
+  ctx.strokeStyle = "#f8e6b0";
+  ctx.strokeRect(109 + fieldHover.x * 62, 4 + fieldHover.y * 60, 51, 49);
+  ctx.restore();
+}
+function fieldEntityPose(x, y, drawSprite) {
+  if (!s.battle || menuSettings.reduceMotion) {
+    drawSprite(0);
+    return;
+  }
+  const now = performance.now(),
+    cue = attackEffects.findLast(
+      (e) =>
+        Math.hypot(e.from.x * 62 + 136 - x, e.from.y * 60 + 28 - y) < 5 &&
+        now - e.start < 500,
+    );
+  const hit = combatEffects.findLast(
+    (e) =>
+      e.amount < 0 &&
+      Math.hypot(e.x * 62 + 136 - x, e.y * 60 + 28 - y) < 5 &&
+      now - e.start < 380,
+  );
+  ctx.save();
+  ctx.translate(x, y);
+  if (cue) {
+    const t = (now - cue.start) / 500,
+      angle = Math.atan2(cue.to.y - cue.from.y, cue.to.x - cue.from.x),
+      lunge =
+        Math.sin(t * Math.PI) *
+        (["spell", "heal", "arrow"].includes(cue.type) ? 2 : 7);
+    ctx.translate(Math.cos(angle) * lunge, Math.sin(angle) * lunge);
+    ctx.rotate(Math.sin(t * Math.PI) * 0.08 * (Math.cos(angle) >= 0 ? 1 : -1));
+  }
+  if (hit) {
+    ctx.translate(Math.sin((now - hit.start) / 35) * 2, 0);
+    ctx.globalAlpha = 0.7;
+  }
+  ctx.translate(-x, -y);
+  drawSprite(cue ? Math.sin((now - cue.start) / 50) : 0);
+  ctx.restore();
+}
+function drawFieldLifeWorld() {
+  drawFacingArrow(s.position.x, s.position.y + 24, s.fieldLife.heading);
+  if (s.destination) {
+    ctx.save();
+    ctx.setLineDash([3, 5]);
+    ctx.strokeStyle = "#e6cf8a";
+    ctx.beginPath();
+    ctx.moveTo(s.position.x, s.position.y);
+    ctx.lineTo(s.destination.x, s.destination.y);
+    ctx.stroke();
+    ctx.restore();
+  }
+  for (const cache of s.fieldLife.losses.filter(
+    (v) =>
+      !v.claimed && Math.hypot(v.x - s.position.x, v.y - s.position.y) < 180,
+  )) {
+    drawScenery(ctx, 16, cache.x, cache.y + 12, 30, 30);
+    drawMapLabel(ctx, "ABANDONED SUPPLIES", cache.x, cache.y - 22);
+  }
+  for (const deer of s.fieldLife.wildlife.filter(
+    (v) => v.hp > 0 && Math.hypot(v.x - s.position.x, v.y - s.position.y) < 180,
+  ))
+    drawDeer(ctx, deer.x, deer.y, performance.now() / 220);
+  for (const p of s.patrols.filter(
+    (p) =>
+      !p.cleared &&
+      p.activity &&
+      Math.hypot(p.x - s.position.x, p.y - s.position.y) < 140,
+  ))
+    drawMapLabel(ctx, p.activity, p.x, p.y + 31);
+}
+function drawFallenCombatants() {
+  for (const e of combatFalls.values()) {
+    const x = 136 + e.x * 62,
+      y = 28 + e.y * 60,
+      t = menuSettings.reduceMotion
+        ? 1
+        : Math.min(1, (performance.now() - e.start) / 600);
+    ctx.save();
+    ctx.translate(x, y + 10);
+    ctx.rotate((t * Math.PI) / 2);
+    ctx.globalAlpha = 1 - t * 0.55;
+    if (e.escaped) {
+      ctx.restore();
+      continue;
+    }
+    if (e.key.startsWith("party")) {
+      const p = s.party[e.id];
+      drawCharacter(
+        ctx,
+        0,
+        -10,
+        p.coat || partyCoats[p.id],
+        0,
+        p.role,
+        p.id,
+        p,
+      );
+    } else drawFantasyEnemy(ctx, e.kind, 0, -10);
+    ctx.restore();
+    drawMapLabel(
+      ctx,
+      e.key.startsWith("party")
+        ? "INCAPACITATED"
+        : e.escaped
+          ? "ESCAPED"
+          : "FALLEN",
+      x,
+      y + 24,
+      true,
+    );
+  }
+}
+canvas.addEventListener("pointerleave", () => {
+  fieldHover = null;
+  if (s.battle) draw();
+});
+function drawAnimatedBattleEnemy(c, kind, x, y) {
+  fieldEntityPose(x, y, (step) => drawFantasyEnemy(c, kind, x, y, step));
+}
+function drawAttackRangeMarkers() {
+  const u = s.battle.units.find((u) => u.id === selected),
+    p = s.party[selected];
+  if (!u || u.acted) return;
+  const range = spellMode
+    ? spellRange(
+        p,
+        spellBook.find((v) => v.id === spellMode),
+      )
+    : attackRange(p, abilityMode, s);
+  ctx.save();
+  ctx.lineWidth = 1;
+  for (let y = 0; y < 7; y++)
+    for (let x = 0; x < 9; x++)
+      if (Math.abs(x - u.x) + Math.abs(y - u.y) <= range) {
+        const visible = hasLineOfSight(s, u, { x, y });
+        ctx.fillStyle = visible ? "#b8864e18" : "#473e3818";
+        ctx.fillRect(110 + x * 62, 5 + y * 60, 49, 47);
+        if (!visible) {
+          ctx.strokeStyle = "#8d5f5480";
+          ctx.beginPath();
+          ctx.moveTo(112 + x * 62, 7 + y * 60);
+          ctx.lineTo(117 + x * 62, 12 + y * 60);
+          ctx.moveTo(117 + x * 62, 7 + y * 60);
+          ctx.lineTo(112 + x * 62, 12 + y * 60);
+          ctx.stroke();
+        }
+      }
+  ctx.restore();
+}

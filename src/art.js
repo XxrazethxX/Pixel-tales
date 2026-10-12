@@ -225,13 +225,35 @@ function detailedEnemy(c, kind, x, y, step = 0) {
   const size =
     kind === "wolf" ? 40 : kind === "troll" || kind === "spider" ? 44 : 36;
   c.imageSmoothingEnabled = false;
-  c.drawImage(
-    tile,
-    Math.round(x - size / 2),
-    Math.round(y + 16 - size + (step ? 1 : 0)),
-    size,
-    size,
-  );
+  const left = Math.round(x - size / 2),
+    top = Math.round(y + 16 - size);
+  if (kind === "wolf" && step) {
+    const stride = Math.round(step * 2),
+      legY = 35;
+    c.drawImage(tile, 0, 0, 48, legY, left, top, size, (size * legY) / 48);
+    c.drawImage(
+      tile,
+      0,
+      legY,
+      24,
+      13,
+      left + stride,
+      top + (size * legY) / 48,
+      size / 2,
+      (size * 13) / 48,
+    );
+    c.drawImage(
+      tile,
+      24,
+      legY,
+      24,
+      13,
+      left + size / 2 - stride,
+      top + (size * legY) / 48,
+      size / 2,
+      (size * 13) / 48,
+    );
+  } else c.drawImage(tile, left, top, size, size);
   return true;
 }
 function noise(x, y, seed = 0) {
@@ -801,7 +823,7 @@ export function drawCharacter(
   const image = characterImage(
     role,
     coat,
-    step > 0 ? 1 : step < 0 ? -1 : 0,
+    Math.max(-2, Math.min(2, Math.round(step))),
     variant,
     appearance,
   );
@@ -1385,7 +1407,7 @@ export function drawLighting(c, s, width, height) {
   lanternGlow(c, s.position.x, s.position.y, 24, night * 0.35);
 }
 let campGround;
-export function drawCampScene(c, s) {
+export function drawCampScene(c, s, motion = true) {
   if (!campGround) {
     campGround = surface(768, 432);
     const g = campGround.getContext("2d");
@@ -1544,20 +1566,64 @@ export function drawCampScene(c, s) {
       const duty = campRoles.find(
         (role) => campWorker(s, role.id)?.id === p.id,
       );
+      const phase = Math.floor((motion ? performance.now() / 900 : 0) + i) % 4;
+      const sleeping =
+        !duty && (p.fatigue >= 50 || s.timeOfDay >= 21 || s.timeOfDay < 6);
       const point = duty
-        ? stations[duty.id]
-        : { x: 286 + (i % 3) * 32, y: 280 + Math.floor(i / 3) * 30 };
+        ? { ...stations[duty.id] }
+        : sleeping
+          ? { x: 230 + (i % 3) * 20, y: 149 + Math.floor(i / 3) * 18 }
+          : { x: 286 + (i % 3) * 32, y: 280 + Math.floor(i / 3) * 30 };
+      if (motion && duty?.id === "guard") {
+        point.x += Math.sin(performance.now() / 2500) * 28;
+        point.y += Math.cos(performance.now() / 2500) * 10;
+      }
+      c.save();
+      if (sleeping) {
+        c.translate(point.x, point.y);
+        c.rotate(Math.PI / 2);
+        c.translate(-point.x, -point.y);
+      }
       drawCharacter(
         c,
         point.x,
         point.y,
         p.coat || partyCoats[p.id],
-        0,
+        duty?.id === "guard" ? (phase % 2 ? 1 : -1) : 0,
         p.role,
         p.id,
         p,
       );
-      drawLoadout(c, s, p, point.x, point.y);
+      if (!sleeping) drawLoadout(c, s, p, point.x, point.y);
+      c.restore();
+      const activity = sleeping
+        ? "Sleeping"
+        : duty
+          ? {
+              cook: "Cooking",
+              smith: "Crafting",
+              medic: "Treating wounds",
+              guard: "Guarding",
+            }[duty.id]
+          : s.food > 0 && i % 2 === 0
+            ? "Eating"
+            : "Socializing";
+      drawMapLabel(c, activity, point.x, point.y + 31);
+      if (duty?.id === "smith") {
+        pixel(c, point.x + 8, point.y - 5 + (phase % 2) * 7, 2, 12, "#665439");
+        pixel(c, point.x + 5, point.y - 7 + (phase % 2) * 7, 8, 4, "#c0b491");
+      }
+      if (duty?.id === "cook" || activity === "Eating") {
+        pixel(c, point.x + 8, point.y + 3, 7, 3, "#dbcca3");
+        pixel(c, point.x + 9, point.y + 1, 5, 2, "#a7804e");
+      }
+      if (duty?.id === "medic") {
+        pixel(c, point.x + 8, point.y, 8, 3, "#e4d9b6");
+      }
+      if (activity === "Socializing" && phase === 0) {
+        pixel(c, point.x + 9, point.y - 18, 12, 6, "#e4d8b0");
+        pixel(c, point.x + 12, point.y - 13, 2, 3, "#e4d8b0");
+      }
       if (duty)
         drawMapLabel(
           c,
@@ -2016,8 +2082,8 @@ export function chestPreview(contents) {
   return canvas;
 }
 
-export function drawFantasyEnemy(c, kind, x, y) {
-  if (detailedEnemy(c, kind, x, y)) return;
+export function drawFantasyEnemy(c, kind, x, y, step = 0) {
+  if (detailedEnemy(c, kind, x, y, step)) return;
   if (["raider", "bandit", "brute", "archer", "guard"].includes(kind)) {
     drawCharacter(
       c,
@@ -2355,4 +2421,181 @@ export function drawArcanePassage(c, s) {
     );
   drawMapLabel(c, s.event.title, 384, 70, true);
   drawCompanyBanner(c, s, 565, 235, 2);
+}
+
+export function drawDeer(c, x, y, phase = 0) {
+  pixel(c, x - 10, y - 3, 18, 9, "#8e7050");
+  pixel(c, x - 7, y - 4, 12, 3, "#b5966a");
+  pixel(c, x + 6, y - 9, 4, 10, "#997850");
+  pixel(c, x + 8, y - 11, 7, 5, "#b39466");
+  pixel(c, x + 12, y - 10, 1, 1, "#363b2d");
+  for (const dx of [-7, 4]) {
+    const stride = Math.round(Math.sin(phase + dx) * 2);
+    pixel(c, x + dx + stride, y + 5, 2, 7, "#66533c");
+  }
+  pixel(c, x + 7, y - 14, 1, 5, "#66533c");
+  pixel(c, x + 5, y - 15, 3, 1, "#66533c");
+  pixel(c, x - 13, y - 4, 4, 2, "#c9b991");
+}
+export function drawVillageRoom(c, kind, s, focus = null) {
+  c.imageSmoothingEnabled = false;
+  c.fillStyle = "#423e32";
+  c.fillRect(0, 0, 340, 220);
+  for (let y = 55; y < 220; y += 15)
+    for (let x = 0; x < 340; x += 34) {
+      pixel(
+        c,
+        x,
+        y,
+        33,
+        14,
+        (Math.floor(y / 15) + Math.floor(x / 34)) % 2 ? "#77634b" : "#816e50",
+      );
+      pixel(c, x + 3, y + 2, 23, 1, "#958360");
+    }
+  pixel(c, 0, 0, 340, 58, "#5d5745");
+  for (let x = 0; x < 340; x += 40) {
+    pixel(c, x, 0, 4, 60, "#3d3b30");
+    pixel(c, x + 5, 10, 30, 1, "#827657");
+  }
+  pixel(c, 12, 54, 315, 5, "#ae9467");
+  pixel(c, 8, 0, 4, 220, "#2e352b");
+  pixel(c, 328, 0, 4, 220, "#2e352b");
+  c.fillStyle = "#e2d1a2";
+  c.font = "bold 12px monospace";
+  c.textAlign = "center";
+  c.fillText(`${places[s.location]?.name || "Village"} · ${kind}`, 170, 24);
+  let spots;
+  if (kind === "Blacksmith") {
+    drawScenery(c, 13, 95, 156, 92, 105);
+    drawScenery(c, 15, 260, 170, 70, 65);
+    drawCharacter(c, 175, 112, "#8d7053", 0, "Shieldbearer", 0, {
+      sex: "male",
+    });
+    for (let i = 0; i < 3; i++) {
+      pixel(c, 222 + i * 24, 69, 2, 40, "#d0d0b0");
+      pixel(c, 218 + i * 24, 99, 10, 2, "#8f7251");
+    }
+    spots = [
+      {
+        id: "smith",
+        name: "Forge and smith",
+        x: 100,
+        y: 135,
+        text: "The smith sells gear and repairs worn equipment.",
+      },
+      {
+        id: "wares",
+        name: "Weapon rack",
+        x: 258,
+        y: 96,
+        text: "Browse weapons, shields and armor.",
+      },
+    ];
+  } else if (kind === "Tavern") {
+    pixel(c, 40, 80, 263, 24, "#715539");
+    pixel(c, 43, 82, 257, 3, "#b79564");
+    drawScenery(c, 15, 279, 172, 52, 58);
+    for (let i = 0; i < 3; i++) {
+      pixel(c, 36 + i * 72, 145, 44, 17, "#9c7b4d");
+      pixel(c, 40 + i * 72, 149, 36, 2, "#b89b69");
+      pixel(c, 42 + i * 72, 139, 5, 7, "#d7c391");
+    }
+    drawCharacter(c, 82, 113, "#9b784d", 0, "Cleric", 1, { sex: "female" });
+    drawCharacter(c, 210, 135, "#778571", 0, "Rogue", 0, { sex: "male" });
+    drawScenery(c, 12, 285, 100, 48, 42);
+    spots = [
+      {
+        id: "recruits",
+        name: "Travellers at the tables",
+        x: 184,
+        y: 146,
+        text: "Meet recruits and compare their abilities and wages.",
+      },
+      {
+        id: "rest",
+        name: "Innkeeper and beds",
+        x: 82,
+        y: 92,
+        text: "Purchase secure meals and lodging to recover.",
+      },
+    ];
+  } else if (kind === "Academy") {
+    pixel(c, 34, 60, 90, 80, "#4d493b");
+    for (let y = 65; y < 134; y += 19)
+      for (let x = 40; x < 115; x += 10)
+        pixel(c, x, y, 7, 15, ["#9c6853", "#708b7a", "#af986c"][(x + y) % 3]);
+    pixel(c, 170, 135, 110, 23, "#786343");
+    pixel(c, 199, 123, 38, 12, "#dacfa8");
+    pixel(c, 205, 125, 25, 1, "#8c805e");
+    drawCharacter(c, 250, 100, "#758e86", 0, "Wizard", 1, { sex: "female" });
+    c.strokeStyle = "#aa8fbd";
+    c.lineWidth = 2;
+    c.beginPath();
+    c.arc(164, 93, 18, 0, Math.PI * 2);
+    c.stroke();
+    spots = [
+      {
+        id: "tomes",
+        name: "Grimoire shelves",
+        x: 78,
+        y: 108,
+        text: "Buy grimoires to learn additional spells.",
+      },
+      {
+        id: "tuition",
+        name: "Mage and ritual desk",
+        x: 237,
+        y: 136,
+        text: "Arrange magical tuition, reagents or slot recovery.",
+      },
+    ];
+  } else {
+    drawScenery(c, 15, 77, 145, 85, 78);
+    drawScenery(c, 15, 261, 155, 65, 70);
+    pixel(c, 130, 97, 92, 26, "#906c47");
+    pixel(c, 134, 99, 84, 3, "#c19d68");
+    for (let i = 0; i < 6; i++)
+      pixel(c, 135 + i * 12, 91, 9, 5, i % 2 ? "#b99850" : "#85945b");
+    drawCharacter(c, 175, 80, "#8c8056", 0, "Swordswoman", 1, {
+      sex: "female",
+    });
+    spots = [
+      {
+        id: "wares",
+        name: "Produce stall",
+        x: 171,
+        y: 109,
+        text: "Buy provisions and supplies; sell surplus goods.",
+      },
+      {
+        id: "wares",
+        name: "Trading crates",
+        x: 262,
+        y: 148,
+        text: "Browse local trade goods and village prices.",
+      },
+    ];
+  }
+  for (const spot of spots) {
+    c.strokeStyle = focus === spot.id ? "#f4db94" : "#c6b88a";
+    c.setLineDash([3, 3]);
+    c.strokeRect(spot.x - 30, spot.y - 25, 60, 45);
+    c.setLineDash([]);
+    c.fillStyle = "#e5d6ae";
+    c.font = "10px monospace";
+    c.textAlign = "center";
+    c.fillText(spot.name, spot.x, spot.y + 37);
+  }
+  drawCharacter(
+    c,
+    170,
+    190,
+    s.party[0]?.coat || "#8a805e",
+    0,
+    s.party[0]?.role,
+    0,
+    s.party[0],
+  );
+  return spots;
 }

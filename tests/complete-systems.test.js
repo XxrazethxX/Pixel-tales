@@ -50,6 +50,8 @@ const battle = () => {
   s.location = 1;
   s.contract = { target: 1, reward: 65 };
   startBattle(s);
+  // Fixed terrain fixture for coordinate-specific tactical assertions.
+  delete s.battle.fieldSeed;
   return s;
 };
 const equip = (s, id, p = 0) => {
@@ -180,6 +182,8 @@ test("sweep, reach and bleeding perks change real attacks and abilities", () => 
   s.location = 1;
   s.contract = { target: 1, reward: 65 };
   startBattle(s);
+  // Fixed terrain fixture for coordinate-specific tactical assertions.
+  delete s.battle.fieldSeed;
   s.battle.units[0].x = 3;
   s.battle.enemies[0].x = 4;
   s.battle.enemies[0].y = 1;
@@ -197,6 +201,8 @@ test("sweep, reach and bleeding perks change real attacks and abilities", () => 
   p.location = 1;
   p.contract = { target: 1, reward: 65 };
   startBattle(p);
+  // Fixed terrain fixture for coordinate-specific tactical assertions.
+  delete p.battle.fieldSeed;
   p.battle.enemies[0].x = 3;
   p.battle.enemies[0].y = 4;
   assert.ok(act(p, 3, 3, 4));
@@ -212,6 +218,8 @@ test("shield and helmet perks change bracing, valor and the first safe disengage
   s.location = 1;
   s.contract = { target: 1, reward: 65 };
   startBattle(s);
+  // Fixed terrain fixture for coordinate-specific tactical assertions.
+  delete s.battle.fieldSeed;
   s.battle.valor = 1;
   guard(s, 0);
   assert.equal(s.battle.valor, 3);
@@ -226,6 +234,8 @@ test("shield and helmet perks change bracing, valor and the first safe disengage
   r.location = 1;
   r.contract = { target: 1, reward: 65 };
   startBattle(r);
+  // Fixed terrain fixture for coordinate-specific tactical assertions.
+  delete r.battle.fieldSeed;
   r.battle.valor = 0;
   assert.equal(disengageCost(r, 0), 0);
   assert.ok(disengage(r, 0));
@@ -241,6 +251,8 @@ test("riposte counterattacks only when braced and struck by a melee enemy", () =
   s.location = 1;
   s.contract = { target: 1, reward: 65 };
   startBattle(s);
+  // Fixed terrain fixture for coordinate-specific tactical assertions.
+  delete s.battle.fieldSeed;
   s.battle.units = [s.battle.units[0]];
   s.battle.enemies = [
     { id: 0, x: 2, y: 1, kind: "raider", hp: 16, max: 16, damage: 5 },
@@ -451,6 +463,8 @@ test("the grove and crown chapters offer distinct outcomes, prerequisites, facti
   interactStory(s);
   chooseStory(s, "defend");
   startBattle(s);
+  // Fixed terrain fixture for coordinate-specific tactical assertions.
+  delete s.battle.fieldSeed;
   assert.equal(s.battle.enemies.length, 4);
   winFixture(s);
   s.location = 3;
@@ -484,6 +498,8 @@ test("story defeats keep the accepted branch retryable and saves retain active c
   assert.equal(prompt.event.kind, "story");
   chooseStory(s, "guild");
   startBattle(s);
+  // Fixed terrain fixture for coordinate-specific tactical assertions.
+  delete s.battle.fieldSeed;
   s.party.forEach((p) => (p.hp = 0));
   endTurn(s);
   assert.equal(s.contract.phase, "battle");

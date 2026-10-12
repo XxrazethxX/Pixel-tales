@@ -32,6 +32,8 @@ const battle = () => {
   s.location = 1;
   s.contract = { target: 1, reward: 65 };
   startBattle(s);
+  // Fixed terrain fixture for coordinate-specific tactical assertions.
+  delete s.battle.fieldSeed;
   return s;
 };
 

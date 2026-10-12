@@ -132,6 +132,7 @@ export function fresh() {
     lastTrailEncounter: null,
     renown: 0,
     skirmishes: 0,
+    fieldLife: fieldLifeState(),
     discovered: [0, 3],
     charted: initialChart(),
     patrols: initialPatrols(),
@@ -519,6 +520,12 @@ export function startBattle(s, patrolId = null, options = {}) {
       );
     }
   if (standardBearer(s)) s.battle.valor = Math.min(5, s.battle.valor + 1);
+  deployCompanyFormation(s);
+  s.fieldLife.encounter++;
+  s.battle.fieldSeed =
+    (Math.imul(s.fieldLife.encounter, 2654435761) +
+      Math.round(s.position.x * 17 + s.position.y * 31)) >>>
+    0;
   s.battle.terrainVariation = s.skirmishes % 3;
   s.battle.terrainBaseLayout = s.battle.layoutId;
   s.battle.terrainFormation = [...s.battle.units, ...s.battle.enemies].map(
@@ -637,9 +644,12 @@ function win(s) {
       (s.difficulty === "veteran" ? 1.15 : 1) *
       (s.battle.enemies.every((e) => e.escaped) ? 0.5 : 1),
   );
+  const hunted = wildlife
+    ? s.battle.enemies.filter((e) => !e.escaped).length
+    : 0;
   if (wildlife) {
-    s.food += 6;
-    s.inventory.pelts += 2;
+    s.food += hunted * 2;
+    s.inventory.pelts += Math.ceil((hunted * 2) / 3);
   }
   if (raid) {
     if (!s.crime.wanted) registerCrime(s);
@@ -677,7 +687,7 @@ function win(s) {
   }
   note(
     s,
-    `${wildlife ? "Wolf pack defeated · 6 rations and 2 pelts recovered" : raid ? "Caravan plundered · remaining provisions and cargo seized" : patrolFight ? "Patrol defeated" : s.contract?.kind === "story" ? "Faction battle won" : "Contract fulfilled"}. Earned ${reward} crowns, ${difficulty.knowledge} knowledge, and ${difficulty.xp} XP per survivor.`,
+    `${wildlife ? `Wolf pack scattered · ${hunted * 2} rations and ${Math.ceil((hunted * 2) / 3)} pelts recovered` : raid ? "Caravan plundered · remaining provisions and cargo seized" : patrolFight ? "Patrol defeated" : s.contract?.kind === "story" ? "Faction battle won" : "Contract fulfilled"}. Earned ${reward} crowns, ${difficulty.knowledge} knowledge, and ${difficulty.xp} XP per survivor.`,
   );
   if (bossFight) finishBounty(s);
   if (!wildlife && !bossFight) {
@@ -769,6 +779,14 @@ export function endTurn(s) {
       note(s, "A stunned enemy loses its turn.");
       continue;
     }
+    if (
+      !e.bossId &&
+      ["wolf", "goblin", "bandit", "raider", "brute", "archer"].includes(
+        e.kind,
+      ) &&
+      e.hp / e.max <= 0.2
+    )
+      e.fleeing = true;
     if (routeEnemy(s, e)) continue;
     if (enemySpecialTurn(s, e)) continue;
     adversaryTurn(s, e);
@@ -814,6 +832,7 @@ export function endTurn(s) {
           ? 2
           : 1;
     let movement = rush;
+    e.walkRoute = [{ x: e.x, y: e.y }];
     for (
       let step = 0;
       !rooted &&
@@ -883,7 +902,9 @@ export function endTurn(s) {
         enemyDisengagement(s, e, options[0]);
         if (e.hp <= 0) break;
         movement -= terrainCell(s, options[0][0], options[0][1]).cost;
+        e.facing = Math.atan2(options[0][1] - e.y, options[0][0] - e.x);
         [e.x, e.y] = options[0];
+        e.walkRoute.push({ x: e.x, y: e.y });
         if (e.root) break;
       }
     }
@@ -985,7 +1006,8 @@ export function endTurn(s) {
     win(s);
     return true;
   }
-  if (s.party.every((p) => p.hp === 0)) {
+  if (s.battle.units.every((u) => s.party[u.id].hp <= 0)) {
+    leaveRecoveryCache(s, "defeat");
     loseEscort(s);
     damageCompanyWagon(s);
     wearBattleEquipment(s, "defeat");
@@ -1889,6 +1911,7 @@ export function restore(raw) {
   restoreChronicle(result, raw);
   restoreArcana(result, raw);
   restoreFieldwork(result, raw);
+  restoreFieldLife(result, raw);
   updateCampaign(result);
   return result;
 }
@@ -2494,6 +2517,7 @@ export function advanceMovement(s, seconds) {
       break;
     }
     const amount = Math.min(budget, length, 12);
+    s.fieldLife.heading = Math.atan2(dy, dx);
     s.position.x += (dx / length) * amount;
     s.position.y += (dy / length) * amount;
     s.walked = (s.walked + amount) % 160;
@@ -2530,8 +2554,9 @@ export function advanceMovement(s, seconds) {
 }
 export function partyPositions(s) {
   return s.party.map((p, index) => {
-    if (index === 0) return { ...s.position };
-    let remaining = index * 17,
+    const rank = companyOrder(s).indexOf(p.id);
+    if (rank <= 0) return { ...s.position };
+    let remaining = rank * 17,
       current = s.position;
     for (let i = s.trail.length - 1; i >= 0; i--) {
       const next = s.trail[i],
@@ -2804,6 +2829,20 @@ export function advancePatrols(s, seconds) {
       s.caravanEscort?.patrolId === p.id
     )
       continue;
+    if (
+      p.kind === "wolves" &&
+      ((p.fedUntil || 0) > s.day * 24 + s.timeOfDay ||
+        s.fieldLife.wildlife.some((d) => d.id === p.ecologyTarget && d.hp > 0))
+    )
+      continue;
+    p.activity =
+      p.kind === "merchant"
+        ? "Trading"
+        : p.faction
+          ? "Patrolling roads"
+          : p.kind === "wolves"
+            ? "Prowling"
+            : "Searching for caravans";
     if (p.id === "warden-pursuit") {
       p.route = [{ ...s.position }];
       p.waypoint = 0;
@@ -2828,6 +2867,7 @@ export function advancePatrols(s, seconds) {
           Math.hypot(m.x - p.x, m.y - p.y) <= 100,
       );
     if (merchant) {
+      p.activity = "Raiding caravan";
       const d = Math.hypot(merchant.x - p.x, merchant.y - p.y),
         step = Math.min(budget, Math.max(0, d - 30));
       if (d) {
@@ -3647,6 +3687,7 @@ export function retreatBattle(s) {
   if (!s.battle) return false;
   if (s.battle.mission)
     note(s, "Mission abandoned in battle; return to its site to retry.");
+  leaveRecoveryCache(s, "retreat");
   loseEscort(s);
   damageCompanyWagon(s);
   wearBattleEquipment(s, "retreat");
@@ -4894,6 +4935,11 @@ function enemyApproach(s, enemy, target, range, movement) {
 }
 
 export function battleTerrain(s) {
+  if (
+    s.battle?.fieldSeed !== undefined &&
+    s.battle.terrainBaseLayout === s.battle.layoutId
+  )
+    return encounterTerrain(s);
   const varied = variedBattleTerrain(s);
   if (varied) return varied;
   return (
@@ -5002,6 +5048,7 @@ export function disengage(s, id) {
   return true;
 }
 function moveCombatUnit(s, u, path) {
+  u.walkRoute = [{ x: u.x, y: u.y }];
   const p = s.party[u.id];
   for (const point of path) {
     if (!u.safeMove)
@@ -5022,8 +5069,10 @@ function moveCombatUnit(s, u, path) {
         if (p.hp === 0) break;
       }
     if (p.hp === 0) break;
+    u.facing = Math.atan2(point.y - u.y, point.x - u.x);
     u.x = point.x;
     u.y = point.y;
+    u.walkRoute.push({ x: u.x, y: u.y });
     const trap = s.battle.traps?.find(
       (t) => !t.used && t.x === u.x && t.y === u.y,
     );
@@ -7770,6 +7819,7 @@ export function combatPreview(s, id, x, y, skillMode = false) {
     allowed: !!path?.length,
     kind: "move",
     reactions,
+    reactors: [...reacted].map((e) => e.id),
     text: path?.length
       ? `Move · ${tile.kind} · cost ${tile.cost}${reactions ? ` · WARNING: ${reactions} disengagement attack(s)` : " · no disengagement attacks"}${fire ? " · WARNING: marked hazard" : ""}${snare ? " · WARNING: goblin snare stops movement and deals four damage" : ""}`
       : "Movement unavailable or route blocked.",
@@ -13034,7 +13084,7 @@ export function answerSurrender(s, id, action) {
   return true;
 }
 function routeEnemy(s, e) {
-  if (!e.fleeing || !surrenderEligible(s, e)) return false;
+  if (!e.fleeing || (e.bossId && !surrenderEligible(s, e))) return false;
   if (e.root > 0 || e.stun > 0) return false;
   if (e.x >= 8) {
     e.hp = 0;
@@ -13727,6 +13777,7 @@ function recordNewEnemyVictory(s) {
 export function combatCue(s, type, from, to) {
   const b = s.battle;
   if (!b) return;
+  from.facing = Math.atan2(to.y - from.y, to.x - from.x);
   b.feedback ||= [];
   b.fxSerial = (b.fxSerial || 0) + 1;
   b.feedback.push({
@@ -16005,4 +16056,430 @@ export function resolveCampPersonalQuest(s, id, choice) {
   s.fieldwork.campOpportunity = null;
   updateAfterActionReport(s);
   return true;
+}
+
+// Field life: saved encounter terrain, company order, travel safety and recovery.
+export function fieldLifeState() {
+  return {
+    encounter: 0,
+    speed: 1,
+    autoPause: true,
+    paused: false,
+    heading: 0,
+    order: [],
+    deployment: {},
+    losses: [],
+    wildlife: [
+      { id: "deer-briar", x: 340, y: 185, hp: 3, homeX: 340, homeY: 185 },
+      { id: "deer-east", x: 965, y: 280, hp: 3, homeX: 965, homeY: 280 },
+      { id: "deer-north", x: 515, y: 108, hp: 3, homeX: 515, homeY: 108 },
+    ],
+    ecology: [],
+  };
+}
+export function companyOrder(s) {
+  const ids = s.party.filter((p) => !p.dead).map((p) => p.id);
+  return [
+    ...new Set([
+      ...(s.fieldLife?.order || []).filter((id) => ids.includes(id)),
+      ...ids,
+    ]),
+  ];
+}
+export function reorderCompany(s, id, offset) {
+  if (s.battle || s.event || ![-1, 1].includes(offset)) return false;
+  const order = companyOrder(s),
+    i = order.indexOf(id),
+    j = i + offset;
+  if (i < 0 || j < 0 || j >= order.length) return false;
+  [order[i], order[j]] = [order[j], order[i]];
+  s.fieldLife.order = order;
+  return true;
+}
+export function setDeployment(s, id, x, y) {
+  if (
+    s.battle ||
+    s.event ||
+    !s.party[id] ||
+    s.party[id].dead ||
+    !Number.isInteger(x) ||
+    x < 0 ||
+    x > 2 ||
+    !Number.isInteger(y) ||
+    y < 0 ||
+    y > 6
+  )
+    return false;
+  const occupied = Object.entries(s.fieldLife.deployment).find(
+    ([other, p]) => Number(other) !== id && p.x === x && p.y === y,
+  );
+  if (occupied) delete s.fieldLife.deployment[occupied[0]];
+  s.fieldLife.deployment[id] = { x, y };
+  return true;
+}
+export function autoFormation(s) {
+  if (s.battle || s.event) return false;
+  s.fieldLife.deployment = {};
+  const order = companyOrder(s).sort(
+    (a, b) => formationRank(s.party[a]) - formationRank(s.party[b]),
+  );
+  const counts = [0, 0, 0],
+    lanes = [3, 1, 5, 0, 6, 2, 4];
+  for (const id of order) {
+    const rank = formationRank(s.party[id]);
+    let x = rank === 0 ? 2 : rank === 1 ? 1 : 0;
+    if (counts[x] >= 7) x = counts.findIndex((n) => n < 7);
+    s.fieldLife.deployment[id] = { x, y: lanes[counts[x]++] };
+  }
+  return true;
+}
+function formationRank(p) {
+  return ["Shieldbearer", "Paladin"].includes(p.role)
+    ? 0
+    : ["Archer", "Wizard", "Cleric", "Druid"].includes(p.role)
+      ? 2
+      : 1;
+}
+function deployCompanyFormation(s) {
+  const occupied = new Set();
+  for (const u of s.battle.units) {
+    const wanted = s.fieldLife.deployment[u.id];
+    if (wanted) {
+      u.x = wanted.x;
+      u.y = wanted.y;
+    }
+    while (occupied.has(`${u.x}:${u.y}`)) {
+      u.y = (u.y + 1) % 7;
+      if (!u.y) u.x = (u.x + 1) % 3;
+    }
+    occupied.add(`${u.x}:${u.y}`);
+    u.facing = 0;
+  }
+  s.battle.enemies.forEach((e) => (e.facing = Math.PI));
+}
+function encounterTerrain(s) {
+  const b = s.battle,
+    style = battlefield(s).style;
+  let seed = b.fieldSeed >>> 0;
+  const rand = (n) => {
+    seed ^= seed << 13;
+    seed ^= seed >>> 17;
+    seed ^= seed << 5;
+    seed >>>= 0;
+    return seed % n;
+  };
+  const tiles = [],
+    protectedCells = new Set(b.terrainFormation.map((p) => `${p.x}:${p.y}`));
+  // Deployment columns remain open; the centre always has an east/west route.
+  const corridor = 1 + rand(5),
+    count = 9 + rand(6),
+    used = new Set();
+  for (let attempt = 0; tiles.length < count && attempt < 200; attempt++) {
+    const x = 3 + rand(4),
+      y = rand(7),
+      key = `${x}:${y}`;
+    if (used.has(key) || protectedCells.has(key)) continue;
+    used.add(key);
+    const n = rand(10);
+    const obstacle =
+      style === "forest"
+        ? n % 2
+          ? "tree"
+          : "log"
+        : style === "ruin"
+          ? "wall"
+          : style === "river"
+            ? "water"
+            : style === "quarry"
+              ? "rock"
+              : n % 2
+                ? "log"
+                : "rock";
+    tiles.push(
+      n < 4 && y !== corridor
+        ? obstacleTile(x, y, obstacle)
+        : n < 8
+          ? coverTile(
+              x,
+              y,
+              style === "ruin" || style === "quarry" ? "rubble" : "brush",
+            )
+          : mudTile(x, y),
+    );
+  }
+  if (b.caravanRaid) {
+    const x = 4,
+      y = corridor === 3 ? 4 : 3;
+    if (!protectedCells.has(`${x}:${y}`)) {
+      const i = tiles.findIndex((t) => t.x === x && t.y === y);
+      if (i >= 0) tiles.splice(i, 1);
+      tiles.push(obstacleTile(x, y, "wagon"));
+    }
+  }
+  return tiles;
+}
+export function setTravelSpeed(s, speed) {
+  if (![0.5, 1, 2, 3].includes(speed)) return false;
+  s.fieldLife.speed = speed;
+  return true;
+}
+export function nearbyThreat(s) {
+  return s.patrols.find(
+    (p) =>
+      !p.cleared &&
+      p.kind !== "merchant" &&
+      (!p.faction || p.hostile) &&
+      !passageSafe(s, p) &&
+      Math.hypot(p.x - s.position.x, p.y - s.position.y) < 115 &&
+      !isHidden(s),
+  );
+}
+export function resumeTravel(s) {
+  s.fieldLife.paused = false;
+  s.fieldLife.ignoreThreat = nearbyThreat(s)?.id || null;
+}
+export function updateTravelSafety(s) {
+  if (
+    !s.fieldLife.autoPause ||
+    s.fieldLife.paused ||
+    s.battle ||
+    s.event ||
+    s.campOpen
+  )
+    return false;
+  const p = nearbyThreat(s);
+  if (!p) {
+    s.fieldLife.ignoreThreat = null;
+    return false;
+  }
+  if (p.id === s.fieldLife.ignoreThreat) return false;
+  s.fieldLife.paused = true;
+  note(
+    s,
+    `Travel paused: ${p.name} nearby. Review the threat, then resume when ready.`,
+  );
+  return true;
+}
+export function advanceEcology(s, seconds) {
+  if (
+    !Number.isFinite(seconds) ||
+    seconds <= 0 ||
+    s.battle ||
+    s.event ||
+    s.campOpen ||
+    s.fieldLife.paused ||
+    s.fieldwork.report
+  )
+    return;
+  for (const deer of s.fieldLife.wildlife) {
+    if (deer.hp <= 0) continue;
+    const wolf = s.patrols.find(
+      (p) =>
+        !p.cleared &&
+        p.kind === "wolves" &&
+        Math.hypot(p.x - deer.x, p.y - deer.y) < 100,
+    );
+    if (wolf) {
+      const d = Math.hypot(wolf.x - deer.x, wolf.y - deer.y),
+        step = Math.min(seconds * 18, Math.max(0, d - 5));
+      if (d > 0) {
+        wolf.x += ((deer.x - wolf.x) / d) * step;
+        wolf.y += ((deer.y - wolf.y) / d) * step;
+      }
+      wolf.ecologyTarget = deer.id;
+      wolf.activity = "Hunting wildlife";
+      const dx = deer.x - wolf.x,
+        dy = deer.y - wolf.y,
+        l = Math.hypot(dx, dy) || 1;
+      deer.x = Math.max(
+        12,
+        Math.min(WORLD.width - 12, deer.x + (dx / l) * seconds * 9),
+      );
+      deer.y = Math.max(
+        12,
+        Math.min(WORLD.height - 12, deer.y + (dy / l) * seconds * 9),
+      );
+      if (d < 20) {
+        deer.hp = Math.max(0, deer.hp - seconds);
+        if (!deer.hp) {
+          wolf.activity = "Feeding";
+          wolf.fedUntil = s.day * 24 + s.timeOfDay + 4;
+          s.fieldLife.ecology.unshift(`${wolf.name} brought down a deer.`);
+          s.fieldLife.ecology = s.fieldLife.ecology.slice(0, 8);
+        }
+      }
+    } else {
+      deer.x += Math.sin(s.timeOfDay + deer.homeX) * seconds * 2;
+      deer.y += Math.cos(s.timeOfDay + deer.homeY) * seconds;
+    }
+  }
+}
+function leaveRecoveryCache(s, outcome) {
+  const food = Math.min(s.food, outcome === "defeat" ? 12 : 6),
+    cargo = {};
+  s.food -= food;
+  for (const good of tradeGoods) {
+    const n = Math.min(s.cargo[good.id] || 0, outcome === "defeat" ? 3 : 1);
+    if (n) {
+      cargo[good.id] = n;
+      s.cargo[good.id] -= n;
+    }
+  }
+  if (food || Object.keys(cargo).length) {
+    s.fieldLife.losses.push({
+      id: `cache-${s.fieldLife.encounter}-${s.day}-${s.fieldLife.losses.length}`,
+      x: s.position.x,
+      y: s.position.y,
+      food,
+      cargo,
+      day: s.day,
+      claimed: false,
+    });
+    s.fieldLife.losses = s.fieldLife.losses.slice(-12);
+    note(
+      s,
+      `Abandoned ${food} rations and trade cargo at the battlefield. Return to recover the supplies.`,
+    );
+  }
+}
+export function recoverFieldCache(s, id) {
+  const cache = s.fieldLife.losses.find((v) => v.id === id);
+  if (
+    !cache ||
+    cache.claimed ||
+    s.battle ||
+    s.event ||
+    s.campOpen ||
+    Math.hypot(cache.x - s.position.x, cache.y - s.position.y) > 55
+  )
+    return false;
+  if (
+    Object.values(cache.cargo).reduce((a, b) => a + b, 0) + cargoLoad(s) >
+    companyCargoCapacity(s)
+  )
+    return false;
+  beginAfterAction(s, "event", "Recovered battlefield supplies");
+  s.food += cache.food;
+  for (const [good, n] of Object.entries(cache.cargo))
+    s.cargo[good] = (s.cargo[good] || 0) + n;
+  cache.claimed = true;
+  note(s, "Recovered the abandoned supplies.");
+  return true;
+}
+export function rescueCompanion(s, id) {
+  const p = s.party[id];
+  if (
+    !p ||
+    p.dead ||
+    p.hp > 0 ||
+    s.battle ||
+    s.event ||
+    !s.party.some((q) => !q.dead && q.hp > 0) ||
+    s.inventory.medicine < 1
+  )
+    return false;
+  beginAfterAction(s, "event", `Emergency treatment: ${p.name}`);
+  s.inventory.medicine--;
+  p.hp = Math.max(1, Math.floor(p.max * 0.15));
+  p.injury = true;
+  inflictWound(s, id, "sprain", 2);
+  spendHours(s, 2, { resting: true });
+  note(
+    s,
+    `${p.name} is stabilized and can travel. Treat their lasting wound and rest.`,
+  );
+  return true;
+}
+function restoreFieldLife(s, raw) {
+  const f = fieldLifeState(),
+    r = raw.fieldLife || {};
+  f.encounter = Number.isSafeInteger(r.encounter)
+    ? Math.max(0, r.encounter)
+    : 0;
+  f.speed = [0.5, 1, 2, 3].includes(r.speed) ? r.speed : 1;
+  f.autoPause = r.autoPause !== false;
+  f.paused = r.paused === true;
+  f.heading = Number.isFinite(r.heading) ? r.heading : 0;
+  f.order = Array.isArray(r.order)
+    ? r.order
+        .filter(
+          (id) => Number.isInteger(id) && s.party[id] && !s.party[id].dead,
+        )
+        .slice(0, 24)
+    : [];
+  for (const [id, p] of Object.entries(r.deployment || {}))
+    if (
+      s.party[id] &&
+      Number.isInteger(p?.x) &&
+      p.x >= 0 &&
+      p.x <= 2 &&
+      Number.isInteger(p.y) &&
+      p.y >= 0 &&
+      p.y <= 6
+    )
+      f.deployment[id] = { x: p.x, y: p.y };
+  if (Array.isArray(r.wildlife))
+    f.wildlife = r.wildlife
+      .filter(
+        (v) =>
+          v &&
+          typeof v.id === "string" &&
+          Number.isFinite(v.x) &&
+          Number.isFinite(v.y) &&
+          Number.isFinite(v.hp),
+      )
+      .slice(0, 12)
+      .map((v) => ({
+        ...v,
+        homeX: Number.isFinite(v.homeX) ? v.homeX : v.x,
+        homeY: Number.isFinite(v.homeY) ? v.homeY : v.y,
+        hp: Math.max(0, Math.min(3, v.hp)),
+        x: Math.max(12, Math.min(WORLD.width - 12, v.x)),
+        y: Math.max(12, Math.min(WORLD.height - 12, v.y)),
+      }));
+  if (Array.isArray(r.losses))
+    f.losses = r.losses
+      .filter(
+        (v) =>
+          v &&
+          typeof v.id === "string" &&
+          Number.isFinite(v.x) &&
+          Number.isFinite(v.y),
+      )
+      .slice(-12)
+      .map((v) => ({
+        ...v,
+        food: Math.max(0, Math.min(12, Number(v.food) || 0)),
+        cargo: Object.fromEntries(
+          tradeGoods.map((g) => [
+            g.id,
+            Math.max(0, Math.min(3, Math.floor(Number(v.cargo?.[g.id]) || 0))),
+          ]),
+        ),
+        claimed: !!v.claimed,
+      }));
+  f.ecology = Array.isArray(r.ecology)
+    ? r.ecology.filter((v) => typeof v === "string").slice(0, 8)
+    : [];
+  s.fieldLife = f;
+  if (s.battle && Number.isSafeInteger(raw.battle?.fieldSeed))
+    s.battle.fieldSeed = raw.battle.fieldSeed >>> 0;
+  if (s.battle) {
+    for (const u of s.battle.units) {
+      const old = raw.battle?.units?.find((v) => v.id === u.id);
+      u.facing = Number.isFinite(old?.facing) ? old.facing : 0;
+    }
+    for (const e of s.battle.enemies) {
+      const old = raw.battle?.enemies?.find((v) => v.id === e.id);
+      e.facing = Number.isFinite(old?.facing) ? old.facing : Math.PI;
+      if (
+        !e.bossId &&
+        ["wolf", "goblin", "bandit", "raider", "brute", "archer"].includes(
+          e.kind,
+        ) &&
+        old?.fleeing === true
+      )
+        e.fleeing = true;
+    }
+  }
 }

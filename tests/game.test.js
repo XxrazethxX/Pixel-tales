@@ -42,6 +42,8 @@ test("battle validates range and actions, victory grants progression", () => {
   assert.equal(startBattle(s), false);
   travel(s, 1);
   assert.ok(startBattle(s));
+  // Fixed terrain fixture for coordinate-specific tactical assertions.
+  delete s.battle.fieldSeed;
   assert.equal(act(s, 0, 7, 1), false);
   assert.ok(act(s, 0, 3, 1));
   assert.equal(act(s, 0, 4, 1), false);
@@ -61,6 +63,8 @@ test("defeat recovers the company without an unwinnable state", () => {
   s.location = 1;
   s.contract = { target: 1, reward: 65 };
   startBattle(s);
+  // Fixed terrain fixture for coordinate-specific tactical assertions.
+  delete s.battle.fieldSeed;
   s.party.forEach((p) => (p.hp = 0));
   endTurn(s);
   assert.equal(s.location, 0);
@@ -153,6 +157,8 @@ test("movement and attack can happen in the same round; guard uses an action", (
   accept(s, 0);
   travel(s, 1);
   startBattle(s);
+  // Fixed terrain fixture for coordinate-specific tactical assertions.
+  delete s.battle.fieldSeed;
   s.battle.enemies[0].x = 4;
   s.battle.enemies[0].y = 1;
   assert.ok(act(s, 0, 3, 1));
@@ -414,6 +420,8 @@ function battleFixture() {
   accept(s, 0);
   travel(s, 1);
   startBattle(s);
+  // Fixed terrain fixture for coordinate-specific tactical assertions.
+  delete s.battle.fieldSeed;
   return s;
 }
 test("aimed shots validate range, spend valor once, and enforce cooldowns", () => {
@@ -815,6 +823,8 @@ test("equipped armor reduces enemy damage rather than only changing the displaye
   s.contract = { target: 1, reward: 65 };
   s.location = 1;
   startBattle(s);
+  // Fixed terrain fixture for coordinate-specific tactical assertions.
+  delete s.battle.fieldSeed;
   s.battle.enemies = [
     { id: 0, x: 2, y: 1, hp: 20, max: 20, damage: 5, kind: "raider" },
   ];
