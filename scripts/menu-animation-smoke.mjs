@@ -12,8 +12,8 @@ try {
     return v.dataset.animating === "true" && !v.paused && v.readyState >= 2;
   });
   await waitPlaying();
-  assert.equal(await scene.evaluate(v => v.videoWidth), 1280);
-  assert.equal(await scene.evaluate(v => v.videoHeight), 720);
+  assert.equal(await scene.evaluate(v => v.videoWidth), 1600);
+  assert.equal(await scene.evaluate(v => v.videoHeight), 900);
   assert.equal(await scene.evaluate(v => v.loop && v.muted && v.playsInline), true);
   assert.equal(await page.locator("#menu-effects").count(), 0, "Old overlays must be removed");
   const time = await scene.evaluate(v => v.currentTime);

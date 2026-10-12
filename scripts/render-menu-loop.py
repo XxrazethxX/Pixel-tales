@@ -6,13 +6,24 @@ from pathlib import Path
 import math
 import subprocess
 import numpy as np
-from PIL import Image, ImageChops, ImageEnhance, ImageFilter
+from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter
 
 ROOT = Path(__file__).resolve().parent.parent
-SIZE = (1280, 720)
-FPS, SECONDS = 24, 8
+SIZE = (1600, 900)
+FPS, SECONDS = 30, 8
 source = Image.open(ROOT / 'assets/main-menu-camp.png').convert('RGB')
-plate = Image.open(ROOT / 'assets/main-menu-clean-plate.png').convert('RGB').resize(SIZE, Image.Resampling.LANCZOS)
+original_plate = Image.open(ROOT / 'assets/main-menu-clean-plate.png').convert('RGB')
+smoke_plate = Image.open(ROOT / 'assets/main-menu-smoke-plate.png').convert('RGB').resize(source.size)
+# Restrict the generator edit to the two smoke plumes, keeping the original
+# characters, trees, buildings and river everywhere else.
+clean_mask = Image.new('L', source.size)
+d = ImageDraw.Draw(clean_mask)
+d.polygon([(1549, 346), (1558, 317), (1580, 301), (1590, 281), (1618, 273),
+           (1631, 291), (1618, 319), (1590, 331), (1581, 352)], fill=255)
+d.polygon([(1628, 357), (1633, 330), (1642, 310), (1662, 309), (1669, 327),
+           (1651, 350)], fill=255)
+clean = Image.composite(smoke_plate, original_plate, clean_mask.filter(ImageFilter.GaussianBlur(2)))
+plate = clean.resize(SIZE, Image.Resampling.LANCZOS)
 SX, SY = SIZE[0] / source.width, SIZE[1] / source.height
 
 def sprite(box, blue=False):
@@ -54,20 +65,144 @@ def paste(frame, pixels, box, alpha=1):
     im = im.resize((round(im.width * SX), round(im.height * SY)), Image.Resampling.LANCZOS)
     frame.paste(im, (round(box[0] * SX), round(box[1] * SY)), im)
 
+def displace(pixels, dx, dy):
+    """Subpixel texture flow with premultiplied alpha prevents dark edge halos."""
+    yy, xx = np.indices(pixels.shape[:2], dtype=float)
+    x = np.clip(xx + dx, 0, pixels.shape[1] - 1.001)
+    y = np.clip(yy + dy, 0, pixels.shape[0] - 1.001)
+    x0, y0 = np.floor(x).astype(int), np.floor(y).astype(int)
+    fx, fy = (x - x0)[..., None], (y - y0)[..., None]
+    data = pixels.astype(float)
+    data[..., :3] *= data[..., 3:] / 255
+    result = ((data[y0, x0] * (1 - fx) + data[y0, x0 + 1] * fx) * (1 - fy) +
+              (data[y0 + 1, x0] * (1 - fx) + data[y0 + 1, x0 + 1] * fx) * fy)
+    result[..., :3] *= 255 / np.maximum(result[..., 3:], .001)
+    return np.clip(result, 0, 255).astype('uint8')
+
+
+def smoke_sprite(box):
+    rgb = np.asarray(source.crop(box)).astype(float)
+    r, g, b = rgb[..., 0], rgb[..., 1], rgb[..., 2]
+    background = np.asarray(smoke_plate.crop(box)).astype(float)
+    difference = rgb.mean(axis=2) - background.mean(axis=2)
+    a = np.clip((r - 48) / 60, 0, 1) * np.clip((95 - np.abs(b - r)) / 35, 0, 1)
+    a *= np.clip((g - r + 5) / 10, 0, 1) * np.clip((difference - 3) / 30, 0, 1)
+    edge = Image.new('L', (rgb.shape[1], rgb.shape[0]), 255)
+    ImageDraw.Draw(edge).rectangle((0, 0, edge.width - 1, edge.height - 1), outline=0, width=3)
+    a *= np.asarray(edge.filter(ImageFilter.GaussianBlur(2))) / 255
+    alpha = Image.fromarray((a * 240).astype('uint8')).filter(ImageFilter.GaussianBlur(.6))
+    return np.dstack((rgb.astype('uint8'), np.asarray(alpha)))
+
+
+smoke_sources = [((1549, 277, 1632, 353), smoke_sprite((1549, 277, 1632, 353))),
+                 ((1625, 307, 1670, 358), smoke_sprite((1625, 307, 1670, 358)))]
+
+
+def water_layer(box, polygon, blue_only=True):
+    rgb = np.asarray(original_plate.crop(box))
+    mask = Image.new('L', (box[2] - box[0], box[3] - box[1]))
+    ImageDraw.Draw(mask).polygon([(x - box[0], y - box[1]) for x, y in polygon], fill=255)
+    a = np.asarray(mask.filter(ImageFilter.GaussianBlur(.8))).astype(float)
+    if blue_only:
+        r, g, b = rgb[..., 0].astype(float), rgb[..., 1].astype(float), rgb[..., 2].astype(float)
+        a *= np.clip((b - r - 4) / 14, 0, 1) * np.clip((g - r + 1) / 10, 0, 1)
+    return box, np.dstack((rgb, a.astype('uint8')))
+
+
+waters = [
+    water_layer((1210, 839, 1515, 941), [(1357, 878), (1390, 861), (1490, 850),
+        (1508, 870), (1480, 894), (1434, 908), (1345, 933), (1275, 940),
+        (1225, 940), (1301, 920), (1360, 900)]),
+    water_layer((1380, 460, 1505, 511), [(1402, 466), (1424, 471), (1466, 482),
+        (1496, 486), (1476, 502), (1420, 489), (1394, 478)]),
+    water_layer((1140, 240, 1465, 286), [(1145, 259), (1198, 250), (1265, 248),
+        (1320, 244), (1400, 255), (1460, 264), (1420, 275), (1355, 268),
+        (1300, 279), (1228, 273), (1170, 275)], False),
+]
+
+# Find existing warm window pixels instead of scattering invented lights over
+# rooftops. Connected components isolate each independently flickering window.
+window_rgb = np.asarray(original_plate).astype(float)
+r, green, blue = window_rgb[..., 0], window_rgb[..., 1], window_rgb[..., 2]
+window_mask = (r > 130) & (green > 75) & (r > green * 1.15) & (green > blue * 1.25) & (blue < 130)
+allowed_windows = Image.new('L', source.size)
+allowed_draw = ImageDraw.Draw(allowed_windows)
+allowed_draw.rectangle((1300, 290, 1671, 414), fill=255)
+allowed_draw.rectangle((960, 284, 1228, 326), fill=255)
+allowed_draw.polygon([(1330, 195), (1340, 167), (1381, 163), (1380, 114),
+    (1402, 151), (1410, 116), (1424, 145), (1433, 70), (1445, 102),
+    (1453, 146), (1465, 112), (1475, 149), (1535, 170), (1550, 210),
+    (1500, 211), (1450, 209), (1370, 208)], fill=255)
+window_mask &= np.asarray(allowed_windows) > 0
+seen, windows = set(), []
+for py, px in zip(*np.nonzero(window_mask)):
+    if (py, px) in seen:
+        continue
+    points, stack = [], [(int(py), int(px))]
+    seen.add((py, px))
+    while stack:
+        y, x = stack.pop()
+        points.append((y, x))
+        for dy, dx in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
+            ny, nx = y + dy, x + dx
+            if 0 <= ny < source.height and 0 <= nx < source.width and window_mask[ny, nx] and (ny, nx) not in seen:
+                seen.add((ny, nx)); stack.append((ny, nx))
+    ys, xs = zip(*points)
+    if 2 <= len(points) <= 35 and max(xs) - min(xs) < 8 and max(ys) - min(ys) < 10:
+        box = (min(xs) - 1, min(ys) - 1, max(xs) + 2, max(ys) + 2)
+        rgba = np.asarray(original_plate.crop(box).convert('RGBA')).copy()
+        rgba[..., 3] = 0
+        for y, x in points:
+            rgba[y - box[1], x - box[0], 3] = 255
+        windows.append((box, rgba))
+
+
+def animate_environment(frame, phase, q):
+    for number, (box, water) in enumerate(waters):
+        yy, xx = np.indices(water.shape[:2], dtype=float)
+        # The current carries texture diagonally; smaller crossing waves and
+        # moving luminance ridges add ripples without moving banks or rocks.
+        dx = 2.2 * np.sin(q * 3 + yy * .12) + .8 * np.sin(q * 5 + xx * .1)
+        dy = 1.1 * np.sin(q * 2 + xx * .08)
+        flowing = displace(water, dx, dy)
+        flowing[..., 3] = np.minimum(flowing[..., 3], water[..., 3])
+        reflection = 1 + .09 * np.sin((xx - yy) * .15 + q * 3 + number)
+        flowing[..., :3] = np.clip(flowing[..., :3].astype(float) * reflection[..., None], 0, 255)
+        paste(frame, flowing, box)
+    for number, (box, smoke) in enumerate(smoke_sources):
+        yy, xx = np.indices(smoke.shape[:2], dtype=float)
+        tip = 1 - yy / smoke.shape[0]
+        dx = tip * (3 * np.sin(q + yy * .08 + number) + 1.5 * np.sin(q * 2 + xx * .1))
+        dy = tip * 1.4 * np.sin(q * 2 + xx * .09)
+        paste(frame, displace(smoke, dx, dy), box, .8 + .1 * math.sin(q + number))
+        for i in range(5):
+            age = (phase + i / 5 + number * .13) % 1
+            # Soft textured plumes rise from the chimney and fade before reset.
+            glow(frame, box[0] + (25 if number == 0 else 13) + age * 32,
+                 box[3] - 8 - age * (66 if number == 0 else 40),
+                 7 + i % 3 * 2, (120, 127, 136), math.sin(age * math.pi) ** 2 * .065, .8)
+    for i, (box, rgba) in enumerate(windows):
+        # Different phases and periods, with gentle intensity variation; never
+        # flash the entire town or extinguish every window at once.
+        strength = .9 + .16 * math.sin(q * (2 + i % 3) + i * 1.7) + .06 * math.sin(q * 7 + i)
+        changed = rgba.copy()
+        changed[..., :3] = np.clip(changed[..., :3].astype(float) * strength, 0, 255)
+        paste(frame, changed, box)
+
+
 def render(index):
     phase = index / (FPS * SECONDS)
     q = phase * math.tau
     frame = plate.copy()
+    animate_environment(frame, phase, q)
     # Warp the actual painted flame texture. The base stays fixed on the logs;
     # its tips bend and stretch independently rather than pulsing rectangles.
     yy, xx = np.indices(fire.shape[:2])
     tip = np.clip((100 - yy) / 100, 0, 1)
     xshift = tip ** 1.5 * (4 * np.sin(q * 5 + yy * .09) + 2 * np.sin(q * 9 + xx * .1))
     yshift = tip * (4 * np.sin(q * 7 + xx * .13) + 2 * np.sin(q * 3))
-    xi = np.clip(np.rint(xx + xshift).astype(int), 0, fire.shape[1] - 1)
-    yi = np.clip(np.rint(yy + yshift).astype(int), 0, fire.shape[0] - 1)
     flicker = .78 + .12 * math.sin(q * 7) + .08 * math.sin(q * 11 + 1)
-    paste(frame, fire[yi, xi], firebox, flicker)
+    paste(frame, displace(fire, xshift, yshift), firebox, flicker)
     glow(frame, 950, 680, 85, (250, 142, 55), .13 + .06 * flicker, .7)
     for i in range(14):
         age = (phase * (1 + i % 3) + i * .137) % 1
@@ -102,15 +237,15 @@ def render(index):
     return frame
 
 out = ROOT / 'assets/main-menu-loop.mp4'
-command = ['ffmpeg', '-y', '-loglevel', 'error', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', '1280x720',
-           '-r', str(FPS), '-i', '-', '-an', '-c:v', 'libx264', '-preset', 'medium', '-crf', '19',
+command = ['ffmpeg', '-y', '-loglevel', 'error', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', f'{SIZE[0]}x{SIZE[1]}',
+           '-r', str(FPS), '-i', '-', '-an', '-c:v', 'libx264', '-preset', 'medium', '-crf', '16',
            '-pix_fmt', 'yuv420p', '-movflags', '+faststart', str(out)]
 process = subprocess.Popen(command, stdin=subprocess.PIPE)
 try:
     for index in range(FPS * SECONDS):
         frame = render(index)
         process.stdin.write(frame.tobytes())
-        if index in (0, 48, 96, 144):
+        if index in (0, 60, 120, 180):
             frame.save(f'/tmp/menu-loop-frame-{index}.png')
         if index % FPS == 0:
             print(f'Rendered {index // FPS}/{SECONDS} seconds', flush=True)
