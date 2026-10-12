@@ -618,7 +618,7 @@ test("save migration validates bounded new ledgers, prisoners, choices and techn
   s.version = 17;
   delete s.odyssey;
   const r = save(s);
-  assert.equal(r.version, 19);
+  assert.equal(r.version, 21);
   assert.deepEqual(r.odyssey.prisoners, []);
   s.odyssey = {
     distance: Infinity,

@@ -6,7 +6,12 @@ import {
   startBattle,
   markResettlement,
 } from "../src/game.js";
-import { enterGame } from "./smoke-menu.mjs";
+import {
+  enterGame,
+  gameClick,
+  dismissReports,
+  openDetails,
+} from "./smoke-menu.mjs";
 const { chromium } = await import(
   process.env.PLAYWRIGHT_MODULE || "playwright-core"
 );
@@ -21,15 +26,24 @@ try {
     }),
     errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
-  const click = (name) =>
-    page.getByRole("button", { name, exact: true }).click();
+  const click = (name) => gameClick(page, name);
   const close = async () => {
+    await dismissReports(page);
     const b = page.getByRole("button", { name: "Close panel", exact: true });
     if (await b.isVisible()) await b.click();
   };
   const state = () =>
     page.evaluate(() => JSON.parse(localStorage.getItem("pixel-tales")));
   const seed = async (s) => {
+    await dismissReports(page);
+    const titleContinue = page.getByRole("button", {
+        name: "Continue",
+        exact: true,
+      }),
+      menu = page.getByRole("button", { name: "Main menu", exact: true });
+    if (!(await titleContinue.isVisible()) && (await menu.isVisible()))
+      await menu.click();
+    await dismissReports(page);
     await page.evaluate(
       (s) => localStorage.setItem("pixel-tales", JSON.stringify(s)),
       s,

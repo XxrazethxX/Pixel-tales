@@ -116,7 +116,7 @@ export function researchLock(s, id) {
 }
 export function fresh() {
   return {
-    version: 19,
+    version: 21,
     companyName: "The Ashen Company",
     difficulty: "standard",
     banner: "ashen",
@@ -181,6 +181,8 @@ export function fresh() {
     expedition: freshExpedition(),
     odyssey: freshOdyssey(),
     chronicle: freshChronicle(),
+    arcana: freshArcana(),
+    fieldwork: freshFieldwork(),
     stash: { found: false, unlocked: false, searched: [], clues: [], loot: {} },
     cargo: { grain: 0, cloth: 0, salt: 0, iron: 0 },
     markets: {},
@@ -260,7 +262,7 @@ export function travel(s, to) {
   s.destination = null;
   s.morale = Math.max(0, s.morale - 2);
   note(s, `Reached ${places[to].name}. Daily upkeep settled.`);
-  if (s.day % 3 === 0) s.event = roadEvent(s);
+  if (s.day % 6 === 0) s.event = roadEvent(s);
   return true;
 }
 export function camp(s) {
@@ -273,6 +275,7 @@ export function camp(s) {
     professionBonus(s, "Herbalist") * 2 +
     (s.campUpgrades.tents || 0) * 5 +
     (s.campUpgrades.infirmary || 0) * 6;
+  const crowded = s.campOpen ? campCrowding(s) : 0;
   const restHours = (8 - s.timeOfDay + 24) % 24 || 24;
   spendHours(s, restHours, { resting: true });
   for (const p of livingParty(s)) {
@@ -287,12 +290,23 @@ export function camp(s) {
   if (s.hungerDays === 0 && !companyLost(s)) {
     s.morale = Math.min(100, s.morale + 12 + professionBonus(s, "Cook"));
     for (const p of livingParty(s)) {
-      p.hp = Math.min(p.max, p.hp + recovery);
+      p.hp = Math.min(
+        p.max,
+        p.hp + Math.max(1, Math.floor(recovery / (1 + crowded))),
+      );
       if (p.hp === p.max || (s.campUpgrades.infirmary && p.hp >= p.max / 2))
         p.injury = false;
     }
     if (cook && !cook.dead && campWorker(s, "cook")?.id !== cook.id)
       practice(s, cook, 1);
+    if (crowded) {
+      s.morale = Math.max(0, s.morale - crowded * 3);
+      for (const p of livingParty(s)) changeResolve(p, -crowded * 2);
+      note(
+        s,
+        `Crowded camp: ${crowded} companions lack space. Rest healing is reduced, morale falls and resolve suffers.`,
+      );
+    }
     finishCampJobs(s, restHours);
     if (restHours >= 6) restRelationships(s);
     note(
@@ -304,6 +318,7 @@ export function camp(s) {
       s,
       "An empty cookpot. Hunger prevents recovery; find food before the next daily meal.",
     );
+  if (s.campOpen) rollCampOpportunity(s);
   return true;
 }
 export function research(s, id) {
@@ -354,6 +369,7 @@ export function startBattle(s, patrolId = null, options = {}) {
     !s.party.some((p) => p.hp > 0)
   )
     return false;
+  beginAfterAction(s, "battle", patrol?.name || s.contract?.title || "Combat");
   s.destination = null;
   if (patrol?.faction) {
     changeReputation(s, patrol.faction, patrol.hostile ? -4 : -8);
@@ -502,7 +518,13 @@ export function startBattle(s, patrolId = null, options = {}) {
               : 0),
       );
     }
-  if (s.ambushReady || (isHidden(s) && s.stealth.concealment >= 75)) {
+  if (standardBearer(s)) s.battle.valor = Math.min(5, s.battle.valor + 1);
+  s.battle.terrainVariation = s.skirmishes % 3;
+  s.battle.terrainBaseLayout = s.battle.layoutId;
+  s.battle.terrainFormation = [...s.battle.units, ...s.battle.enemies].map(
+    (v) => ({ x: v.x, y: v.y }),
+  );
+  if (s.ambushReady || canAutoAmbush(s, patrol)) {
     s.battle.valor = Math.min(5, s.battle.valor + 1);
     s.battle.openingAmbush = true;
     s.ambushReady = false;
@@ -679,7 +701,11 @@ function win(s) {
     );
   }
   if (!patrolFight && !storyBattleWon(s)) s.contract = null;
+  s.party.forEach((p) => (p._wildshape = false));
   s.battle = null;
+  if (s.fieldwork.reportCheckpoint)
+    s.fieldwork.reportCheckpoint.outcome = "Victory";
+  updateAfterActionReport(s);
   if (dungeonReturn?.site === 12) clearStronghold(s);
   if (dungeonReturn) {
     s.siteProgress[`guard-${dungeonReturn.site}`] = true;
@@ -711,6 +737,7 @@ export function endTurn(s) {
   b.enemies.forEach((e) => {
     e.burningThisRound = false;
     e.charging = false;
+    if (e.empowered > 0) e.empowered--;
   });
   resolveRealmMagic(s);
   b.enemies.forEach((e) => (e.stunnedThisRound = false));
@@ -767,7 +794,16 @@ export function endTurn(s) {
     coordinateTargets(s, e, targets);
     const t = targets[0];
     if (!t) break;
-    const range = ["archer", "mage", "cultist"].includes(e.kind) ? 4 : 1,
+    const range = [
+        "archer",
+        "mage",
+        "cultist",
+        "necromancer",
+        "shaman",
+        "sorcerer",
+      ].includes(e.kind)
+        ? 4
+        : 1,
       dist = () => Math.abs(t.x - e.x) + Math.abs(t.y - e.y);
     const rooted = (e.root || 0) > 0;
     e.root = Math.max(0, (e.root || 0) - 1);
@@ -785,7 +821,15 @@ export function endTurn(s) {
       step < rush &&
       (dist() > range ||
         !hasLineOfSight(s, e, t) ||
-        (["archer", "mage", "cultist"].includes(e.kind) && dist() <= 1));
+        ([
+          "archer",
+          "mage",
+          "cultist",
+          "necromancer",
+          "shaman",
+          "sorcerer",
+        ].includes(e.kind) &&
+          dist() <= 1));
       step++
     ) {
       let options = [
@@ -806,7 +850,14 @@ export function endTurn(s) {
           !b.enemies.some((v) => v !== e && v.hp > 0 && v.x === x && v.y === y),
       );
       const retreat =
-        ["archer", "mage", "cultist"].includes(e.kind) && dist() <= 1;
+        [
+          "archer",
+          "mage",
+          "cultist",
+          "necromancer",
+          "shaman",
+          "sorcerer",
+        ].includes(e.kind) && dist() <= 1;
       options.sort(
         (a, c) =>
           (Math.abs(a[0] - t.x) +
@@ -848,6 +899,7 @@ export function endTurn(s) {
         ) +
         adversaryPower(s, e) +
         (e.charging ? 2 : 0) +
+        (e.empowered > 0 ? 3 : 0) +
         (e.kind === "archer" ? 0 : flankingBonus(s, e, t, "enemies")) +
         (e.kind === "wolf" &&
         b.enemies.some(
@@ -863,7 +915,9 @@ export function endTurn(s) {
         s,
         e.kind === "archer"
           ? "arrow"
-          : e.kind === "cultist"
+          : ["cultist", "mage", "necromancer", "shaman", "sorcerer"].includes(
+                e.kind,
+              )
             ? "spell"
             : "strike",
         e,
@@ -873,7 +927,14 @@ export function endTurn(s) {
         s,
         t,
         power,
-        ["archer", "mage", "cultist"].includes(e.kind),
+        [
+          "archer",
+          "mage",
+          "cultist",
+          "necromancer",
+          "shaman",
+          "sorcerer",
+        ].includes(e.kind),
       );
       if (e.kind === "spider" && p.hp > 0) t.poison = 2;
       if (
@@ -909,6 +970,16 @@ export function endTurn(s) {
     e.exposed = Math.max(0, (e.exposed || 0) - 1);
     if (e.hp > 0) markAdversaryThreat(s, e, t);
   }
+  for (const e of b.enemies.filter((e) => e.kind === "shaman" && e.casting)) {
+    const target = b.enemies.find(
+      (v) => v.id === e.casting.targetId && v.hp > 0,
+    );
+    if (target) {
+      e.casting.x = target.x;
+      e.casting.y = target.y;
+    }
+  }
+  settleFantasyPowers(s);
   if (tickMission(s)) return true;
   if (b.enemies.every((e) => e.hp === 0) && battleVictoryAllowed(s)) {
     win(s);
@@ -918,6 +989,9 @@ export function endTurn(s) {
     loseEscort(s);
     damageCompanyWagon(s);
     wearBattleEquipment(s, "defeat");
+    if (s.fieldwork.reportCheckpoint)
+      s.fieldwork.reportCheckpoint.outcome = "Defeat";
+    s.party.forEach((p) => (p._wildshape = false));
     s.battle = null;
     if (b.kind !== "patrol" && !["story", "boss"].includes(s.contract?.kind))
       s.contract = null;
@@ -965,7 +1039,7 @@ export function restore(raw) {
   if (
     !raw ||
     ![
-      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
     ].includes(raw.version) ||
     !Array.isArray(raw.party) ||
     raw.party.length < 1 ||
@@ -992,7 +1066,7 @@ export function restore(raw) {
   const result = {
     ...base,
     ...raw,
-    version: 19,
+    version: 21,
     inventory: { ...base.inventory, ...raw.inventory },
     explored: raw.explored || [],
     event: raw.event || null,
@@ -1813,6 +1887,8 @@ export function restore(raw) {
   restoreExpedition(result, raw);
   restoreOdyssey(result, raw);
   restoreChronicle(result, raw);
+  restoreArcana(result, raw);
+  restoreFieldwork(result, raw);
   updateCampaign(result);
   return result;
 }
@@ -1820,6 +1896,7 @@ export function attackPower(s, p) {
   return (
     p.damage +
     (p.weapon || 0) +
+    fantasyAttackBonus(s, p) +
     (equippedItem(s, p, "weapon")?.bonus || 0) +
     (p.talent === "duelist" ? 2 : 0) +
     (s.research.includes("steel") ? 2 : 0) +
@@ -1883,6 +1960,7 @@ export function recruit(s, offerId = null) {
     return false;
   const vacancy = s.party.findIndex((p) => p.dead),
     id = vacancy >= 0 ? vacancy : s.party.length;
+  if (s.fieldwork?.bannerBearer === id) s.fieldwork.bannerBearer = null;
   s.gold -= offer.cost;
   const companion = {
     id,
@@ -1902,6 +1980,12 @@ export function recruit(s, offerId = null) {
     race: offer.race || "human",
     personalQuest: { stage: 0, outcome: null },
     spellSpent: { 1: 0, 2: 0 },
+    knownSpells: [],
+    preparedSpells: isCaster(offer)
+      ? spellCatalogFor(offer)
+          .slice(0, 3)
+          .map((v) => v.id)
+      : null,
     armor: 0,
     weapon: 0,
     profession: offer.profession,
@@ -2382,6 +2466,7 @@ export function terrainAt(p) {
   return "grassland";
 }
 export function advanceMovement(s, seconds) {
+  if (s.fieldwork?.report) return { changed: false, arrived: false };
   if (
     !s.destination ||
     s.campOpen ||
@@ -2436,10 +2521,10 @@ export function advanceMovement(s, seconds) {
   updateCampaign(s);
   updateCaravanEscort(s);
   if (changed) {
-    checkWagonTravel(s, distanceTravelled);
+    checkWagonTravel(s, distanceTravelled * 0.6);
     observeClues(s);
-    checkTravelConversation(s, distanceTravelled);
-    checkRegionalTravel(s, distanceTravelled);
+    checkTravelConversation(s, distanceTravelled * 0.6);
+    checkRegionalTravel(s, distanceTravelled * 0.6);
   }
   return { changed, arrived };
 }
@@ -2695,6 +2780,7 @@ export function initialPatrols() {
   ];
 }
 export function advancePatrols(s, seconds) {
+  if (s.fieldwork?.report) return false;
   if (
     s.battle ||
     s.event ||
@@ -3227,6 +3313,7 @@ export function movementRange(p) {
   const career = activeCareer(p);
   const limp = p.wound?.type === "sprain" ? 1 : 0;
   return (
+    (p.role === "Rogue" || (p.role === "Druid" && p._wildshape) ? 1 : 0) +
     (career?.id === "outrider" ? 1 : 0) +
     Math.max(
       1,
@@ -3301,6 +3388,15 @@ export function useSkill(s, id, x, y) {
       e,
       attackPower(s, p) +
         skill.bonus +
+        (p.role === "Rogue" &&
+        b.units.some(
+          (v) =>
+            v !== u &&
+            s.party[v.id].hp > 0 &&
+            Math.abs(v.x - e.x) + Math.abs(v.y - e.y) === 1,
+        )
+          ? 3
+          : 0) +
         (skill.piercing ? enemyArmor(s, e) : 0) +
         flank -
         (!skill.piercing && Math.abs(e.x - u.x) + Math.abs(e.y - u.y) > 1
@@ -3554,8 +3650,11 @@ export function retreatBattle(s) {
   loseEscort(s);
   damageCompanyWagon(s);
   wearBattleEquipment(s, "retreat");
+  if (s.fieldwork.reportCheckpoint)
+    s.fieldwork.reportCheckpoint.outcome = "Retreated";
   s.gold = Math.max(0, s.gold - 15);
   s.morale = Math.max(0, s.morale - 10);
+  s.party.forEach((p) => (p._wildshape = false));
   s.battle = null;
   note(
     s,
@@ -3813,6 +3912,11 @@ function settleDay(s, mealsProvided = false) {
       p.fatigue = Math.min(100, (p.fatigue || 0) + 5);
       note(s, `${p.name} suffers from an untreated infected wound.`);
     }
+  if (
+    s.fieldwork?.bannerBearer !== null &&
+    s.party[s.fieldwork?.bannerBearer]?.dead
+  )
+    s.fieldwork.bannerBearer = null;
   const owed = wages + s.wageDebt;
   const paid = Math.min(s.gold, owed);
   s.gold -= paid;
@@ -3843,6 +3947,7 @@ function settleDay(s, mealsProvided = false) {
     s.destination = null;
     s.campOpen = false;
     s.event = null;
+    s.party.forEach((p) => (p._wildshape = false));
     s.battle = null;
     note(s, "The company has perished. Start a new company to continue.");
   }
@@ -3882,6 +3987,7 @@ export function spendHours(s, hours, options = {}) {
   return true;
 }
 export function advanceClock(s, seconds) {
+  if (s.fieldwork?.report) return false;
   if (
     !Number.isFinite(seconds) ||
     seconds <= 0 ||
@@ -3893,8 +3999,8 @@ export function advanceClock(s, seconds) {
     return false;
   const before = s.day;
   spendHours(s, (seconds / DAY_SECONDS) * 24);
-  if (s.day !== before && !companyLost(s) && s.day % 3 === 0) {
-    if (s.day % 6 === 0) beginTrailEncounter(s);
+  if (s.day !== before && !companyLost(s) && s.day % 6 === 0) {
+    if (s.day % 12 === 0) beginTrailEncounter(s);
     else {
       s.event = roadEvent(s);
       s.destination = null;
@@ -3984,6 +4090,7 @@ export function openCamp(s) {
   if (s.battle || s.event || companyLost(s)) return false;
   s.destination = null;
   s.campOpen = true;
+  rollCampOpportunity(s);
   note(
     s,
     "Camp pitched. Build improvements, tend your company, or rest until dawn.",
@@ -4481,6 +4588,7 @@ export function recruitmentOffers(s) {
     }[ruler];
     offers.push({ ...candidate, id: `${s.location}-faction-${ruler}` });
   }
+  offers.push(...fantasyRecruitment(s));
   return offers.filter(
     (offer) => offer.standard || !s.hiredRecruits.includes(offer.id),
   );
@@ -4786,6 +4894,8 @@ function enemyApproach(s, enemy, target, range, movement) {
 }
 
 export function battleTerrain(s) {
+  const varied = variedBattleTerrain(s);
+  if (varied) return varied;
   return (
     battlefield(s).tiles ||
     classicTerrain(s.battle?.wildlife || places[s.location]?.type === "forest")
@@ -4976,6 +5086,7 @@ function damageCompanion(s, target, power, ranged = false) {
       (target.guard ? 2 + (gearPerk(s, p, "bastion") ? 2 : 0) : 0) -
       bondProtection(s, target) -
       aura -
+      paladinProtection(s, target) -
       (ranged ? terrainCell(s, target.x, target.y).cover : 0),
   );
   const before = p.hp;
@@ -6011,7 +6122,7 @@ export function scoutLock(s) {
   return (
     trailEncounterLock(s) ||
     (!companyScout(s)
-      ? "Requires a conscious Archer or a companion working as a Thief."
+      ? "Requires a conscious Archer, Rogue or a companion working as a Thief."
       : null)
   );
 }
@@ -6673,6 +6784,13 @@ export function createCompany(options) {
       ...s.party[id],
       name: safeCompanyName(p.name, `Companion ${id + 1}`, 18),
       role: p.role,
+      preparedSpells: isCaster(p)
+        ? spellCatalogFor(p)
+            .filter((v) => !v.tome)
+            .slice(0, 3)
+            .map((v) => v.id)
+        : null,
+      knownSpells: [],
       max: hearty ? 32 : stats.max,
       hp: hearty ? 32 : stats.max,
       damage: stats.damage + (p.trait === "mercenary" ? 1 : 0),
@@ -7082,6 +7200,7 @@ export function companionStory(s, id, choice) {
         );
   } else if (choice === "release") {
     if ((p.resolve ?? 65) > 25) return false;
+    if (s.fieldwork?.bannerBearer === p.id) s.fieldwork.bannerBearer = null;
     p.departed = true;
     p.dead = true;
     p.equipment = {};
@@ -7480,6 +7599,7 @@ function triggerOverwatch(s, e) {
   }
 }
 function departCompanion(s, p) {
+  if (s.fieldwork?.bannerBearer === p.id) s.fieldwork.bannerBearer = null;
   p.departed = true;
   p.dead = true;
   p.equipment = {};
@@ -7620,7 +7740,14 @@ export function combatPreview(s, id, x, y, skillMode = false) {
       if (
         !u.safeMove &&
         e.hp > 0 &&
-        !["archer", "mage", "cultist"].includes(e.kind) &&
+        ![
+          "archer",
+          "mage",
+          "cultist",
+          "necromancer",
+          "shaman",
+          "sorcerer",
+        ].includes(e.kind) &&
         !e.stun &&
         !e.distracted &&
         !e.reacted &&
@@ -8166,7 +8293,7 @@ equipmentCatalog.push({
   uniqueBoss: "broken-road",
 });
 export function isCaster(p) {
-  return ["Wizard", "Cleric"].includes(p?.role);
+  return ["Wizard", "Cleric", "Druid", "Paladin"].includes(p?.role);
 }
 export const spellBook = [
   {
@@ -8250,6 +8377,9 @@ export function spellLock(s, id, spellId, x, y) {
   const p = s.party[id],
     u = s.battle?.units.find((u) => u.id === id),
     spell = spellsFor(p).find((v) => v.id === spellId);
+  if (spell?.kind === "explore")
+    return "Use this spell while exploring, outside combat.";
+  if (u?.wildshape) return "Leave animal form before casting.";
   if (!spell || !u || p.hp <= 0 || p.dead || u.acted)
     return "Caster unavailable or action spent.";
   if (
@@ -8295,7 +8425,12 @@ export function spellLock(s, id, spellId, x, y) {
     return ["damage", "illusion", "counter"].includes(spell.kind)
       ? "Select a living enemy."
       : "Select a conscious ally.";
-  if (spell.kind === "counter" && !["mage", "cultist"].includes(target.kind))
+  if (
+    spell.kind === "counter" &&
+    !["mage", "cultist", "necromancer", "shaman", "sorcerer"].includes(
+      target.kind,
+    )
+  )
     return "Choose an enemy spellcaster.";
   if (
     spell.kind === "heal" &&
@@ -8357,6 +8492,8 @@ export function castSpell(s, id, spellId, x, y) {
         target.hp > 0
       )
         target.burn = 2;
+      if (spell.root && target.hp > 0)
+        target.root = Math.max(target.root || 0, spell.root);
       if (spell.interrupt && target.casting) {
         target.casting = null;
         note(
@@ -8383,6 +8520,7 @@ export function castSpell(s, id, spellId, x, y) {
     } else
       target.arcaneWard =
         spell.power +
+        (p.talent === "greenheart" ? 2 : 0) +
         (gearPerk(s, p, "focus") ? 2 : 0) +
         (["barrier", "guardian"].includes(p.spellSchool) ? 3 : 0);
   }
@@ -8470,7 +8608,7 @@ export function fieldHealing(s, id, targetId) {
 }
 
 export function isHidden(s) {
-  return !!s.stealth?.active && s.stealth.concealment >= 60;
+  return concealmentLevel(s) >= 60;
 }
 export function toggleStealth(s) {
   if (s.battle || s.event || s.campOpen || companyLost(s)) return false;
@@ -8541,7 +8679,7 @@ export function confrontPatrol(s, id) {
     passageSafe(s, p)
   )
     return false;
-  if (isHidden(s) && s.stealth.concealment >= 75) return startBattle(s, id);
+  if (canAutoAmbush(s, p) || s.ambushReady) return startBattle(s, id);
   if (p.kind !== "bandits" || p.id === "warden-pursuit")
     return startBattle(s, id);
   s.destination = null;
@@ -8592,7 +8730,7 @@ export function companyScout(s) {
       (p) =>
         !p.dead &&
         p.hp > 0 &&
-        (p.role === "Archer" || p.profession === "Thief"),
+        (["Archer", "Rogue"].includes(p.role) || p.profession === "Thief"),
     ) ||
     null
   );
@@ -8620,7 +8758,7 @@ function travelEligible(s, p, role) {
     !p.dead &&
     p.hp > 0 &&
     (role === "scout"
-      ? p.role === "Archer" || p.profession === "Thief"
+      ? ["Archer", "Rogue"].includes(p.role) || p.profession === "Thief"
       : s.wagon.owned && (role !== "rearguard" || !isCaster(p)))
   );
 }
@@ -8777,7 +8915,7 @@ function damageCompanyWagon(s) {
 export function strongholdScoutLock(s) {
   if (s.battle || s.event || s.campOpen || companyLost(s))
     return "Return to the map first.";
-  if (!companyScout(s)) return "Requires a conscious Archer or Thief.";
+  if (!companyScout(s)) return "Requires a conscious Archer, Rogue or Thief.";
   if (
     Math.hypot(s.position.x - places[12].x, s.position.y - places[12].y) > 110
   )
@@ -9440,7 +9578,11 @@ spellBook.push(
 );
 export function spellsFor(p) {
   return spellBook.filter(
-    (v) => v.role === p?.role && (!v.school || v.school === p.spellSchool),
+    (v) =>
+      v.role === p?.role &&
+      (!v.school || v.school === p.spellSchool) &&
+      (!v.tome || p.knownSpells?.includes(v.id)) &&
+      (!Array.isArray(p.preparedSpells) || p.preparedSpells.includes(v.id)),
   );
 }
 export function spellRange(p, spell) {
@@ -9686,7 +9828,7 @@ export function disarmBattleSnare(s, id, x, y) {
     !p ||
     p.hp <= 0 ||
     p.dead ||
-    !(p.role === "Archer" || p.profession === "Thief") ||
+    !(["Archer", "Rogue"].includes(p.role) || p.profession === "Thief") ||
     !u ||
     u.acted ||
     !trap ||
@@ -10304,12 +10446,12 @@ export function realmDungeonAction(s, action, value) {
     return true;
   }
   if (action === "dial") {
-    if (!nearDoor || q.unlocked || !professional(s, "Thief")) return false;
+    if (!nearDoor || q.unlocked || !companyLockpicker(s)) return false;
     q.dial = (q.dial + 1) % 5;
     return true;
   }
   if (action === "pick") {
-    const thief = professional(s, "Thief");
+    const thief = companyLockpicker(s);
     if (!nearDoor || q.unlocked || !thief) return false;
     const target = [1, 3, 2][q.pins];
     if (q.dial === target) {
@@ -10318,9 +10460,9 @@ export function realmDungeonAction(s, action, value) {
       e.message = "A tumbler clicks into place.";
       if (q.pins === 3) {
         q.unlocked = true;
-        practice(s, thief, 2);
+        if (thief.profession === "Thief") practice(s, thief, 2);
         e.message =
-          "The Thief opens the hidden lock. Solve its rune seal or spend magic to enter.";
+          "The lockpicker opens the hidden lock. Solve its rune seal or spend magic to enter.";
       }
     } else {
       q.strain++;
@@ -11149,6 +11291,7 @@ function finishMission(s) {
     changeResolve(p, 3);
   }
   growPartyBonds(s, 4, true);
+  s.party.forEach((p) => (p._wildshape = false));
   s.battle = null;
   note(
     s,
@@ -11670,7 +11813,7 @@ export function interpretClueLock(s, id) {
   if (!p || s.battle || s.event || s.campOpen || companyLost(s))
     return "Finish the current activity or choose an unfinished trail.";
   return !companyScout(s)
-    ? "Requires a conscious Archer or Thief."
+    ? "Requires a conscious Archer, Rogue or Thief."
     : Math.hypot(s.position.x - p.x, s.position.y - p.y) > 55
       ? "Approach within 55 pixels to read the clue."
       : "";
@@ -13353,18 +13496,25 @@ function deployNewEnemies(s, family) {
   b.feedback = [];
   b.fxSerial = 0;
   const kinds =
-    family === "cultist"
-      ? ["cultist", "raider", "raider"]
-      : family === "knight"
-        ? ["knight", "archer", "knight"]
-        : family === "troll"
-          ? ["troll", "goblin"]
-          : ["spider", "spider", "spider"];
+    family === "necromancer"
+      ? ["necromancer", "skeleton", "skeleton"]
+      : family === "shaman"
+        ? ["shaman", "wolf", "wolf"]
+        : family === "sorcerer"
+          ? ["sorcerer", "knight", "raider"]
+          : family === "cultist"
+            ? ["cultist", "raider", "raider"]
+            : family === "knight"
+              ? ["knight", "archer", "knight"]
+              : family === "troll"
+                ? ["troll", "goblin"]
+                : ["spider", "spider", "spider"];
   b.enemies = kinds.map((kind, id) => ({
     id,
     kind,
-    name:
-      kind === "troll"
+    name: ["necromancer", "shaman", "sorcerer"].includes(kind)
+      ? kind.charAt(0).toUpperCase() + kind.slice(1)
+      : kind === "troll"
         ? "Crag troll"
         : kind === "spider"
           ? "Silkfang"
@@ -13374,9 +13524,13 @@ function deployNewEnemies(s, family) {
               ? "Iron Oath knight"
               : kind === "archer"
                 ? "Oath archer"
-                : kind === "goblin"
-                  ? "Crag scavenger"
-                  : "Cult blade",
+                : kind === "wolf"
+                  ? "Thorn wolf"
+                  : kind === "skeleton"
+                    ? "Bound skeleton"
+                    : kind === "goblin"
+                      ? "Crag scavenger"
+                      : "Cult blade",
     x: 7,
     y: 1 + id * 2,
     hp: kind === "troll" ? 40 : kind === "knight" ? 26 : 18,
@@ -13384,7 +13538,12 @@ function deployNewEnemies(s, family) {
     damage:
       kind === "troll" ? 7 : kind === "spider" ? 4 : kind === "cultist" ? 3 : 5,
     armor: kind === "knight" ? 2 : kind === "troll" ? 1 : 0,
-    mana: kind === "cultist" ? 2 : 0,
+    mana:
+      kind === "cultist"
+        ? 2
+        : ["necromancer", "shaman", "sorcerer"].includes(kind)
+          ? 3
+          : 0,
     webs: kind === "spider" ? 2 : 0,
     guard: kind === "knight",
     snares: 0,
@@ -13403,6 +13562,7 @@ function knightFlanked(s, e) {
   );
 }
 function newEnemyTurn(s, e) {
+  if (arcaneEnemyTurn(s, e)) return true;
   const b = s.battle;
   if (!newEnemyFamilies.some((f) => f.id === e.kind)) return false;
   const targets = b.units
@@ -13533,7 +13693,7 @@ function newEnemyTurn(s, e) {
 }
 export function newEnemyReport(s, e) {
   const f = newEnemyFamilies.find((v) => v.id === e.kind);
-  return `${f?.counter || ""}${e.kind === "cultist" ? ` Prayer slots ${e.mana || 0}/2${e.casting ? " · PRAYER PREPARED" : ""}` : ""}${e.kind === "knight" ? ` Shield ${knightFlanked(s, e) ? "flanked" : "holding"}${e.charge ? " · CHARGE PREPARED" : ""}` : ""}${e.kind === "troll" && e.smash ? " · SMASH PREPARED" : ""}`;
+  return `${f?.counter || ""}${arcaneEnemyFamilies.some((v) => v.id === e.kind) ? ` Slots ${e.mana || 0}/3${e.casting ? " · SPELL PREPARED" : ""}` : ""}${e.kind === "cultist" ? ` Prayer slots ${e.mana || 0}/2${e.casting ? " · PRAYER PREPARED" : ""}` : ""}${e.kind === "knight" ? ` Shield ${knightFlanked(s, e) ? "flanked" : "holding"}${e.charge ? " · CHARGE PREPARED" : ""}` : ""}${e.kind === "troll" && e.smash ? " · SMASH PREPARED" : ""}`;
 }
 export function scoutEnemyLock(s, id) {
   const p = s.patrols.find((p) => p.id === id && !p.cleared),
@@ -13543,7 +13703,7 @@ export function scoutEnemyLock(s, id) {
     : s.battle || s.event || s.campOpen || companyLost(s)
       ? "Return to free exploration."
       : !companyScout(s)
-        ? "Requires a conscious Archer or Thief."
+        ? "Requires a conscious Archer, Rogue or Thief."
         : Math.hypot(p.x - s.position.x, p.y - s.position.y) > 125
           ? "Approach within 125 pixels to scout the patrol."
           : s.chronicle.scouted[id]
@@ -13600,6 +13760,9 @@ export function battleStatuses(s, entity, side = "enemy") {
   if (u.fleeing) flags.push("Fleeing");
   if (u.exposed) flags.push("Marked");
   if (u.casting) flags.push("Channeling");
+  if (u.empowered) flags.push("Empowered");
+  if (u.wildshape) flags.push("Animal form");
+  if (u.aura) flags.push("Protective aura");
   if (u.smash || u.charge) flags.push("Windup");
   if (p?.wound)
     flags.push(
@@ -14171,4 +14334,1675 @@ function restoreChronicle(s, raw) {
           ? "web"
           : "snare";
   }
+}
+
+// Prepared magic uses the same finite slots in combat and on the overworld.
+export function freshArcana() {
+  return {
+    passages: {},
+    grimoires: {},
+    recovered: {},
+    services: {},
+    exploration: {},
+  };
+}
+Object.assign(founderRoles, {
+  Rogue: { max: 24, damage: 6 },
+  Druid: { max: 24, damage: 4 },
+  Paladin: { max: 32, damage: 5 },
+});
+Object.assign(classSkills, {
+  Rogue: {
+    name: "Backstab",
+    cost: 1,
+    cooldown: 2,
+    range: 1,
+    bonus: 4,
+    desc: "Strike with four extra power. Gain another three when a companion also engages the target.",
+  },
+  Paladin: {
+    name: "Oath strike",
+    cost: 1,
+    cooldown: 2,
+    range: 1,
+    bonus: 3,
+    desc: "A committed melee strike; protective aura is a separate class action.",
+  },
+});
+Object.assign(specializations, {
+  Rogue: [
+    {
+      id: "duelist",
+      name: "Knife specialist",
+      desc: "Two extra attack power.",
+    },
+    { id: "skirmisher", name: "Fleetfoot", desc: "One extra movement tile." },
+  ],
+  Druid: [
+    {
+      id: "greenheart",
+      name: "Greenheart",
+      desc: "Bark wards gain two protection.",
+    },
+    { id: "skirmisher", name: "Pathfinder", desc: "One extra movement tile." },
+  ],
+  Paladin: [
+    {
+      id: "bulwark",
+      name: "Oath guardian",
+      desc: "Bracing protects adjacent companions.",
+    },
+    { id: "duelist", name: "Zealot", desc: "Two extra attack power." },
+  ],
+});
+spellBook.push(
+  {
+    id: "briar",
+    name: "Grasping briars",
+    role: "Druid",
+    level: 1,
+    range: 4,
+    kind: "damage",
+    power: 4,
+    root: 2,
+    herbs: 1,
+  },
+  {
+    id: "bark",
+    name: "Barkskin",
+    role: "Druid",
+    level: 1,
+    range: 3,
+    kind: "ward",
+    power: 5,
+  },
+  {
+    id: "storm",
+    name: "Thornstorm",
+    role: "Druid",
+    level: 2,
+    range: 4,
+    kind: "damage",
+    power: 7,
+    area: true,
+    herbs: 1,
+  },
+  {
+    id: "lay-hands",
+    name: "Healing oath",
+    role: "Paladin",
+    level: 1,
+    range: 1,
+    kind: "heal",
+    power: 6,
+    herbs: 1,
+  },
+  {
+    id: "oath-ward",
+    name: "Guardian light",
+    role: "Paladin",
+    level: 1,
+    range: 3,
+    kind: "ward",
+    power: 4,
+  },
+  {
+    id: "judgment",
+    name: "Radiant judgment",
+    role: "Paladin",
+    level: 2,
+    range: 3,
+    kind: "damage",
+    power: 10,
+    piercing: true,
+    herbs: 1,
+  },
+  {
+    id: "reveal",
+    name: "Lantern of secrets",
+    role: "Wizard",
+    level: 1,
+    range: 0,
+    kind: "explore",
+    power: 0,
+    desc: "Reveal nearby landmarks or both stash clues, once per landmark.",
+  },
+  {
+    id: "waystep",
+    name: "Mist crossing",
+    role: "Wizard",
+    level: 2,
+    range: 0,
+    kind: "explore",
+    power: 0,
+    desc: "Cross a regional travel obstacle without supplies or detour fatigue.",
+  },
+  {
+    id: "rootsense",
+    name: "Root sense",
+    role: "Druid",
+    level: 1,
+    range: 0,
+    kind: "explore",
+    power: 0,
+    desc: "Uncover a hidden herbal cache at each wilderness landmark, once.",
+  },
+  {
+    id: "wildbridge",
+    name: "Living bridge",
+    role: "Druid",
+    level: 2,
+    range: 0,
+    kind: "explore",
+    power: 0,
+    desc: "Resolve farmland, coast or mountain travel obstacles using a spell slot.",
+  },
+  {
+    id: "haven",
+    name: "Quiet sanctuary",
+    role: "Cleric",
+    level: 1,
+    range: 0,
+    kind: "explore",
+    power: 0,
+    herbs: 1,
+    desc: "Dispel ghost-mist or arcane static during a regional travel encounter.",
+  },
+  {
+    id: "sanctify",
+    name: "Consecrated road",
+    role: "Paladin",
+    level: 1,
+    range: 0,
+    kind: "explore",
+    power: 0,
+    herbs: 1,
+    desc: "Dispel ghost-mist or arcane static during a regional travel encounter.",
+  },
+  {
+    id: "mirror-ward",
+    name: "Prismatic mantle",
+    role: "Wizard",
+    level: 2,
+    range: 3,
+    kind: "ward",
+    power: 8,
+    area: true,
+    tome: true,
+    ore: 1,
+  },
+  {
+    id: "mass-mend",
+    name: "Circle of restoration",
+    role: "Cleric",
+    level: 2,
+    range: 3,
+    kind: "heal",
+    power: 6,
+    area: true,
+    tome: true,
+    herbs: 2,
+  },
+  {
+    id: "ancient-root",
+    name: "Elder grasp",
+    role: "Druid",
+    level: 2,
+    range: 4,
+    kind: "damage",
+    power: 8,
+    root: 2,
+    area: true,
+    tome: true,
+    herbs: 2,
+  },
+  {
+    id: "dawn-spear",
+    name: "Spear of dawn",
+    role: "Paladin",
+    level: 2,
+    range: 5,
+    kind: "damage",
+    power: 12,
+    piercing: true,
+    tome: true,
+    ore: 1,
+  },
+);
+export const grimoires = [
+  {
+    id: "prism",
+    name: "Prism codex",
+    spell: "mirror-ward",
+    site: 5,
+    price: 65,
+  },
+  {
+    id: "restoration",
+    name: "Book of returning light",
+    spell: "mass-mend",
+    site: 8,
+    price: 65,
+  },
+  {
+    id: "elder",
+    name: "The rootbound folio",
+    spell: "ancient-root",
+    site: 7,
+    price: 60,
+  },
+  {
+    id: "dawn",
+    name: "Dawn oath scripture",
+    spell: "dawn-spear",
+    site: 11,
+    price: 70,
+  },
+];
+export function spellCatalogFor(p) {
+  return spellBook.filter(
+    (v) =>
+      v.role === p?.role &&
+      (!v.school || v.school === p.spellSchool) &&
+      (!v.tome || p.knownSpells?.includes(v.id)),
+  );
+}
+export function preparationCapacity(p) {
+  return Math.min(6, 3 + Math.floor((p.level || 1) / 3));
+}
+export function preparationLock(s, id, ids) {
+  const p = s.party[id];
+  return !p || p.dead || p.hp <= 0 || !isCaster(p)
+    ? "Requires a conscious caster."
+    : s.battle || s.event || (!s.campOpen && s.location !== 6)
+      ? "Prepare spells at camp or Emberfall's academy."
+      : !Array.isArray(ids) ||
+          !ids.length ||
+          new Set(ids).size !== ids.length ||
+          ids.length > preparationCapacity(p) ||
+          ids.some((id) => !spellCatalogFor(p).some((v) => v.id === id))
+        ? `Choose one to ${preparationCapacity(p)} known spells, without duplicates.`
+        : null;
+}
+export function prepareSpells(s, id, ids) {
+  if (preparationLock(s, id, ids)) return false;
+  const p = s.party[id];
+  if (
+    Array.isArray(p.preparedSpells) &&
+    p.preparedSpells.length === ids.length &&
+    p.preparedSpells.every((v) => ids.includes(v))
+  )
+    return false;
+  p.preparedSpells = [...ids];
+  spendHours(s, 1);
+  note(
+    s,
+    `${p.name} prepares ${ids.length} spells in one hour. Slots are not restored.`,
+  );
+  return true;
+}
+export function recoverGrimoireLock(s, id) {
+  const t = grimoires.find((v) => v.id === id);
+  return !t ||
+    s.location !== t.site ||
+    s.battle ||
+    s.event ||
+    s.campOpen ||
+    companyLost(s)
+    ? "Explore the grimoire's landmark outside an encounter."
+    : s.arcana.recovered[id]
+      ? "This landmark's grimoire has been recovered."
+      : !s.explored.includes(t.site)
+        ? "Explore or clear this landmark before searching its archive."
+        : null;
+}
+export function recoverGrimoire(s, id) {
+  if (recoverGrimoireLock(s, id)) return false;
+  s.arcana.recovered[id] = true;
+  s.arcana.grimoires[id] = (s.arcana.grimoires[id] || 0) + 1;
+  spendHours(s, 2);
+  note(
+    s,
+    `Recovered ${grimoires.find((v) => v.id === id).name}. Read it at camp or the academy to learn its spell.`,
+  );
+  return true;
+}
+export function learnGrimoireLock(s, id, tome) {
+  const p = s.party[id],
+    t = grimoires.find((v) => v.id === tome),
+    spell = spellBook.find((v) => v.id === t?.spell);
+  return !p || p.dead || p.hp <= 0 || !t || spell.role !== p.role
+    ? "This grimoire belongs to another magical class."
+    : s.battle || s.event || (!s.campOpen && s.location !== 6)
+      ? "Study at camp or Emberfall's academy."
+      : p.knownSpells?.includes(spell.id)
+        ? "Spell already learned."
+        : !(s.arcana.grimoires[tome] > 0)
+          ? "Requires a copy of this grimoire."
+          : s.knowledge < 2
+            ? "Requires two knowledge and four hours."
+            : null;
+}
+export function learnGrimoire(s, id, tome) {
+  if (learnGrimoireLock(s, id, tome)) return false;
+  const p = s.party[id],
+    t = grimoires.find((v) => v.id === tome);
+  s.knowledge -= 2;
+  s.arcana.grimoires[tome]--;
+  p.knownSpells = [...(p.knownSpells || []), t.spell];
+  spendHours(s, 4);
+  note(
+    s,
+    `${p.name} learns ${spellBook.find((v) => v.id === t.spell).name}. Prepare it before use.`,
+  );
+  if (!Array.isArray(p.preparedSpells))
+    p.preparedSpells = spellCatalogFor(p)
+      .filter((v) => !v.tome)
+      .slice(0, preparationCapacity(p))
+      .map((v) => v.id);
+  return true;
+}
+export function academyLock(s, action, id = null) {
+  if (
+    s.battle ||
+    s.event ||
+    s.campOpen ||
+    companyLost(s) ||
+    s.location !== 6 ||
+    townAccessLock(s)
+  )
+    return "Visit Emberfall's academy outside an encounter.";
+  const t = grimoires.find((v) => v.id === id);
+  if (action === "tome")
+    return !t
+      ? "Unknown grimoire."
+      : s.arcana.services[`tome-${id}`] === s.day
+        ? "One copy of each grimoire per day."
+        : s.gold < t.price
+          ? `Requires ${t.price} crowns.`
+          : null;
+  if (action === "reagents")
+    return s.arcana.services.reagents === s.day
+      ? "One reagent parcel daily."
+      : s.gold < 24
+        ? "Requires twenty-four crowns and one hour."
+        : null;
+  if (action === "tuition") {
+    const p = s.party[id];
+    return !p || p.hp <= 0 || p.dead || !isCaster(p)
+      ? "Choose a conscious caster."
+      : s.arcana.services[`tuition-${id}`] === s.day
+        ? "One lesson per companion daily."
+        : s.gold < 35
+          ? "Requires thirty-five crowns and three hours."
+          : null;
+  }
+  return "Unknown academy service.";
+}
+export function academyService(s, action, id = null) {
+  if (academyLock(s, action, id)) return false;
+  if (action === "tome") {
+    const t = grimoires.find((v) => v.id === id);
+    s.gold -= t.price;
+    s.arcana.grimoires[id] = (s.arcana.grimoires[id] || 0) + 1;
+    s.arcana.services[`tome-${id}`] = s.day;
+    note(s, `Purchased ${t.name}.`);
+  }
+  if (action === "reagents") {
+    s.gold -= 24;
+    s.inventory.herbs += 4;
+    s.inventory.ore += 2;
+    s.arcana.services.reagents = s.day;
+    spendHours(s, 1);
+    note(s, "Academy parcel: four herbs and two mineral reagents.");
+  }
+  if (action === "tuition") {
+    s.gold -= 35;
+    s.arcana.services[`tuition-${id}`] = s.day;
+    spendHours(s, 3);
+    s.knowledge++;
+    note(
+      s,
+      `${s.party[id].name} studies at the academy, earning one knowledge.`,
+    );
+  }
+  return true;
+}
+export function explorationMagicLock(s, id, spellId) {
+  const p = s.party[id],
+    spell = spellsFor(p).find((v) => v.id === spellId && v.kind === "explore");
+  if (!p || p.hp <= 0 || p.dead || !spell)
+    return "Requires a conscious caster with this exploration spell prepared.";
+  if (s.battle || s.campOpen || companyLost(s))
+    return "Use exploration magic while traveling.";
+  if (p.wound?.type === "concussion" && spell.level === 2)
+    return "Concussion prevents level-two magic.";
+  if (spellSlots(p)[spell.level] < 1)
+    return `Requires one level ${spell.level} spell slot.`;
+  if (s.inventory.herbs < (spell.herbs || 0)) return "Requires one herb.";
+  const key = `${spellId}-${s.location}`;
+  if (spellId === "reveal")
+    return s.event &&
+      !(
+        s.event.kind === "site" &&
+        s.event.site === 10 &&
+        s.event.stage === "search"
+      )
+      ? "Reveal secrets outside other encounters."
+      : s.location < 0
+        ? "Approach a landmark first."
+        : s.arcana.exploration[key]
+          ? "Secrets here have already been revealed."
+          : null;
+  if (spellId === "rootsense")
+    return s.event || s.location < 0 || places[s.location]?.type === "town"
+      ? "Seek a wilderness landmark outside an encounter."
+      : s.arcana.exploration[key]
+        ? "This root cache has already been gathered."
+        : null;
+  if (s.event?.kind !== "region")
+    return "Use this spell during a regional travel obstacle.";
+  if (
+    spellId === "wildbridge" &&
+    !["farmland", "coast", "mountains"].includes(s.event.region)
+  )
+    return "Living bridge only crosses farmland, coast and mountain obstacles.";
+  if (
+    ["haven", "sanctify"].includes(spellId) &&
+    !["haunted", "city"].includes(s.event.region)
+  )
+    return "This spell dispels haunted mist or arcane static.";
+  return null;
+}
+export function castExplorationMagic(s, id, spellId) {
+  if (explorationMagicLock(s, id, spellId)) return false;
+  const p = s.party[id],
+    spell = spellsFor(p).find((v) => v.id === spellId);
+  p.spellSpent ||= { 1: 0, 2: 0 };
+  p.spellSpent[spell.level] = (p.spellSpent[spell.level] || 0) + 1;
+  s.inventory.herbs -= spell.herbs || 0;
+  if (spellId === "reveal") {
+    s.arcana.exploration[`${spellId}-${s.location}`] = true;
+    for (const [site, landmark] of places.entries())
+      if (
+        Math.hypot(landmark.x - s.position.x, landmark.y - s.position.y) <=
+          250 &&
+        !s.discovered.includes(site)
+      )
+        s.discovered.push(site);
+    if (s.location === 10 && !s.stash.found) {
+      s.stash.clues = [8, 2];
+      if (s.event)
+        s.event.message =
+          "Your lantern reveals both clue carvings. Follow the east-then-north directions and dig at the marked soil.";
+    }
+    s.knowledge++;
+  } else if (spellId === "rootsense") {
+    s.arcana.exploration[`${spellId}-${s.location}`] = true;
+    s.inventory.herbs += 3;
+  } else {
+    s.event = null;
+    s.destination = null;
+  }
+  spendHours(s, 1);
+  note(
+    s,
+    `${p.name} uses ${spell.name}. One level ${spell.level} slot spent${spell.herbs ? " and one herb consumed" : ""}; ${spellId === "rootsense" ? "three hidden herbs recovered" : spellId === "reveal" ? "nearby secrets revealed" : "the obstacle is safely resolved without travel supplies or detour fatigue"}.`,
+  );
+  return true;
+}
+export const fantasyClassInfo = [
+  {
+    id: "Rogue",
+    desc: "Fast melee scout. Backstab rewards engaging an enemy beside an ally; deft hands can read a stash lock's next pin without replacing its puzzle.",
+  },
+  {
+    id: "Druid",
+    desc: "Nature caster with roots, wards and herbal discovery. Wolf form spends a level-one slot for three rounds of stronger, faster melee, preventing spellcasting.",
+  },
+  {
+    id: "Paladin",
+    desc: "Armored oath caster. Protective aura spends a level-one slot and an action, reducing damage to nearby allies for three enemy turns.",
+  },
+];
+export function fantasyRecruitment(s) {
+  const role =
+    s.location === 0 ? "Paladin" : s.location === 3 ? "Rogue" : "Druid";
+  return [
+    {
+      id: `fantasy-${s.location}`,
+      name: role === "Paladin" ? "Aveline" : role === "Rogue" ? "Nix" : "Rowan",
+      role,
+      profession: role === "Rogue" ? "Cook" : "Herbalist",
+      max: founderRoles[role].max,
+      cost: role === "Rogue" ? 75 : 95,
+      traits: [role === "Rogue" ? "tireless" : "resolute"],
+      race: role === "Druid" ? "elf" : "human",
+    },
+  ];
+}
+export function fantasyActionLock(s, id, action) {
+  const p = s.party[id],
+    u = s.battle?.units.find((v) => v.id === id);
+  if (!p || p.hp <= 0 || p.dead) return "Choose a conscious companion.";
+  if (action === "read-lock")
+    return p.role !== "Rogue" ||
+      s.event?.kind !== "site" ||
+      s.event.site !== 10 ||
+      s.event.stage !== "lock"
+      ? "A Rogue can read the next pin of the Forgotten Stash lock."
+      : null;
+  if (!u || u.acted) return "Requires an available combat action.";
+  if (action === "revert")
+    return p.role !== "Druid" || !u.wildshape ? "Not in animal form." : null;
+  if (
+    s.battle.realmMagic?.surfaces.some(
+      (v) =>
+        v.kind === "silence" && Math.abs(v.x - u.x) + Math.abs(v.y - u.y) <= 1,
+    )
+  )
+    return "Silence prevents invoking magic here.";
+  return (action === "wolf-form" && p.role === "Druid") ||
+    (action === "aura" && p.role === "Paladin")
+    ? spellSlots(p)[1] < 1
+      ? "Requires one level-one slot."
+      : u.wildshape || u.aura
+        ? "This class power is already active."
+        : null
+    : "This class cannot use that power.";
+}
+export function fantasyAction(s, id, action) {
+  if (fantasyActionLock(s, id, action)) return false;
+  const p = s.party[id],
+    u = s.battle?.units.find((v) => v.id === id);
+  if (action === "read-lock") {
+    s.event.message = `${p.name} reads the tumblers: pin ${s.event.pin + 1} settles at tension ${[2, 4, 1][s.event.pin]}. Set the dial and test it.`;
+    return true;
+  }
+  if (action === "revert") {
+    u.wildshape = 0;
+    p._wildshape = false;
+    u.acted = true;
+    return true;
+  }
+  p.spellSpent ||= { 1: 0, 2: 0 };
+  p.spellSpent[1] = (p.spellSpent[1] || 0) + 1;
+  if (action === "wolf-form") {
+    u.wildshape = 3;
+    p._wildshape = true;
+  } else u.aura = 3;
+  u.acted = true;
+  combatCue(s, "ward", u, u);
+  note(
+    s,
+    `${p.name} invokes ${action === "aura" ? "a protective aura" : "wolf form"} for three enemy turns. One level-one slot spent.`,
+  );
+  return true;
+}
+function fantasyAttackBonus(s, p) {
+  const u = s.battle?.units.find((v) => v.id === p.id);
+  return p.role === "Druid" && u?.wildshape ? 3 : 0;
+}
+function paladinProtection(s, target) {
+  return s.battle?.units.some(
+    (v) =>
+      v.aura > 0 &&
+      s.party[v.id].hp > 0 &&
+      Math.abs(v.x - target.x) + Math.abs(v.y - target.y) <= 1,
+  )
+    ? 2
+    : 0;
+}
+function settleFantasyPowers(s) {
+  for (const u of s.battle.units) {
+    if (u.wildshape > 0) u.wildshape--;
+    s.party[u.id]._wildshape = !!u.wildshape;
+    if (u.aura > 0) u.aura--;
+  }
+}
+export const arcaneEnemyFamilies = [
+  {
+    id: "necromancer",
+    name: "Gravebinders",
+    site: 2,
+    counter:
+      "Kill the necromancer first, or interrupt its marked resurrection. Three slots; each corpse can be raised only once.",
+  },
+  {
+    id: "shaman",
+    name: "Thorn shamans",
+    site: 7,
+    counter:
+      "Interrupt the marked beast blessing, or stun empowered wolves. Three slots; empowerment adds three attack power for two turns.",
+  },
+  {
+    id: "sorcerer",
+    name: "Rift sorcerers",
+    site: 14,
+    counter:
+      "Move out of the marked tile and adjacent cells, or interrupt the channel. Three slots; the area spell also hits the sorcerer's allies.",
+  },
+];
+newEnemyFamilies.push(...arcaneEnemyFamilies);
+function arcaneEnemyTurn(s, e) {
+  if (!arcaneEnemyFamilies.some((v) => v.id === e.kind)) return false;
+  const b = s.battle;
+  if (e.silenced > 0) {
+    e.silenced--;
+    e.casting = null;
+    return true;
+  }
+  if (e.casting) {
+    const mark = e.casting;
+    e.casting = null;
+    if (!hasLineOfSight(s, e, mark)) {
+      note(
+        s,
+        "The prepared spell loses line of sight; its slot remains spent.",
+      );
+      return true;
+    }
+    combatCue(s, "spell", e, mark);
+    if (e.kind === "necromancer") {
+      const corpse = b.enemies.find(
+        (v) =>
+          v !== e && v.hp <= 0 && !v.raised && v.x === mark.x && v.y === mark.y,
+      );
+      if (
+        corpse &&
+        !b.units.some(
+          (u) => s.party[u.id].hp > 0 && u.x === mark.x && u.y === mark.y,
+        ) &&
+        !b.enemies.some((v) => v.hp > 0 && v.x === mark.x && v.y === mark.y)
+      ) {
+        corpse.hp = Math.min(corpse.max, 10);
+        corpse.raised = true;
+        note(
+          s,
+          "The gravebinder raises its marked corpse. This corpse cannot be raised again.",
+        );
+      }
+    }
+    if (e.kind === "shaman") {
+      const beast = b.enemies.find(
+        (v) =>
+          v.kind === "wolf" &&
+          v.hp > 0 &&
+          (Number.isInteger(mark.targetId)
+            ? v.id === mark.targetId
+            : v.x === mark.x && v.y === mark.y),
+      );
+      if (beast && hasLineOfSight(s, e, beast)) {
+        beast.empowered = 2;
+        note(s, "The marked wolf gains three attack power for two turns.");
+      }
+    }
+    if (e.kind === "sorcerer") {
+      for (const u of b.units.filter(
+        (u) =>
+          s.party[u.id].hp > 0 &&
+          Math.abs(u.x - mark.x) + Math.abs(u.y - mark.y) <= 1,
+      ))
+        damageCompanion(s, u, 8, true);
+      for (const ally of b.enemies.filter(
+        (v) =>
+          v !== e &&
+          v.hp > 0 &&
+          Math.abs(v.x - mark.x) + Math.abs(v.y - mark.y) <= 1,
+      ))
+        hitEnemy(s, ally, 8);
+      note(
+        s,
+        "The rift spell erupts across its marked area, including nearby enemy allies.",
+      );
+    }
+    return true;
+  }
+  if (e.mana <= 0 || e.distracted) return false;
+  let target;
+  if (e.kind === "necromancer")
+    target = b.enemies.find(
+      (v) =>
+        v !== e &&
+        v.hp <= 0 &&
+        !v.raised &&
+        Math.abs(v.x - e.x) + Math.abs(v.y - e.y) <= 4 &&
+        hasLineOfSight(s, e, v),
+    );
+  if (e.kind === "shaman")
+    target = b.enemies.find(
+      (v) =>
+        v.kind === "wolf" &&
+        v.hp > 0 &&
+        !v.empowered &&
+        Math.abs(v.x - e.x) + Math.abs(v.y - e.y) <= 4 &&
+        hasLineOfSight(s, e, v),
+    );
+  if (e.kind === "sorcerer")
+    target = b.units.find(
+      (u) =>
+        s.party[u.id].hp > 0 &&
+        Math.abs(u.x - e.x) + Math.abs(u.y - e.y) <= 4 &&
+        hasLineOfSight(s, e, u),
+    );
+  if (!target) return false;
+  e.mana--;
+  e.casting = {
+    x: target.x,
+    y: target.y,
+    ...(e.kind === "shaman" ? { targetId: target.id } : {}),
+  };
+  note(
+    s,
+    `${e.kind} spends a slot and prepares ${e.kind === "necromancer" ? "resurrection" : e.kind === "shaman" ? "a beast blessing" : "an area eruption"} at ${target.x + 1},${target.y + 1}. Move, stun, silence or counter before its next turn.`,
+  );
+  return true;
+}
+function restoreArcana(s, raw) {
+  const a = freshArcana(),
+    r = raw.arcana || {};
+  for (const t of grimoires) {
+    a.grimoires[t.id] = Number.isInteger(r.grimoires?.[t.id])
+      ? Math.max(0, Math.min(20, r.grimoires[t.id]))
+      : 0;
+    a.recovered[t.id] = r.recovered?.[t.id] === true;
+  }
+  const keys = [
+    "reagents",
+    ...grimoires.map((t) => `tome-${t.id}`),
+    ...s.party.map((p) => `tuition-${p.id}`),
+  ];
+  for (const key of keys)
+    if (
+      Number.isInteger(r.services?.[key]) &&
+      r.services[key] >= 1 &&
+      r.services[key] <= s.day
+    )
+      a.services[key] = r.services[key];
+  for (const spell of ["reveal", "rootsense"])
+    for (let site = 0; site < places.length; site++)
+      if (r.exploration?.[`${spell}-${site}`] === true)
+        a.exploration[`${spell}-${site}`] = true;
+  a.passages = {};
+  for (const room of hiddenPassages) {
+    const q = r.passages?.[room.site];
+    if (q && a.exploration[`reveal-${room.site}`])
+      a.passages[room.site] = {
+        searched: q.searched === true,
+        loot: Object.fromEntries(
+          Object.entries(room.loot).map(([key, max]) => [
+            key,
+            q.searched === true && Number.isInteger(q.loot?.[key])
+              ? Math.max(0, Math.min(max, q.loot[key]))
+              : 0,
+          ]),
+        ),
+      };
+  }
+  s.arcana = a;
+  if (
+    raw.event?.kind === "arcane-passage" &&
+    raw.event.site === s.location &&
+    hiddenPassages.some((v) => v.site === s.location) &&
+    a.exploration[`reveal-${s.location}`]
+  ) {
+    const room = hiddenPassages.find((v) => v.site === s.location);
+    s.event = {
+      kind: "arcane-passage",
+      site: s.location,
+      title: room.name,
+      text: room.desc,
+    };
+  }
+  for (const p of s.party) {
+    p.knownSpells = [
+      ...new Set(
+        (Array.isArray(p.knownSpells) ? p.knownSpells : []).filter((id) =>
+          spellBook.some((v) => v.id === id && v.role === p.role && v.tome),
+        ),
+      ),
+    ];
+    p.preparedSpells = Array.isArray(p.preparedSpells)
+      ? [
+          ...new Set(
+            p.preparedSpells.filter((id) =>
+              spellCatalogFor({ ...p, preparedSpells: null }).some(
+                (v) => v.id === id,
+              ),
+            ),
+          ),
+        ].slice(0, preparationCapacity(p))
+      : null;
+    p._wildshape = false;
+  }
+  if (s.battle) {
+    for (const u of s.battle.units) {
+      u.wildshape =
+        s.party[u.id].role === "Druid" && Number.isInteger(u.wildshape)
+          ? Math.max(0, Math.min(3, u.wildshape))
+          : 0;
+      u.aura =
+        s.party[u.id].role === "Paladin" && Number.isInteger(u.aura)
+          ? Math.max(0, Math.min(3, u.aura))
+          : 0;
+      s.party[u.id]._wildshape = !!u.wildshape;
+    }
+    for (const e of s.battle.enemies) {
+      e.empowered = Number.isInteger(e.empowered)
+        ? Math.max(0, Math.min(3, e.empowered))
+        : 0;
+      e.raised = e.raised === true;
+      if (arcaneEnemyFamilies.some((v) => v.id === e.kind)) {
+        e.mana = Number.isInteger(e.mana)
+          ? Math.max(0, Math.min(3, e.mana))
+          : 3;
+        const t = e.casting;
+        e.casting =
+          t &&
+          Number.isInteger(t.x) &&
+          Number.isInteger(t.y) &&
+          t.x >= 0 &&
+          t.x < 9 &&
+          t.y >= 0 &&
+          t.y < 7
+            ? {
+                x: t.x,
+                y: t.y,
+                ...(e.kind === "shaman" &&
+                Number.isInteger(t.targetId) &&
+                s.battle.enemies.some(
+                  (v) => v.id === t.targetId && v.kind === "wolf",
+                )
+                  ? { targetId: t.targetId }
+                  : {}),
+              }
+            : null;
+      }
+    }
+  }
+}
+
+export const hiddenPassages = [
+  {
+    site: 2,
+    name: "The lantern crypt",
+    desc: "Your light reveals a narrow stair behind the barrow's carved stones.",
+    loot: { gold: 18, herbs: 2 },
+  },
+  {
+    site: 14,
+    name: "The veiled ledge",
+    desc: "A folded stone wall opens onto an old explorer's sheltered ledge.",
+    loot: { gold: 12, medicine: 1 },
+  },
+  {
+    site: 11,
+    name: "The oath archive",
+    desc: "Faded sigils outline a sealed room beneath the broken throne.",
+    loot: { gold: 20, ore: 2 },
+  },
+];
+export function passageLock(s, action, resource = null) {
+  const room = hiddenPassages.find((v) => v.site === s.location),
+    state = s.arcana.passages?.[s.location];
+  if (!room || !s.arcana.exploration[`reveal-${s.location}`])
+    return "Reveal this hidden passage with Lantern of secrets first.";
+  if (s.battle || s.campOpen || companyLost(s))
+    return "Explore this passage outside combat and camp.";
+  if (action === "enter")
+    return s.event ? "Finish the current encounter." : null;
+  if (s.event?.kind !== "arcane-passage" || s.event.site !== s.location)
+    return "Enter the revealed passage.";
+  if (action === "search")
+    return state?.searched ? "The chamber has already been searched." : null;
+  if (action === "take")
+    return !Object.hasOwn(room.loot, resource) || !(state?.loot?.[resource] > 0)
+      ? "Nothing of that kind remains."
+      : null;
+  return action === "leave" ? null : "Unknown passage action.";
+}
+export function passageAction(s, action, resource = null) {
+  if (passageLock(s, action, resource)) return false;
+  const room = hiddenPassages.find((v) => v.site === s.location);
+  s.arcana.passages ||= {};
+  s.arcana.passages[s.location] ||= { searched: false, loot: {} };
+  const q = s.arcana.passages[s.location];
+  if (action === "enter")
+    s.event = {
+      kind: "arcane-passage",
+      site: s.location,
+      title: room.name,
+      text: room.desc,
+    };
+  if (action === "search") {
+    q.searched = true;
+    q.loot = { ...room.loot };
+    spendHours(s, 2);
+    note(s, `${room.name}: a chest stands open; choose what to take.`);
+  }
+  if (action === "take") {
+    const amount = q.loot[resource];
+    q.loot[resource] = 0;
+    if (resource === "gold") s.gold += amount;
+    else s.inventory[resource] += amount;
+    note(s, `Recovered ${amount} ${resource} from ${room.name}.`);
+  }
+  if (action === "leave") s.event = null;
+  return true;
+}
+equipmentCatalog.push(
+  {
+    id: "night-knives",
+    name: "Nightsteel knives",
+    role: "Rogue",
+    slot: "weapon",
+    tier: 2,
+    rarity: "Fine",
+    bonus: 2,
+    price: 80,
+    perk: "nimble",
+  },
+  {
+    id: "grove-staff",
+    name: "Rootwoven staff",
+    role: "Druid",
+    slot: "weapon",
+    tier: 2,
+    rarity: "Fine",
+    bonus: 2,
+    price: 85,
+    perk: "focus",
+  },
+  {
+    id: "oathblade",
+    name: "Dawn oathblade",
+    role: "Paladin",
+    slot: "weapon",
+    tier: 2,
+    rarity: "Fine",
+    bonus: 2,
+    price: 90,
+    perk: "riposte",
+  },
+);
+
+export function freshFieldwork() {
+  return {
+    standardUnlocked: false,
+    bannerBearer: null,
+    campSize: 0,
+    campPositions: {},
+    lastCampRoll: 0,
+    campOpportunity: null,
+    report: null,
+    reportCheckpoint: null,
+    reportSerial: 0,
+  };
+}
+export function standardBearer(s) {
+  const id = s.fieldwork?.bannerBearer,
+    p = s.party[id];
+  return s.fieldwork?.standardUnlocked &&
+    Number.isInteger(id) &&
+    p &&
+    !p.dead &&
+    p.hp > 0
+    ? p
+    : null;
+}
+export function standardLock(s) {
+  return s.fieldwork.standardUnlocked
+    ? "Company standard already unlocked."
+    : s.battle ||
+        s.event ||
+        companyLost(s) ||
+        (!s.campOpen && places[s.location]?.type !== "town")
+      ? "Unlock the standard at camp or a village."
+      : s.renown < 5
+        ? "Requires five renown."
+        : s.knowledge < 4 || s.gold < 40
+          ? "Requires four knowledge and forty crowns."
+          : null;
+}
+export function unlockStandard(s) {
+  if (standardLock(s)) return false;
+  s.knowledge -= 4;
+  s.gold -= 40;
+  s.fieldwork.standardUnlocked = true;
+  note(
+    s,
+    "Company standard unlocked. Assign a conscious companion as flag bearer to display it and gain one opening valor.",
+  );
+  return true;
+}
+export function assignFlagBearer(s, id) {
+  if (
+    !s.fieldwork.standardUnlocked ||
+    s.battle ||
+    s.event ||
+    companyLost(s) ||
+    (id !== null &&
+      (!Number.isInteger(id) ||
+        !s.party[id] ||
+        s.party[id].dead ||
+        s.party[id].hp <= 0))
+  )
+    return false;
+  s.fieldwork.bannerBearer = id;
+  note(
+    s,
+    id === null
+      ? "The company standard is packed away."
+      : `${s.party[id].name} carries the company standard.`,
+  );
+  return true;
+}
+export function naturalConcealment(s) {
+  return terrainAt(s.position) === "forest"
+    ? s.timeOfDay >= 20 || s.timeOfDay < 6
+      ? 80
+      : 65
+    : 0;
+}
+export function concealmentLevel(s) {
+  return Math.max(
+    naturalConcealment(s),
+    s.stealth?.active ? s.stealth.concealment || 0 : 0,
+  );
+}
+export function canAutoAmbush(s, patrol) {
+  return (
+    !!patrol &&
+    (naturalConcealment(s) >= 60 ||
+      (isHidden(s) && s.stealth.concealment >= 75)) &&
+    patrol?.kind !== "wolves" &&
+    !["spider", "troll"].includes(patrol?.enemyFamily)
+  );
+}
+export function campCapacity(s) {
+  return 4 + (s.fieldwork?.campSize || 0) * 2;
+}
+export function campCrowding(s) {
+  return Math.max(0, livingParty(s).length - campCapacity(s));
+}
+export function campExpansionLock(s) {
+  return !s.campOpen || s.battle || s.event || companyLost(s)
+    ? "Pitch camp before expanding it."
+    : s.fieldwork.campSize >= 2
+      ? "The camp is fully expanded."
+      : s.gold < 60 + s.fieldwork.campSize * 30 ||
+          s.inventory.wood < 10 + s.fieldwork.campSize * 5
+        ? `Requires ${60 + s.fieldwork.campSize * 30} crowns, ${10 + s.fieldwork.campSize * 5} timber and four hours.`
+        : null;
+}
+export function expandCamp(s) {
+  if (campExpansionLock(s)) return false;
+  s.gold -= 60 + s.fieldwork.campSize * 30;
+  s.inventory.wood -= 10 + s.fieldwork.campSize * 5;
+  s.fieldwork.campSize++;
+  spendHours(s, 4);
+  note(
+    s,
+    `Camp expanded. Sleeping capacity ${campCapacity(s)}; the cleared building area grows with the company.`,
+  );
+  return true;
+}
+export function campBounds(s) {
+  const n = s.fieldwork?.campSize || 0;
+  return {
+    left: 145 - n * 25,
+    top: 105 - n * 15,
+    right: 525 + n * 30,
+    bottom: 340 + n * 15,
+  };
+}
+export function campFurniturePoint(s, id) {
+  return (
+    s.fieldwork?.campPositions[id] || {
+      x: 230 + (s.campFurniture[id] % 3) * 70,
+      y: 155 + Math.floor(s.campFurniture[id] / 3) * 45,
+    }
+  );
+}
+export function furniturePlacementLock(s, id, x, y) {
+  const f = campFurniture.find((v) => v.id === id),
+    b = campBounds(s);
+  if (!s.campOpen || s.battle || s.event || companyLost(s) || !f)
+    return "Place furniture in a pitched camp.";
+  if (
+    !Number.isFinite(x) ||
+    !Number.isFinite(y) ||
+    x < b.left ||
+    y < b.top ||
+    x + 34 > b.right ||
+    y + 26 > b.bottom
+  )
+    return "Drop inside the cleared camp area; expansion creates more room.";
+  const occupied = [
+    { x: 165, y: 110, w: 85, h: 95 },
+    { x: 300, y: 220, w: 48, h: 45 },
+    { x: 278, y: 270, w: 110, h: 58 },
+    { x: 183, y: 270, w: 60, h: 25 },
+    ...(s.wagon.owned ? [{ x: 370, y: 305, w: 65, h: 45 }] : []),
+    ...(s.campUpgrades.forge ? [{ x: 430, y: 270, w: 55, h: 45 }] : []),
+    ...(s.campUpgrades.infirmary ? [{ x: 450, y: 190, w: 70, h: 50 }] : []),
+    ...(s.campUpgrades.watchpost ? [{ x: 455, y: 85, w: 55, h: 50 }] : []),
+    ...Object.keys(s.campFurniture)
+      .filter((v) => v !== id)
+      .map((v) => ({ ...campFurniturePoint(s, v), w: 34, h: 26 })),
+  ];
+  if (
+    occupied.some(
+      (p) => x < p.x + p.w && x + 34 > p.x && y < p.y + p.h && y + 26 > p.y,
+    )
+  )
+    return "Leave room around companions, stations and other furniture.";
+  return s.campFurniture[id] === undefined &&
+    (s.gold < f.gold || s.inventory.wood < f.wood)
+    ? `Requires ${f.gold} crowns and ${f.wood} timber.`
+    : null;
+}
+export function placeCampFurniture(s, id, x, y) {
+  x = Math.round(x / 5) * 5;
+  y = Math.round(y / 5) * 5;
+  if (furniturePlacementLock(s, id, x, y)) return false;
+  const f = campFurniture.find((v) => v.id === id),
+    building = s.campFurniture[id] === undefined;
+  if (building) {
+    s.gold -= f.gold;
+    s.inventory.wood -= f.wood;
+    s.campFurniture[id] = campFurniture.findIndex((v) => v.id === id);
+  }
+  s.fieldwork.campPositions[id] = { x, y };
+  if (building) spendHours(s, 2);
+  note(
+    s,
+    `${f.name} ${building ? "built" : "moved"}. Drag it again to rearrange camp.`,
+  );
+  return true;
+}
+export function rollCampOpportunity(s) {
+  const f = s.fieldwork;
+  if (f.lastCampRoll === s.day) return false;
+  f.lastCampRoll = s.day;
+  f.campOpportunity = null;
+  if (
+    s.day < 2 ||
+    (s.day * 13 + Math.floor(s.position.x / 64) * 7 + s.skirmishes * 5) % 3 !==
+      1
+  )
+    return false;
+  const candidates = livingParty(s).filter(
+    (p) =>
+      !p.storyComplete ||
+      p.personalQuest?.stage === 2 ||
+      continuationInfo(s, p.id)?.stage === 3,
+  );
+  if (!candidates.length) return false;
+  const p = candidates[(s.day + s.skirmishes) % candidates.length];
+  f.campOpportunity = { id: p.id, day: s.day };
+  note(s, `${p.name} asks for a quiet moment by the campfire.`);
+  return true;
+}
+export function campOpportunity(s, id) {
+  return (
+    s.campOpen &&
+    s.fieldwork.campOpportunity?.day === s.day &&
+    s.fieldwork.campOpportunity.id === id
+  );
+}
+export const safeRestSites = [
+  { site: 15, name: "Wayfarer guest lodge", rate: 5 },
+  { site: 16, name: "Pinewatch refuge", rate: 4 },
+  { site: 17, name: "Saltroad hostel", rate: 5 },
+  { site: 18, name: "Redstone shelter", rate: 6 },
+];
+places.push(
+  { name: "Pinewatch Refuge", x: 300, y: 70, type: "inn", scene: "inn" },
+  { name: "Saltroad Hostel", x: 650, y: 470, type: "inn", scene: "inn" },
+  { name: "Redstone Shelter", x: 1260, y: 270, type: "inn", scene: "inn" },
+);
+export function safeRestCost(s) {
+  const lodge = safeRestSites.find((v) => v.site === s.location);
+  return lodge
+    ? livingParty(s).length * lodge.rate + dailyWages(s) + s.wageDebt
+    : 0;
+}
+export function safeRestLock(s) {
+  return !safeRestSites.some((v) => v.site === s.location) ||
+    s.battle ||
+    s.event ||
+    s.campOpen ||
+    companyLost(s)
+    ? "Visit a lodge or roadside shelter outside an encounter."
+    : s.gold < safeRestCost(s)
+      ? `Requires ${safeRestCost(s)} crowns for beds, meals, wages and debt.`
+      : null;
+}
+export function restAtShelter(s) {
+  if (safeRestLock(s)) return false;
+  const site = s.location,
+    lodge = safeRestSites.find((v) => v.site === site);
+  s.gold -= livingParty(s).length * lodge.rate;
+  s.destination = null;
+  spendHours(s, 24, { mealsProvided: true, resting: true });
+  for (const p of livingParty(s)) {
+    p.hp = p.max;
+    p.injury = !!p.wound;
+    p.fatigue = Math.max(0, (p.fatigue || 0) - 70);
+    changeResolve(p, 5);
+  }
+  s.morale = Math.min(100, s.morale + 12);
+  note(
+    s,
+    `Rested safely at ${lodge.name}. Paid beds and meals prevent starvation and woodland interruptions; lasting wounds still require treatment and recovery.`,
+  );
+  return true;
+}
+export function wagonManifest(s) {
+  const cells = [];
+  for (const good of tradeGoods)
+    for (
+      let i = 0;
+      i < (s.cargo[good.id] || 0) && cells.length < companyCargoCapacity(s);
+      i++
+    )
+      cells.push({ id: good.id, name: good.name });
+  while (cells.length < companyCargoCapacity(s)) cells.push(null);
+  return cells;
+}
+function variedBattleTerrain(s) {
+  const b = s.battle;
+  if (!b?.terrainVariation || b.terrainBaseLayout !== b.layoutId) return null;
+  const style = battlefield(s).style;
+  let tiles =
+    style === "forest"
+      ? [
+          obstacleTile(3, 1, "tree"),
+          obstacleTile(5, 4, "tree"),
+          obstacleTile(4, 3, "log"),
+          coverTile(2, 2, "brush"),
+          coverTile(6, 2, "brush"),
+          coverTile(3, 5, "brush"),
+          mudTile(4, 5),
+        ]
+      : style === "ruin"
+        ? [
+            obstacleTile(3, 2, "wall"),
+            obstacleTile(5, 4, "wall"),
+            coverTile(4, 3),
+            coverTile(3, 5),
+            coverTile(6, 1),
+            mudTile(4, 1),
+          ]
+        : style === "quarry"
+          ? [
+              obstacleTile(4, 2, "rock"),
+              obstacleTile(3, 4, "rock"),
+              coverTile(5, 5),
+              coverTile(6, 2),
+              coverTile(3, 1),
+              mudTile(4, 4),
+            ]
+          : style === "river"
+            ? [
+                obstacleTile(4, 0, "water"),
+                obstacleTile(4, 1, "water"),
+                obstacleTile(4, 6, "water"),
+                coverTile(3, 2, "brush"),
+                coverTile(5, 5, "brush"),
+                mudTile(4, 2),
+                mudTile(4, 5),
+                { x: 4, y: 3, kind: "bridge", cover: 0, cost: 1 },
+              ]
+            : [
+                obstacleTile(4, 4, "wagon"),
+                obstacleTile(3, 1, "log"),
+                coverTile(3, 5),
+                coverTile(5, 2, "brush"),
+                coverTile(6, 3, "brush"),
+                mudTile(4, 2),
+              ];
+  if (b.terrainVariation === 2)
+    tiles = tiles.map((v) => ({ ...v, x: 8 - v.x, y: 6 - v.y }));
+  return tiles.filter(
+    (tile) =>
+      !tile.blocked ||
+      !b.terrainFormation?.some((p) => p.x === tile.x && p.y === tile.y),
+  );
+}
+export function reportSnapshot(s) {
+  return {
+    gold: s.gold,
+    food: s.food,
+    knowledge: s.knowledge,
+    shards: s.realm.shards,
+    grimoires: { ...s.arcana.grimoires },
+    inventory: { ...s.inventory },
+    cargo: { ...s.cargo },
+    gear: s.gear.map((g) => ({
+      id: g.id,
+      template: g.template,
+      durability: g.durability,
+    })),
+    party: s.party.map((p) => ({
+      id: p.id,
+      name: p.name,
+      hp: p.hp,
+      dead: !!p.dead,
+      departed: !!p.departed,
+      fatigue: p.fatigue || 0,
+      injury: !!p.injury,
+      wound: p.wound?.type || null,
+      level: p.level,
+      personalPerk: typeof p.personalPerk === "string" ? p.personalPerk : null,
+      resolve: p.resolve,
+      spellSpent: { ...(p.spellSpent || {}) },
+    })),
+  };
+}
+function encounterKey(s) {
+  return s.battle
+    ? `battle:${s.battle.patrolId || s.battle.kind}:${s.battle.enemyFamily || s.battle.bossId || s.battle.layoutId}`
+    : s.event
+      ? `event:${s.event.kind}:${s.event.site ?? s.event.templateId ?? s.event.region ?? s.event.id ?? s.event.title}`
+      : null;
+}
+export function beginAfterAction(s, kind, title) {
+  s.fieldwork.reportCheckpoint = {
+    kind,
+    title,
+    before: reportSnapshot(s),
+    key:
+      kind === "battle"
+        ? null
+        : encounterKey(s) || `action:${s.fieldwork.reportSerial}`,
+  };
+}
+export function updateAfterActionReport(s) {
+  const f = s.fieldwork,
+    current = encounterKey(s),
+    cp = f.reportCheckpoint;
+  if (f.report) return false;
+  if (cp && cp.kind === "battle" && s.battle && cp.key === null)
+    cp.key = current;
+  if (cp && (current !== cp.key || (cp.kind === "battle" && !s.battle))) {
+    if (cp.kind === "event" && s.battle) {
+      beginAfterAction(s, "battle", s.battle.enemyFamily || "Combat");
+      f.reportCheckpoint.key = current;
+      return false;
+    }
+    if (cp.kind === "battle" && s.battle) {
+      cp.key = current;
+      return false;
+    }
+    const before = cp.before,
+      after = reportSnapshot(s),
+      loot = [],
+      costs = [],
+      conditions = [];
+    for (const key of ["gold", "food", "knowledge"]) {
+      const delta = after[key] - before[key];
+      if (delta > 0)
+        loot.push(
+          `${delta} ${key === "gold" ? "crowns" : key === "food" ? "rations" : "knowledge"} gained`,
+        );
+      if (delta < 0)
+        costs.push(
+          `${-delta} ${key === "gold" ? "crowns" : key === "food" ? "rations" : "knowledge"} spent or lost`,
+        );
+    }
+    if (Number.isFinite(before.shards)) {
+      const delta = after.shards - before.shards;
+      if (delta > 0)
+        loot.push(`${delta} aether shard${delta === 1 ? "" : "s"}`);
+      if (delta < 0)
+        costs.push(`${-delta} aether shard${delta === -1 ? "" : "s"} consumed`);
+    }
+    if (before.grimoires)
+      for (const tome of grimoires) {
+        const delta =
+          (after.grimoires[tome.id] || 0) - (before.grimoires[tome.id] || 0);
+        if (delta > 0) loot.push(`${delta} ${tome.name}`);
+        if (delta < 0) costs.push(`${-delta} ${tome.name} studied`);
+      }
+    for (const key of Object.keys(s.inventory)) {
+      const delta = (after.inventory[key] || 0) - (before.inventory[key] || 0);
+      if (delta > 0) loot.push(`${delta} ${key}`);
+      if (delta < 0) costs.push(`${-delta} ${key} consumed`);
+    }
+    for (const key of Object.keys(s.cargo)) {
+      const delta = (after.cargo[key] || 0) - (before.cargo[key] || 0);
+      if (delta > 0) loot.push(`${delta} ${key} trade goods`);
+      if (delta < 0) costs.push(`${-delta} ${key} trade goods lost`);
+    }
+    for (const g of after.gear)
+      if (!before.gear.some((v) => v.id === g.id))
+        loot.push(
+          equipmentCatalog.find((v) => v.id === g.template)?.name ||
+            "New equipment",
+        );
+    for (const p of after.party) {
+      const old = before.party.find((v) => v.id === p.id);
+      if (!old || (old.dead && !p.dead)) {
+        conditions.push(`${p.name} joined the company.`);
+        continue;
+      }
+      if (p.personalPerk && p.personalPerk !== old.personalPerk)
+        conditions.push(
+          `${p.name} learned ${p.personalPerk.charAt(0).toUpperCase() + p.personalPerk.slice(1)}.`,
+        );
+      if (old.spellSpent)
+        for (const level of [1, 2]) {
+          const spent =
+            (p.spellSpent[level] || 0) - (old.spellSpent[level] || 0);
+          if (spent > 0)
+            costs.push(
+              `${p.name}: ${spent} level ${level} spell slot${spent === 1 ? "" : "s"} spent`,
+            );
+        }
+      if (p.dead && !old.dead)
+        conditions.push(
+          p.departed ? `${p.name} left the company alive.` : `${p.name} died.`,
+        );
+      else if (
+        p.hp !== old.hp ||
+        p.wound !== old.wound ||
+        p.injury !== old.injury ||
+        p.level !== old.level ||
+        (Number.isFinite(old.resolve) && p.resolve !== old.resolve) ||
+        (Number.isFinite(old.fatigue) && p.fatigue !== old.fatigue)
+      )
+        conditions.push(
+          `${p.name}: ${p.hp - old.hp >= 0 ? "+" : ""}${p.hp - old.hp} health${p.wound ? ` · ${woundTypes.find((v) => v.id === p.wound)?.name || "lasting wound"}` : p.injury ? " · injured" : ""}${p.level > old.level ? ` · level ${p.level}` : ""}${Number.isFinite(old.resolve) && p.resolve !== old.resolve ? ` · resolve ${Math.round(p.resolve)}` : ""}${Number.isFinite(old.fatigue) && p.fatigue !== old.fatigue ? ` · fatigue ${Math.round(p.fatigue)}` : ""}.`,
+        );
+    }
+    for (const g of after.gear) {
+      const old = before.gear.find((v) => v.id === g.id);
+      if (old && g.durability < old.durability)
+        costs.push(
+          `${equipmentCatalog.find((v) => v.id === g.template)?.name || "Equipment"}: −${old.durability - g.durability} condition`,
+        );
+    }
+    f.report = {
+      id: ++f.reportSerial,
+      title: cp.title,
+      kind: cp.kind,
+      outcome: cp.outcome || "Encounter completed",
+      day: s.day,
+      loot,
+      costs,
+      conditions,
+    };
+    f.reportCheckpoint = null;
+    return true;
+  }
+  if (!cp && current)
+    f.reportCheckpoint = {
+      kind: s.battle ? "battle" : "event",
+      title: s.battle
+        ? s.battle.enemyFamily || "Combat"
+        : s.event.title || places[s.event.site]?.name || "Encounter",
+      before: reportSnapshot(s),
+      key: current,
+    };
+  return false;
+}
+export function dismissAfterActionReport(s) {
+  if (!s.fieldwork.report) return false;
+  s.fieldwork.report = null;
+  return true;
+}
+function restoreFieldwork(s, raw) {
+  const f = freshFieldwork(),
+    r = raw.fieldwork || {};
+  f.standardUnlocked = r.standardUnlocked === true;
+  f.bannerBearer =
+    f.standardUnlocked &&
+    Number.isInteger(r.bannerBearer) &&
+    s.party[r.bannerBearer] &&
+    !s.party[r.bannerBearer].dead
+      ? r.bannerBearer
+      : null;
+  f.campSize = Number.isInteger(r.campSize)
+    ? Math.max(0, Math.min(2, r.campSize))
+    : 0;
+  f.lastCampRoll = Number.isInteger(r.lastCampRoll)
+    ? Math.max(0, Math.min(s.day, r.lastCampRoll))
+    : 0;
+  if (
+    r.campOpportunity?.day === s.day &&
+    Number.isInteger(r.campOpportunity.id) &&
+    s.party[r.campOpportunity.id] &&
+    !s.party[r.campOpportunity.id].dead
+  )
+    f.campOpportunity = { id: r.campOpportunity.id, day: s.day };
+  for (const item of campFurniture) {
+    const q = r.campPositions?.[item.id],
+      b = campBounds({ ...s, fieldwork: f });
+    if (
+      s.campFurniture[item.id] !== undefined &&
+      Number.isFinite(q?.x) &&
+      Number.isFinite(q?.y) &&
+      q.x >= b.left &&
+      q.y >= b.top &&
+      q.x + 34 <= b.right &&
+      q.y + 26 <= b.bottom
+    )
+      f.campPositions[item.id] = { x: q.x, y: q.y };
+  }
+  f.reportSerial = Number.isInteger(r.reportSerial)
+    ? Math.max(0, Math.min(1e9, r.reportSerial))
+    : 0;
+  if (r.report && ["battle", "event"].includes(r.report.kind)) {
+    f.report = {
+      id: f.reportSerial,
+      title: safeCompanyName(r.report.title, "After-action report", 80),
+      kind: r.report.kind,
+      outcome: safeCompanyName(r.report.outcome, "Encounter completed", 40),
+      day: s.day,
+      ...Object.fromEntries(
+        ["loot", "costs", "conditions"].map((key) => [
+          key,
+          (Array.isArray(r.report[key]) ? r.report[key] : [])
+            .filter((v) => typeof v === "string")
+            .slice(0, 30)
+            .map((v) => safeCompanyName(v, "", 180)),
+        ]),
+      ),
+    };
+  }
+  const cp = r.reportCheckpoint;
+  if (
+    cp &&
+    ["battle", "event"].includes(cp.kind) &&
+    cp.before &&
+    Number.isFinite(cp.before.gold) &&
+    Array.isArray(cp.before.party) &&
+    Array.isArray(cp.before.gear) &&
+    cp.before.inventory &&
+    cp.before.cargo &&
+    [
+      cp.before.gold,
+      cp.before.food,
+      cp.before.knowledge,
+      ...Object.values(cp.before.inventory),
+      ...Object.values(cp.before.cargo),
+    ].every(Number.isFinite) &&
+    cp.before.party.every(
+      (p) =>
+        p &&
+        Number.isInteger(p.id) &&
+        typeof p.name === "string" &&
+        Number.isFinite(p.hp),
+    ) &&
+    cp.before.gear.every(
+      (g) => g && Number.isInteger(g.id) && Number.isFinite(g.durability),
+    )
+  )
+    f.reportCheckpoint = {
+      kind: cp.kind,
+      title: safeCompanyName(cp.title, "Encounter", 80),
+      key: typeof cp.key === "string" ? cp.key : null,
+      before: cp.before,
+    };
+  s.fieldwork = f;
+  if (s.battle) {
+    const formation = raw.battle?.terrainFormation;
+    s.battle.terrainFormation = Array.isArray(formation)
+      ? formation
+          .filter(
+            (p) =>
+              p &&
+              Number.isInteger(p.x) &&
+              Number.isInteger(p.y) &&
+              p.x >= 0 &&
+              p.x < 9 &&
+              p.y >= 0 &&
+              p.y < 7,
+          )
+          .slice(0, 24)
+      : [...s.battle.units, ...s.battle.enemies].map((p) => ({
+          x: p.x,
+          y: p.y,
+        }));
+    s.battle.terrainVariation = Number.isInteger(s.battle.terrainVariation)
+      ? Math.max(0, Math.min(2, s.battle.terrainVariation))
+      : 0;
+    s.battle.terrainBaseLayout = battleLayouts.some(
+      (v) => v.id === s.battle.terrainBaseLayout,
+    )
+      ? s.battle.terrainBaseLayout
+      : s.battle.layoutId;
+  }
+}
+export function companyLockpicker(s) {
+  return (
+    livingParty(s).find((p) => p.hp > 0 && p.role === "Rogue") ||
+    professional(s, "Thief")
+  );
+}
+export function resolveCampOpportunity(s, id, choice) {
+  if (!campOpportunity(s, id)) return false;
+  const previous = s.fieldwork.reportCheckpoint;
+  beginAfterAction(s, "event", `${s.party[id].name}'s campfire conversation`);
+  if (!companionStory(s, id, choice)) {
+    s.fieldwork.reportCheckpoint = previous;
+    return false;
+  }
+  s.fieldwork.campOpportunity = null;
+  updateAfterActionReport(s);
+  return true;
+}
+export function resolveCampPersonalQuest(s, id, choice) {
+  if (!campOpportunity(s, id)) return false;
+  const previous = s.fieldwork.reportCheckpoint;
+  beginAfterAction(s, "event", `${s.party[id].name}'s personal journey`);
+  if (!advancePersonalQuest(s, id, choice)) {
+    s.fieldwork.reportCheckpoint = previous;
+    return false;
+  }
+  s.fieldwork.campOpportunity = null;
+  updateAfterActionReport(s);
+  return true;
 }

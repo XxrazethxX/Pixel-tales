@@ -117,7 +117,7 @@ test("v17 migration preserves previous state and rejects malformed expedition me
   s.version = 16;
   delete s.expedition;
   const r = save(s);
-  assert.equal(r.version, 19);
+  assert.equal(r.version, 21);
   assert.equal(r.expedition.home.owned, false);
   assert.equal(r.expedition.mission, null);
   s.expedition = {

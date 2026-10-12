@@ -1,3 +1,52 @@
+import { resolveCampPersonalQuest } from "./game.js";
+import { resolveCampOpportunity } from "./game.js";
+import { companyLockpicker } from "./game.js";
+import {
+  standardBearer,
+  standardLock,
+  unlockStandard,
+  assignFlagBearer,
+  concealmentLevel,
+  canAutoAmbush,
+  campCapacity,
+  campCrowding,
+  campExpansionLock,
+  expandCamp,
+  campBounds,
+  campFurniturePoint,
+  furniturePlacementLock,
+  placeCampFurniture,
+  campOpportunity,
+  safeRestSites,
+  safeRestCost,
+  safeRestLock,
+  restAtShelter,
+  wagonManifest,
+  beginAfterAction,
+  updateAfterActionReport,
+  dismissAfterActionReport,
+} from "./game.js";
+import { hiddenPassages, passageLock, passageAction } from "./game.js";
+import { drawArcanePassage } from "./art.js";
+import {
+  grimoires,
+  spellCatalogFor,
+  preparationCapacity,
+  prepareSpells,
+  preparationLock,
+  recoverGrimoire,
+  recoverGrimoireLock,
+  learnGrimoire,
+  learnGrimoireLock,
+  academyService,
+  academyLock,
+  castExplorationMagic,
+  explorationMagicLock,
+  fantasyClassInfo,
+  fantasyAction,
+  fantasyActionLock,
+} from "./game.js";
+import { drawArcaneLandmark } from "./art.js";
 import {
   newEnemyFamilies,
   scoutEnemy,
@@ -622,7 +671,14 @@ function renderHelp() {
     if (el.open) s.helpSeen[context] = true;
   };
 }
+let campCategory = "Overview",
+  dungeonDoorOpen = false,
+  dungeonPanelOpen = false,
+  pendingFurniture = null,
+  campDrag = null;
+const drawerFoldState = new Map();
 function render() {
+  updateAfterActionReport(s);
   if (
     !s.battle ||
     !isCaster(s.party[selected]) ||
@@ -686,7 +742,7 @@ function render() {
 
   document.body.classList.toggle(
     "in-site",
-    ["site", "dungeon", "farm"].includes(s.event?.kind),
+    ["site", "dungeon", "farm", "arcane-passage"].includes(s.event?.kind),
   );
   document.body.classList.toggle("drawer-open", drawerOpen);
   document.body.classList.toggle("encounter", !!s.event);
@@ -766,11 +822,18 @@ function render() {
       ? `${places[s.location].name} · SETTLEMENT`
       : s.companyName.toUpperCase();
   const panel = $("panel");
+  for (const d of panel.querySelectorAll("details")) {
+    const summary = d.querySelector("summary");
+    if (summary)
+      drawerFoldState.set(`${renderedTab}:${summary.textContent}`, d.open);
+  }
   panel.replaceChildren();
   if (tab === "Company") {
     appendExpeditionCompany(panel);
     appendOdysseyCompany(panel);
     appendChronicleCompany(panel);
+    appendStandardPanel(panel);
+    appendArcanaPanel(panel);
     appendRealmCompany(panel);
     appendTravelJobs(panel);
     appendWagonPanel(panel);
@@ -1150,7 +1213,9 @@ function render() {
   }
   if (tab === "Camp") {
     appendContinuationPanel(panel);
+    appendStandardPanel(panel);
     appendWoundPanel(panel);
+    appendArcanaPanel(panel);
     if (s.odyssey.prisoners.length) appendPrisoners(panel);
     appendWagonPanel(panel);
     appendTravelJobs(panel);
@@ -1205,34 +1270,11 @@ function render() {
     secondSelect.onchange = updateConversation;
     social.append(firstSelect, secondSelect, conversation);
     panel.append(social);
-    const furnishings = card(
-      "Camp furnishings",
-      "<p>Place furnishings in one of six camp spaces. Table: +2 rest healing. Rack: +1 staffed forge ore. Brazier: shelter from storm fatigue.</p>",
-    );
-    for (const f of campFurniture) {
-      const slot = document.createElement("select");
-      slot.setAttribute("aria-label", `${f.name} space`);
-      for (let i = 0; i < 6; i++) {
-        const option = document.createElement("option");
-        option.value = i;
-        option.textContent = `Space ${i + 1}`;
-        slot.append(option);
-      }
-      const cost = document.createElement("p");
-      cost.textContent = `${f.name}: ${f.wood} wood, ${f.gold} crowns to build; relocation is free.`;
-      furnishings.append(cost);
-      slot.value = s.campFurniture[f.id] ?? 0;
-      furnishings.append(
-        slot,
-        button(
-          `${s.campFurniture[f.id] === undefined ? "Build" : "Move"} ${f.name}`,
-          () => placeFurniture(s, f.id, Number(slot.value)),
-        ),
-      );
-    }
-    panel.append(furnishings);
+    appendCampBuildPalette(panel);
     for (const p of livingParty(s).filter(
-      (p) => !p.storyComplete || (p.resolve ?? 65) <= 25,
+      (p) =>
+        campOpportunity(s, p.id) &&
+        (!p.storyComplete || (p.resolve ?? 65) <= 25),
     )) {
       const c = card(
         `${p.name}’s goal`,
@@ -1241,24 +1283,26 @@ function render() {
       c.append(
         button(
           `Support ${p.name}`,
-          () => companionStory(s, p.id, "support"),
+          () => resolveCampOpportunity(s, p.id, "support"),
           !!p.storyComplete ||
             s.gold < 20 ||
             (p.profession === "Smith" && s.inventory.ore < 3),
         ),
         button(
           `Refuse ${p.name}`,
-          () => companionStory(s, p.id, "refuse"),
+          () => resolveCampOpportunity(s, p.id, "refuse"),
           !!p.storyComplete,
         ),
       );
       if ((p.resolve ?? 65) <= 25)
         c.append(
-          button(`Release ${p.name}`, () => companionStory(s, p.id, "release")),
+          button(`Release ${p.name}`, () =>
+            resolveCampOpportunity(s, p.id, "release"),
+          ),
         );
       panel.append(c);
     }
-    for (const p of livingParty(s)) {
+    for (const p of livingParty(s).filter((p) => campOpportunity(s, p.id))) {
       const stage =
         p.personalQuest?.stage || (p.storyComplete === "supported" ? 1 : 0);
       if (stage > 0 || p.storyComplete === "refused") {
@@ -1273,17 +1317,17 @@ function render() {
           journey.append(
             button(
               `Reconcile with ${p.name} · 15 crowns`,
-              () => advancePersonalQuest(s, p.id, "reconcile"),
+              () => resolveCampPersonalQuest(s, p.id, "reconcile"),
               s.gold < 15,
             ),
           );
         if (stage === 2)
           journey.append(
             button(`Share ${p.name}'s discovery`, () =>
-              advancePersonalQuest(s, p.id, "share"),
+              resolveCampPersonalQuest(s, p.id, "share"),
             ),
             button(`Sell ${p.name}'s discovery`, () =>
-              advancePersonalQuest(s, p.id, "claim"),
+              resolveCampPersonalQuest(s, p.id, "claim"),
             ),
           );
         panel.append(journey);
@@ -1709,6 +1753,7 @@ function render() {
       appendTerritoryPanel(panel);
       appendRegionalServices(panel);
       appendLivingVillage(panel);
+      if (s.location === 6) appendAcademy(panel);
       appendWoundPanel(panel);
       if (
         s.location === 0 &&
@@ -2175,6 +2220,18 @@ function render() {
           tab = "Company";
         }),
       );
+    if (pendingFurniture) {
+      a.append(
+        card(
+          `Place ${campFurniture.find((f) => f.id === pendingFurniture).name}`,
+          "<p>Drag onto an empty part of the highlighted clearing. Red means occupied or outside camp; green means it fits.</p>",
+        ),
+        button("Cancel camp placement", () => {
+          pendingFurniture = null;
+          campDrag = null;
+        }),
+      );
+    }
     $("map-label").textContent = `${s.companyName} · camp`;
   } else if (s.event) {
     const bandits =
@@ -2274,11 +2331,15 @@ function render() {
         layout = dungeonLayout(e.site),
         c = card(
           `${places[e.site].name} · ${layout.name}`,
-          `<p>${e.message}</p><p>Company position ${e.x + 1},${e.y + 1}. Arrow tiles move one square. Inspect walls for secrets. Unstable ground and traps hurt the party. Sentries guard the eastern vault.</p>`,
+          `<p>${e.message}</p><p>Click adjacent tiles on the dungeon floor, or use WASD / arrow keys. Click a nearby feature to inspect it. Watch for unstable ground, traps and sentries.</p>`,
         );
       c.id = "event";
+      $("map-label").textContent = `${places[e.site].name} · ${layout.name}`;
+      c.classList.add("dungeon-controls");
       const grid = document.createElement("div");
       grid.className = "dungeon-grid";
+      const fallback = fold("Accessible dungeon tile controls");
+      fallback.append(grid);
       for (let y = 0; y < 7; y++)
         for (let x = 0; x < 9; x++) {
           const blocked = dungeonWalls(s).some(([a, b]) => a === x && b === y);
@@ -2314,9 +2375,13 @@ function render() {
             `Dungeon tile ${x + 1},${y + 1}`,
           );
         }
-      appendDungeonPuzzle(c);
-      c.append(
-        grid,
+      const controls = fold("Dungeon actions", dungeonPanelOpen);
+      controls.addEventListener("toggle", () => {
+        if (controls.isConnected) dungeonPanelOpen = controls.open;
+      });
+      appendDungeonPuzzle(controls);
+      controls.append(
+        fallback,
         button(
           "Mine deposit · 1 hour",
           () => dungeonAction(s, "mine"),
@@ -2351,6 +2416,7 @@ function render() {
         ),
         button("Leave dungeon", () => dungeonAction(s, "leave")),
       );
+      c.append(controls);
       a.append(c);
     } else if (s.event.kind === "campaign") {
       c.append(
@@ -2581,7 +2647,8 @@ function render() {
         button("Walk away", () => resolveEvent(s, "leave")),
       );
     }
-    if (!["site", "dungeon", "farm"].includes(s.event.kind)) a.append(c);
+    if (!["site", "dungeon", "farm", "arcane-passage"].includes(s.event.kind))
+      a.append(c);
   } else if (s.battle) {
     if (s.party[selected].role === "Archer")
       a.append(
@@ -2626,6 +2693,7 @@ function render() {
     appendCareerCombat(a);
     appendOdysseyCombat(a);
     appendBattleConditions(a);
+    appendFantasyCombat(a);
     const actor = s.party[selected],
       unit = s.battle.units.find((u) => u.id === selected),
       skill = skillFor(actor);
@@ -2644,7 +2712,9 @@ function render() {
       summary.textContent = `Spells · level 1 ${spellSlots(actor)[1]} / level 2 ${spellSlots(actor)[2]}`;
       magic.className = "combat-preview-menu";
       magic.append(summary);
-      for (const spell of spellsFor(actor)) {
+      for (const spell of spellsFor(actor).filter(
+        (v) => v.kind !== "explore",
+      )) {
         const hint = document.createElement("p");
         hint.textContent = `${spell.name}: ${spell.power} ${spell.kind === "damage" ? "base damage" : spell.kind === "heal" ? "healing + level" : spell.kind === "illusion" ? "distraction: weaker attacks and no disengagement strikes" : spell.kind === "surface" ? `${spell.surface} ground for three rounds; affects both sides` : spell.kind === "counter" ? "interrupt and silence an enemy caster" : spell.kind === "concentration" ? "maintained wards; taking damage breaks concentration" : "protection on the next hit"} · range ${spellRange(actor, spell)}${spell.area ? " · adjacent area" : ""}${spell.piercing ? " · ignores armor" : ""}`;
         magic.append(hint);
@@ -3013,7 +3083,7 @@ function render() {
       } else
         a.append(
           button(
-            `${isHidden(s) && s.stealth.concealment >= 75 ? "Ambush" : "Confront"} ${p.name}`,
+            `${canAutoAmbush(s, p) ? "Ambush" : "Confront"} ${p.name}`,
             () => confrontPatrol(s, p.id),
             (p.passageUntil || 0) > s.day * 24 + s.timeOfDay,
             true,
@@ -3028,6 +3098,8 @@ function render() {
   appendExpeditionWorld(a);
   appendOdysseyWorld(a);
   appendChronicleWorld(a);
+  appendArcanaWorld(a);
+  appendShelterActions(a);
   appendRealmWorldActions(a);
   const rumorJournal = $("rumor-journal");
   rumorJournal.replaceChildren();
@@ -3068,8 +3140,17 @@ function render() {
   updateClockUI();
   renderHelp();
   appendActionRequirements();
+  if (tab === "Camp") organizeCampPanel(panel);
+  if (tab === "Town") organizeVillagePanel(panel);
+  if (s.battle) organizeCombatControls(a);
+  for (const d of panel.querySelectorAll("details")) {
+    const summary = d.querySelector("summary"),
+      key = `${tab}:${summary?.textContent}`;
+    if (drawerFoldState.has(key)) d.open = drawerFoldState.get(key);
+  }
   positionObjective();
   draw();
+  renderAfterAction();
 }
 function positionObjective() {
   $("objective").style.bottom =
@@ -3123,7 +3204,11 @@ function draw() {
     view.x = 325 - w / view.scale / 2;
     view.y = 225 - Math.max(160, h - 180) / view.scale / 2;
   }
-  if (["site", "dungeon", "farm", "home"].includes(s.event?.kind)) {
+  if (
+    ["site", "dungeon", "farm", "home", "arcane-passage"].includes(
+      s.event?.kind,
+    )
+  ) {
     view.scale = Math.min(w / 768, Math.max(160, h - 160) / 432);
     view.x = (768 - w / view.scale) / 2;
     view.y = (432 - Math.max(160, h - 160) / view.scale) / 2;
@@ -3135,8 +3220,14 @@ function draw() {
       -view.x * view.scale,
       -view.y * view.scale,
     );
-    if (s.event.kind === "dungeon") drawDungeonInterior(ctx, s);
-    else if (s.event.kind === "farm") drawFarmInterior(ctx, s);
+    canvas.dataset.viewX = view.x;
+    canvas.dataset.viewY = view.y;
+    canvas.dataset.scale = view.scale;
+    if (s.event.kind === "arcane-passage") drawArcanePassage(ctx, s);
+    else if (s.event.kind === "dungeon") {
+      drawDungeonInterior(ctx, s);
+      drawDungeonHighlights();
+    } else if (s.event.kind === "farm") drawFarmInterior(ctx, s);
     else if (s.event.kind === "home") drawCompanyHome(ctx, s);
     else drawSiteInterior(ctx, s);
     return;
@@ -3162,6 +3253,7 @@ function draw() {
   if (s.campOpen) {
     drawCampScene(ctx, s);
     drawCompanyBanner(ctx, s, 610, 230, 2);
+    drawCampLayoutOverlay();
     return;
   }
   if (s.battle) {
@@ -3187,10 +3279,20 @@ function draw() {
     for (const trap of (s.battle.traps || []).filter((t) => !t.used)) {
       rect(119 + trap.x * 62, 15 + trap.y * 60, 26, 3, "#ae6547");
       rect(130 + trap.x * 62, 5 + trap.y * 60, 3, 25, "#ae6547");
-      drawMapLabel(ctx, "SNARE", 136 + trap.x * 62, 42 + trap.y * 60, true);
+      drawMapLabel(
+        ctx,
+        trap.kind === "web" ? "WEB" : "SNARE",
+        136 + trap.x * 62,
+        42 + trap.y * 60,
+        true,
+      );
     }
     for (const enemy of s.battle.enemies.filter((e) => e.hp > 0 && e.casting)) {
-      ctx.strokeStyle = "#9261aa";
+      ctx.strokeStyle = ["cultist", "shaman"].includes(enemy.kind)
+        ? "#668e59"
+        : enemy.kind === "sorcerer"
+          ? "#b65e43"
+          : "#9261aa";
       ctx.lineWidth = 3;
       ctx.strokeRect(
         108 + enemy.casting.x * 62,
@@ -3200,7 +3302,15 @@ function draw() {
       );
       drawMapLabel(
         ctx,
-        "SPELL NEXT",
+        enemy.kind === "shaman"
+          ? "BLESS NEXT"
+          : enemy.kind === "necromancer"
+            ? "RAISE NEXT"
+            : enemy.kind === "sorcerer"
+              ? "BURST NEXT"
+              : enemy.kind === "cultist"
+                ? "HEAL NEXT"
+                : "SPELL NEXT",
         136 + enemy.casting.x * 62,
         12 + enemy.casting.y * 60,
         true,
@@ -3273,6 +3383,9 @@ function draw() {
             "spider",
             "cultist",
             "knight",
+            "necromancer",
+            "shaman",
+            "sorcerer",
           ].includes(e.kind)
         )
           drawFantasyEnemy(
@@ -3338,22 +3451,25 @@ function draw() {
           ctx.strokeStyle = "#5b6541";
           ctx.strokeRect(108 + visual.x * 62, 3 + visual.y * 60, 54, 52);
         }
-        person(
-          136 + visual.x * 62,
-          28 + visual.y * 60,
-          u.acted ? "#889079" : s.party[u.id].coat || partyCoats[u.id],
-          0,
-          s.party[u.id].role,
-          u.id,
-          s.party[u.id],
-        );
-        drawLoadout(
-          ctx,
-          s,
-          s.party[u.id],
-          136 + visual.x * 62,
-          28 + visual.y * 60,
-        );
+        if (u.wildshape) drawWolf(ctx, 136 + visual.x * 62, 28 + visual.y * 60);
+        else
+          person(
+            136 + visual.x * 62,
+            28 + visual.y * 60,
+            u.acted ? "#889079" : s.party[u.id].coat || partyCoats[u.id],
+            0,
+            s.party[u.id].role,
+            u.id,
+            s.party[u.id],
+          );
+        if (!u.wildshape)
+          drawLoadout(
+            ctx,
+            s,
+            s.party[u.id],
+            136 + visual.x * 62,
+            28 + visual.y * 60,
+          );
         ctx.font = "bold 9px monospace";
         ctx.textAlign = "center";
         ctx.fillStyle = "#474b33";
@@ -3395,6 +3511,7 @@ function draw() {
     }
     drawLandmark(ctx, p, i);
     drawLivingPlace(ctx, s, p, i);
+    drawArcaneLandmark(ctx, s, p, i);
     if (territoryOwner(s, i))
       drawMapLabel(
         ctx,
@@ -3519,7 +3636,11 @@ function draw() {
     });
     rect(point.x - 17 - index * 13, point.y + 14, 5, 1, "#b6b2a1");
   });
-  drawCompanyBanner(ctx, s, s.position.x + 29, s.position.y - 12);
+  const bearer = standardBearer(s);
+  if (bearer) {
+    const point = partyPositions(s)[bearer.id] || s.position;
+    drawCompanyBanner(ctx, s, point.x + 17, point.y - 14);
+  }
   if (isHidden(s))
     drawMapLabel(ctx, "HIDDEN", s.position.x, s.position.y - 35, true);
   if (s.wagon.owned) {
@@ -3535,10 +3656,17 @@ function draw() {
   drawWeather(ctx, s);
 }
 canvas.onclick = (e) => {
-  if (s.campOpen || companyLost(s)) return;
+  if (s.campOpen || companyLost(s) || s.fieldwork.report) return;
   const r = canvas.getBoundingClientRect(),
     x = view.x + (e.clientX - r.left) / view.scale,
     y = view.y + (e.clientY - r.top) / view.scale;
+  if (s.event?.kind === "dungeon") {
+    const tx = Math.floor((x - 105) / 62),
+      ty = Math.floor(y / 60);
+    interactDungeonTile(tx, ty);
+    render();
+    return;
+  }
   if (s.battle) {
     const tx = Math.floor((x - 105) / 62),
       ty = Math.floor(y / 60),
@@ -3596,9 +3724,9 @@ function updateClockUI() {
     $("resources").append(weather);
   }
   weather.textContent = weatherInfo(s).label;
-  $("hidden-scale").value = s.stealth.concealment;
+  $("hidden-scale").value = concealmentLevel(s);
   $("hidden-label").textContent =
-    `${isHidden(s) ? "Hidden" : s.stealth.active ? "Concealing" : "Visible"} · ${Math.round(s.stealth.concealment)}%${s.stealth.concealment >= 75 && s.stealth.active ? " · Ambush ready" : ""}`;
+    `${isHidden(s) ? "Hidden" : s.stealth.active ? "Concealing" : "Visible"} · ${Math.round(concealmentLevel(s))}%${isHidden(s) ? " · Concealed attacks can ambush" : ""}`;
 
   const info = clockInfo(s);
   const label = `Day ${s.day} · ${info.time} · ${info.period}`;
@@ -3745,9 +3873,39 @@ const walkingKeys = [
   "ArrowRight",
 ];
 window.addEventListener("keydown", (event) => {
-  if (!gameActive) return;
   if (
-    !walkingKeys.includes(event.key) ||
+    !gameActive ||
+    s.fieldwork.report ||
+    event.target.closest?.("input,select,textarea,[contenteditable=true]")
+  )
+    return;
+  const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+  if (
+    s.event?.kind === "dungeon" &&
+    !drawerOpen &&
+    walkingKeys.includes(key) &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !event.altKey
+  ) {
+    event.preventDefault();
+    const [dx, dy] = {
+      w: [0, -1],
+      ArrowUp: [0, -1],
+      s: [0, 1],
+      ArrowDown: [0, 1],
+      a: [-1, 0],
+      ArrowLeft: [-1, 0],
+      d: [1, 0],
+      ArrowRight: [1, 0],
+    }[key];
+    dungeonAction(s, "move", s.event.x + dx, s.event.y + dy);
+    render();
+    return;
+  }
+
+  if (
+    !walkingKeys.includes(key) ||
     s.battle ||
     s.event ||
     drawerOpen ||
@@ -3757,10 +3915,15 @@ window.addEventListener("keydown", (event) => {
   )
     return;
   event.preventDefault();
-  heldKeys.add(event.key);
+  heldKeys.add(key);
 });
 window.addEventListener("keyup", (event) => {
-  if (heldKeys.delete(event.key) && !heldKeys.size) {
+  if (
+    heldKeys.delete(
+      event.key.length === 1 ? event.key.toLowerCase() : event.key,
+    ) &&
+    !heldKeys.size
+  ) {
     stopMovement(s);
     render();
   }
@@ -3842,7 +4005,7 @@ canvas.addEventListener("pointermove", (event) => {
   }
   if (enemy)
     $("map-label").textContent =
-      `${enemy.name || enemy.kind || "raider"} · HP ${enemy.hp}/${enemy.max} · Armor ${enemyArmor(s, enemy)} · Range ${enemy.kind === "archer" ? 4 : 1}${enemy.kind === "wolf" ? ` · Rush ${enemy.bossId === "ashfang" ? 3 : 2} · pack hunter` : enemy.kind === "archer" ? " · Keeps distance" : " · Melee flanking +2"}${enemyDescription(s, enemy) ? ` · ${enemyDescription(s, enemy)}` : ""}${enemy.stun ? " · Stunned" : ""}${enemy.bleed ? " · Bleeding" : ""}${enemy.bossId ? ` · ${namedAdversaries.find((boss) => boss.id === enemy.bossId)?.mechanic || "Named adversary"}` : ""}`;
+      `${enemy.name || enemy.kind || "raider"} · HP ${enemy.hp}/${enemy.max} · Armor ${enemyArmor(s, enemy)} · Range ${["archer", "mage", "cultist", "necromancer", "shaman", "sorcerer"].includes(enemy.kind) ? 4 : 1}${enemy.kind === "wolf" ? ` · Rush ${enemy.bossId === "ashfang" ? 3 : 2} · pack hunter` : enemy.kind === "archer" ? " · Keeps distance" : " · Melee flanking +2"}${enemyDescription(s, enemy) ? ` · ${enemyDescription(s, enemy)}` : ""}${enemy.stun ? " · Stunned" : ""}${enemy.bleed ? " · Bleeding" : ""}${enemy.bossId ? ` · ${namedAdversaries.find((boss) => boss.id === enemy.bossId)?.mechanic || "Named adversary"}` : ""}`;
   if (x >= 0 && x < 9 && y >= 0 && y < 7) {
     const preview = combatPreview(s, selected, x, y, abilityMode);
     $("map-label").textContent += ` · ${preview.text || preview.reason}`;
@@ -4220,7 +4383,7 @@ function showCompanyCreator() {
     const update = () => {
       const stats = founderRoles[f.role.value],
         t = companionTraits.find((t) => t.id === f.trait.value);
-      desc.textContent = `${fantasyRaces.find((r) => r.id === f.race.value).desc} ${["Wizard", "Cleric"].includes(f.role.value) ? "Caster: one extra daily crown. " : ""}${f.trait.value === "hearty" ? 32 : stats.max} health · ${stats.damage + (f.trait.value === "mercenary" ? 1 : 0)} attack · ${f.trait.value === "mercenary" ? 3 : 2} crowns per day. ${t.desc}`;
+      desc.textContent = `${fantasyRaces.find((r) => r.id === f.race.value).desc} ${["Wizard", "Cleric", "Druid", "Paladin"].includes(f.role.value) ? "Caster: one extra daily crown. " : ""}${f.trait.value === "hearty" ? 32 : stats.max} health · ${stats.damage + (f.trait.value === "mercenary" ? 1 : 0)} attack · ${f.trait.value === "mercenary" ? 3 : 2} crowns per day. ${t.desc}`;
       portrait.replaceChildren(
         portraitArtwork({
           ...p,
@@ -4341,7 +4504,7 @@ function appendTravelJobs(panel) {
       const option = new Option(p.name, String(p.id));
       option.disabled =
         role.id === "scout"
-          ? !(p.role === "Archer" || p.profession === "Thief")
+          ? !(["Archer", "Rogue"].includes(p.role) || p.profession === "Thief")
           : !s.wagon.owned || (role.id === "rearguard" && isCaster(p));
       select.add(option);
     }
@@ -4389,6 +4552,7 @@ function appendWagonPanel(panel) {
     "Company wagon",
     `<p>Condition ${Math.round(s.wagon.condition)}/100 · cargo ${cargoLoad(s)}/${companyCargoCapacity(s)}. Quartermasters save food; rear guards and rails protect supplies during retreat. A camp Smith can maintain the wagon.</p>`,
   );
+  appendWagonManifest(row);
   if (s.campOpen) {
     for (const upgrade of wagonUpgrades) {
       const text = document.createElement("p");
@@ -4634,6 +4798,7 @@ function appendDungeonPuzzle(c) {
     near = Math.abs(e.x - 4) + Math.abs(e.y - 3) <= 1;
   const details = document.createElement("details"),
     summary = document.createElement("summary");
+  details.open = near && dungeonDoorOpen;
   summary.textContent = "Side chamber · scouting, lock, rune seal";
   details.append(summary);
   const p = document.createElement("p");
@@ -4650,12 +4815,12 @@ function appendDungeonPuzzle(c) {
     button(
       "Adjust side-room lock tension",
       () => realmDungeonAction(s, "dial"),
-      !near || !professional(s, "Thief") || q.unlocked,
+      !near || !companyLockpicker(s) || q.unlocked,
     ),
     button(
       "Pick side-room tumbler",
       () => realmDungeonAction(s, "pick"),
-      !near || !professional(s, "Thief") || q.unlocked,
+      !near || !companyLockpicker(s) || q.unlocked,
     ),
   );
   for (const [i, name] of ["Root", "Flame", "Star"].entries())
@@ -5311,6 +5476,7 @@ function appendRegionalServices(panel) {
   const r = regionAt(s.position),
     c = card(r.name),
     line = document.createElement("p");
+  c.dataset.villageService = "regional";
   line.textContent = r.desc;
   c.append(line);
   if (s.location === 0)
@@ -5431,6 +5597,7 @@ function appendOdysseyCombat(a) {
 function appendContinuationPanel(panel) {
   const journeys = fold("Companion continuations · oaths and reconciliation");
   for (const p of livingParty(s)) {
+    if (tab === "Camp" && !campOpportunity(s, p.id)) continue;
     const q = continuationInfo(s, p.id);
     if (!q) continue;
     const partner = s.party[q.partner],
@@ -5525,7 +5692,7 @@ function appendChronicleCompany(panel) {
   preview.height = 100;
   preview.style.width = "96px";
   preview.setAttribute("aria-label", "Company heraldry preview");
-  drawCompanyBanner(preview.getContext("2d"), s, 25, 8, 3);
+  drawCompanyBanner(preview.getContext("2d"), s, 25, 8, 3, true);
   section.append(preview);
   const select = (label, items, value) => {
     const l = document.createElement("label"),
@@ -5672,14 +5839,19 @@ function appendBattleConditions(a) {
 }
 function drawBattleSignals() {
   for (const e of s.battle.enemies.filter((e) => e.hp > 0)) {
-    const mark =
-      e.smash || e.charge || (e.kind === "cultist" ? e.casting : null);
+    const mark = e.smash || e.charge || e.casting;
     if (mark) {
       ctx.save();
-      ctx.strokeStyle = e.casting ? "#668e59" : "#b65e43";
+      ctx.strokeStyle = e.casting
+        ? ["shaman", "cultist"].includes(e.kind)
+          ? "#668e59"
+          : e.kind === "sorcerer"
+            ? "#b65e43"
+            : "#9261aa"
+        : "#b65e43";
       ctx.lineWidth = 3;
       ctx.strokeRect(109 + mark.x * 62, 4 + mark.y * 60, 51, 49);
-      if (e.smash)
+      if (e.smash || (e.kind === "sorcerer" && e.casting))
         for (const [dx, dy] of [
           [1, 0],
           [-1, 0],
@@ -5765,4 +5937,681 @@ function drawAttackEffects() {
     }
     ctx.restore();
   }
+}
+
+function appendArcanaPanel(panel) {
+  const classes = fold("Fantasy classes · combat roles and professions");
+  for (const f of fantasyClassInfo) {
+    const p = document.createElement("p");
+    p.textContent = `${f.id}: ${f.desc} Choose these classes when founding a company or recruit local specialists: Paladin in Greyhaven, Rogue in Saltbridge, Druid in Emberfall. Their profession remains a separate choice.`;
+    classes.append(p);
+  }
+  panel.append(classes);
+  const section = fold("Spell preparation and grimoires", s.campOpen);
+  const intro = document.createElement("p");
+  intro.textContent =
+    "Prepare spells at camp or Emberfall. Changing the list takes one hour and never replenishes slots. Exploration and combat share spell slots. Older companies retain their existing repertoire until their first preparation.";
+  section.append(intro);
+  for (const p of livingParty(s).filter(isCaster)) {
+    const c = card(
+        `${p.name} · ${p.role} · ${preparationCapacity(p)} prepared spells maximum`,
+      ),
+      choices = [];
+    for (const spell of spellCatalogFor(p)) {
+      const row = document.createElement("label"),
+        check = document.createElement("input");
+      check.type = "checkbox";
+      check.value = spell.id;
+      check.checked = (
+        p.preparedSpells ||
+        spellCatalogFor(p)
+          .slice(0, preparationCapacity(p))
+          .map((v) => v.id)
+      ).includes(spell.id);
+      check.setAttribute("aria-label", `Prepare ${spell.name}: ${p.name}`);
+      row.className = "spell-choice";
+      row.append(
+        check,
+        document.createTextNode(
+          ` ${spell.name} · level ${spell.level}${spell.kind === "explore" ? " · exploration" : ""}${spell.desc ? " — " + spell.desc : ""}`,
+        ),
+      );
+      c.append(row);
+      choices.push(check);
+    }
+    const ids = () => choices.filter((v) => v.checked).map((v) => v.value),
+      apply = button(`Prepare spells: ${p.name} · 1h`, () =>
+        prepareSpells(s, p.id, ids()),
+      ),
+      hint = document.createElement("small");
+    hint.className = "hint";
+    const validate = () => {
+      const reason = preparationLock(s, p.id, ids());
+      apply.disabled = !!reason;
+      apply.title = reason || "";
+      hint.textContent =
+        reason ||
+        `${ids().length}/${preparationCapacity(p)} spells selected; one hour, slots unchanged.`;
+    };
+    for (const check of choices) check.addEventListener("change", validate);
+    validate();
+    c.append(apply, hint);
+    for (const t of grimoires.filter(
+      (t) => spellBook.find((v) => v.id === t.spell).role === p.role,
+    )) {
+      const spell = spellBook.find((v) => v.id === t.spell),
+        line = document.createElement("p");
+      line.textContent = `${t.name}: ${spell.name} · ${p.knownSpells?.includes(spell.id) ? "learned" : `${s.arcana.grimoires[t.id] || 0} copies carried`}. Found at ${places[t.site].name} or purchased at Emberfall.`;
+      c.append(
+        line,
+        lockedButton(
+          `Study ${t.name}: ${p.name} · 2 knowledge, 4h`,
+          () => learnGrimoire(s, p.id, t.id),
+          learnGrimoireLock(s, p.id, t.id),
+        ),
+      );
+    }
+    section.append(c);
+  }
+  panel.append(section);
+}
+function appendAcademy(panel) {
+  const d = fold("Emberfall academy · grimoires, reagents and tuition", true);
+  const intro = document.createElement("p");
+  intro.textContent =
+    "A flourishing city supports a full magical academy. Remote villages offer ordinary supplies; camp meditation requires food, herbs and time. The existing Emberfall recovery service restores slots for fifteen crowns per depleted caster and two hours.";
+  d.append(intro);
+  for (const t of grimoires)
+    d.append(
+      lockedButton(
+        `Buy ${t.name} · ${t.price} crowns`,
+        () => academyService(s, "tome", t.id),
+        academyLock(s, "tome", t.id),
+      ),
+    );
+  d.append(
+    lockedButton(
+      "Academy reagents · 24 crowns, 1h",
+      () => academyService(s, "reagents"),
+      academyLock(s, "reagents"),
+    ),
+  );
+  for (const p of livingParty(s).filter(isCaster))
+    d.append(
+      lockedButton(
+        `Academy tuition: ${p.name} · 35 crowns, 3h`,
+        () => academyService(s, "tuition", p.id),
+        academyLock(s, "tuition", p.id),
+      ),
+    );
+  panel.append(d);
+  appendArcanaPanel(panel);
+}
+function appendArcanaWorld(a) {
+  if (s.event?.kind === "arcane-passage") {
+    $("map-label").textContent = s.event.title + " · hidden passage";
+    const room = hiddenPassages.find((v) => v.site === s.location),
+      q = s.arcana.passages?.[s.location],
+      c = card(room.name);
+    const text = document.createElement("p");
+    text.textContent =
+      room.desc +
+      (q?.searched
+        ? " The chest is open. Uncollected contents remain when you leave."
+        : "Search the chamber to open its chest.");
+    c.append(text);
+    if (!q?.searched)
+      c.append(
+        lockedButton(
+          "Search hidden chamber · 2h",
+          () => passageAction(s, "search"),
+          passageLock(s, "search"),
+        ),
+      );
+    for (const resource of Object.keys(room.loot))
+      if (q?.loot?.[resource] > 0)
+        c.append(
+          button(`Take ${q.loot[resource]} ${resource}`, () =>
+            passageAction(s, "take", resource),
+          ),
+        );
+    c.append(button("Leave hidden passage", () => passageAction(s, "leave")));
+    a.append(c);
+    return;
+  }
+  if (
+    !s.event &&
+    !s.battle &&
+    !s.campOpen &&
+    hiddenPassages.some((v) => v.site === s.location) &&
+    s.arcana.exploration[`reveal-${s.location}`]
+  )
+    a.append(
+      lockedButton(
+        "Enter unveiled passage",
+        () => passageAction(s, "enter"),
+        passageLock(s, "enter"),
+      ),
+    );
+
+  if (s.battle || s.campOpen) return;
+  const d = fold("Exploration magic · shared spell slots");
+  let count = 0;
+  for (const p of livingParty(s).filter(isCaster))
+    for (const spell of spellsFor(p).filter((v) => v.kind === "explore")) {
+      d.append(
+        lockedButton(
+          `${spell.name}: ${p.name} · level ${spell.level}, 1h`,
+          () => castExplorationMagic(s, p.id, spell.id),
+          explorationMagicLock(s, p.id, spell.id),
+        ),
+      );
+      count++;
+    }
+  if (count) a.append(d);
+  for (const t of grimoires.filter(
+    (t) => t.site === s.location && !s.arcana.recovered[t.id],
+  ))
+    a.append(
+      lockedButton(
+        `Search archive: ${t.name} · 2h`,
+        () => recoverGrimoire(s, t.id),
+        recoverGrimoireLock(s, t.id),
+      ),
+    );
+  if (
+    s.event?.kind === "site" &&
+    s.event.site === 10 &&
+    s.event.stage === "lock"
+  )
+    for (const p of livingParty(s).filter((p) => p.role === "Rogue"))
+      a.append(
+        lockedButton(
+          `Read lock pin: ${p.name}`,
+          () => fantasyAction(s, p.id, "read-lock"),
+          fantasyActionLock(s, p.id, "read-lock"),
+        ),
+      );
+}
+function appendFantasyCombat(a) {
+  const p = s.party[selected];
+  if (p.role === "Druid") {
+    const u = s.battle.units.find((v) => v.id === selected),
+      action = u.wildshape ? "revert" : "wolf-form";
+    a.append(
+      lockedButton(
+        u.wildshape ? "Leave wolf form · action" : "Wolf form · level 1 slot",
+        () => fantasyAction(s, selected, action),
+        fantasyActionLock(s, selected, action),
+      ),
+    );
+  }
+  if (p.role === "Paladin")
+    a.append(
+      lockedButton(
+        "Protective aura · level 1 slot",
+        () => fantasyAction(s, selected, "aura"),
+        fantasyActionLock(s, selected, "aura"),
+      ),
+    );
+}
+
+function appendStandardPanel(panel) {
+  const c = card("Company standard · designated flag bearer"),
+    p = document.createElement("p");
+  p.textContent =
+    "The flag is packed away until its bearer is appointed. Unlock it with five renown, four knowledge and forty crowns. A conscious bearer grants one opening valor.";
+  c.append(p);
+  if (!s.fieldwork.standardUnlocked)
+    c.append(
+      lockedButton(
+        "Unlock company standard",
+        () => unlockStandard(s),
+        standardLock(s),
+      ),
+    );
+  else {
+    const select = document.createElement("select");
+    select.setAttribute("aria-label", "Designated flag bearer");
+    select.add(new Option("Keep the flag packed away", ""));
+    for (const p of livingParty(s))
+      select.add(new Option(`${p.name} · ${p.role}`, p.id));
+    select.value = s.fieldwork.bannerBearer ?? "";
+    select.disabled = !!s.battle || !!s.event;
+    select.onchange = () => {
+      assignFlagBearer(s, select.value === "" ? null : Number(select.value));
+      render();
+    };
+    c.append(select);
+  }
+  panel.append(c);
+}
+function appendCampBuildPalette(panel) {
+  const c = card("Camp layout & expansion"),
+    p = document.createElement("p");
+  p.textContent = `${livingParty(s).length}/${campCapacity(s)} sleeping spaces · ${campCrowding(s) ? `${campCrowding(s)} companions are crowded: less healing, lower morale and resolve.` : "Enough space for the company."} Choose a blueprint, then drag it onto the camp. Drag built furniture to move it. Expansion increases the cleared area and sleeping capacity.`;
+  c.append(
+    p,
+    lockedButton(
+      `Expand camp · capacity ${campCapacity(s) + 2}`,
+      () => expandCamp(s),
+      campExpansionLock(s),
+    ),
+  );
+  for (const f of campFurniture)
+    c.append(
+      button(
+        `${s.campFurniture[f.id] === undefined ? "Build" : "Arrange"} ${f.name}`,
+        () => {
+          pendingFurniture = f.id;
+          campDrag = null;
+          drawerOpen = false;
+          note(
+            s,
+            `Drag ${f.name} onto an empty part of the camp. ${s.campFurniture[f.id] === undefined ? `${f.gold} crowns and ${f.wood} timber; two hours to build.` : "Relocation is free."}`,
+          );
+        },
+        s.campFurniture[f.id] === undefined &&
+          (s.gold < f.gold || s.inventory.wood < f.wood),
+      ),
+    );
+  panel.append(c);
+}
+function organizeCampPanel(panel) {
+  const groups = new Map(
+    ["Overview", "Build", "Jobs", "Care", "Magic", "Companions", "Wagon"].map(
+      (k) => [k, document.createElement("section")],
+    ),
+  );
+  for (const el of [...panel.children]) {
+    const title = el.querySelector("h3,summary")?.textContent || el.textContent;
+    let group = "Overview";
+    if (
+      /Camp layout|furnish|Cookpot|Portable forge|Watch post|Medicine tent|Sleeping tent|campUpgrade/i.test(
+        title,
+      ) ||
+      el.dataset.campUpgrade
+    )
+      group = "Build";
+    else if (/Camp duties|maintenance|repairs/i.test(title)) group = "Jobs";
+    else if (/lasting wounds|prisoner|captiv/i.test(title)) group = "Care";
+    else if (
+      /magic|Spell preparation|Fantasy classes|Meditate|spell slots/i.test(
+        title,
+      )
+    )
+      group = "Magic";
+    else if (/goal|journey|companion continuation|Supper|standard/i.test(title))
+      group = "Companions";
+    else if (/wagon|Travel duties|travel jobs/i.test(title)) group = "Wagon";
+    groups.get(group).append(el);
+  }
+  panel.replaceChildren();
+  const nav = document.createElement("nav");
+  nav.className = "category-nav";
+  nav.setAttribute("aria-label", "Camp categories");
+  for (const name of groups.keys())
+    nav.append(
+      button(
+        name,
+        () => {
+          campCategory = name;
+          render();
+        },
+        false,
+        name === campCategory,
+      ),
+    );
+  for (const control of nav.querySelectorAll("button"))
+    control.setAttribute(
+      "aria-pressed",
+      String(control.textContent === campCategory),
+    );
+  panel.append(nav);
+  const opportunity = s.fieldwork.campOpportunity;
+  if (
+    opportunity?.day === s.day &&
+    s.party[opportunity.id] &&
+    !s.party[opportunity.id].dead
+  ) {
+    const companion = s.party[opportunity.id],
+      prompt = card(`${companion.name} asks for a quiet moment`);
+    const p = document.createElement("p");
+    p.textContent =
+      "A personal conversation is available by the campfire tonight.";
+    prompt.append(
+      p,
+      button(`Hear ${companion.name} by the fire`, () => {
+        campCategory = "Companions";
+        render();
+      }),
+    );
+    groups.get("Overview").prepend(prompt);
+  }
+  for (const [name, section] of groups) {
+    section.hidden = name !== campCategory;
+    section.dataset.campCategory = name;
+    panel.append(section);
+  }
+  if (campCategory === "Companions" && !s.fieldwork.campOpportunity) {
+    const p = document.createElement("p");
+    p.textContent =
+      "No companion is asking for a personal conversation tonight. These moments occur occasionally at camp; active stories remain in the company journal.";
+    groups.get("Companions").prepend(p);
+  }
+}
+function organizeVillagePanel(panel) {
+  const venues = [],
+    services = [],
+    affairs = [];
+  for (const el of [...panel.children]) {
+    if (el.classList.contains("venue-card") || el.querySelector(".venue-art"))
+      venues.push(el);
+    else {
+      const title =
+        el.querySelector("h3,summary")?.textContent || el.textContent;
+      if (
+        el.dataset.villageService ||
+        /wagon|magic|academy|Spell preparation|Fantasy classes|wound|Regional services|temple/i.test(
+          title,
+        )
+      )
+        services.push(el);
+      else affairs.push(el);
+    }
+  }
+  panel.replaceChildren();
+  const p = document.createElement("p");
+  p.className = "village-intro";
+  p.textContent =
+    "Choose a village place. Local services and affairs are grouped below.";
+  const placesGrid = document.createElement("div");
+  placesGrid.className = "village-places";
+  placesGrid.append(...venues);
+  panel.append(p, placesGrid);
+  if (services.length) {
+    const d = fold("Local services · care, wagons and magic");
+    d.append(...services);
+    panel.append(d);
+  }
+  if (affairs.length) {
+    const d = fold("Village affairs · allegiance, aid and stories");
+    d.append(...affairs);
+    panel.append(d);
+  }
+}
+function appendWagonManifest(row) {
+  const d = fold(
+      `Wagon hold · ${cargoLoad(s)}/${companyCargoCapacity(s)} cargo spaces`,
+    ),
+    grid = document.createElement("div");
+  grid.className = "wagon-hold";
+  grid.setAttribute("aria-label", "Cargo fitted inside the company wagon");
+  for (const cell of wagonManifest(s)) {
+    const tile = document.createElement("span");
+    tile.className = cell ? "cargo-cell occupied" : "cargo-cell";
+    tile.title = cell?.name || "Empty cargo space";
+    tile.textContent = cell
+      ? { grain: "W", salt: "S", iron: "I", cloth: "C", herbs: "H" }[cell.id] ||
+        cell.id.slice(0, 1).toUpperCase()
+      : "·";
+    grid.append(tile);
+  }
+  const p = document.createElement("p");
+  p.textContent =
+    "Each traded unit occupies one cargo space. Cargo racks add room; provisions and equipped gear stay with the company.";
+  d.append(grid, p);
+  row.append(d);
+}
+function appendShelterActions(a) {
+  if (s.battle || s.event || s.campOpen) return;
+  const lodge = safeRestSites.find((v) => v.site === s.location);
+  if (!lodge) return;
+  const c = card(lodge.name);
+  const p = document.createElement("p");
+  p.textContent = `Secure beds and meals for a full day · ${safeRestCost(s)} crowns including wages and debt. Recover health and fatigue without woodland interruptions. Lasting wounds recover gradually; surgery is still a village service.`;
+  c.append(
+    p,
+    lockedButton(
+      "Rest at secure lodge",
+      () => {
+        beginAfterAction(s, "event", `Rest at ${lodge.name}`);
+        restAtShelter(s);
+      },
+      safeRestLock(s),
+    ),
+  );
+  a.append(c);
+}
+function interactDungeonTile(x, y) {
+  const e = s.event;
+  if (e?.kind !== "dungeon" || x < 0 || x > 8 || y < 0 || y > 6) return false;
+  const layout = dungeonLayout(e.site),
+    distance = Math.abs(x - e.x) + Math.abs(y - e.y);
+  if (x === 4 && y === 3 && distance <= 1) {
+    const q = dungeonPuzzle(s);
+    dungeonDoorOpen = true;
+    dungeonPanelOpen = true;
+    if (q.door) return realmDungeonAction(s, "side-cache");
+    if (!q.spotted && companyScout(s)) realmDungeonAction(s, "scout-room");
+    e.message =
+      "The sealed side room is within reach. Choose its lock, rune seal or magical opening below.";
+    return true;
+  }
+  if (distance === 1 && !dungeonWalls(s).some(([a, b]) => a === x && b === y))
+    return dungeonAction(s, "move", x, y);
+  if (distance <= 1 && x === layout.secret[0] && y === layout.secret[1])
+    return dungeonAction(s, "inspect");
+  if (distance <= 1 && x === layout.trap[0] && y === layout.trap[1])
+    return dungeonAction(s, "disarm");
+  if (distance <= 1 && x === layout.collapse[0] && y === layout.collapse[1])
+    return dungeonAction(s, "shore");
+  if (x === e.x && y === e.y) {
+    if (x === 8 && y === 5) return dungeonAction(s, "vault");
+    if ([1, 5].includes(x) && y === 1 && places[e.site].type === "mine")
+      return dungeonAction(s, "mine");
+    return dungeonAction(s, "inspect");
+  }
+  note(
+    s,
+    "Choose an adjacent floor tile; nearby features can be inspected directly.",
+  );
+  return false;
+}
+function organizeCombatControls(a) {
+  const turn = document.createElement("div"),
+    movement = document.createElement("div");
+  turn.className = "combat-control-group";
+  movement.className = "combat-control-group";
+  turn.setAttribute("aria-label", "Turn and defense controls");
+  movement.setAttribute("aria-label", "Movement and positioning controls");
+  for (const b of [...a.children].filter((el) => el.tagName === "BUTTON")) {
+    const text = b.textContent;
+    if (/^End round|^Finish ambush|^Brace|^Retreat/.test(text)) {
+      b.title = /^Finish ambush/.test(text)
+        ? "Complete the free opening turn. The company acts once more before enemies respond."
+        : /^End/.test(text)
+          ? "Finish the company turn. Unused companion actions are forfeited."
+          : "Brace protects against the next enemy turn; retreat ends the fight and loses crowns.";
+      turn.append(b);
+    } else if (/^Push adjacent|^Disengage/.test(text)) {
+      b.title = text.startsWith("Disengage")
+        ? "Spend your action to leave melee safely, then move."
+        : "Push an adjacent enemy into another open tile.";
+      movement.append(b);
+    }
+  }
+  if (turn.children.length) a.prepend(turn);
+  if (movement.children.length) a.insertBefore(movement, turn.nextSibling);
+  for (const b of a.querySelectorAll("button"))
+    if (/valor/.test(b.textContent) && !b.title)
+      b.title =
+        "A class action spends valor and the selected companion’s action. Select an eligible enemy tile.";
+}
+function renderAfterAction() {
+  let dialog = document.getElementById("after-action-report");
+  if (!dialog) {
+    dialog = document.createElement("dialog");
+    dialog.id = "after-action-report";
+    dialog.className = "after-action-report";
+    dialog.setAttribute("aria-label", "After-action report");
+    dialog.addEventListener("cancel", (event) => {
+      event.preventDefault();
+      dismissAfterActionReport(s);
+      dialog.close();
+      render();
+    });
+    document.body.append(dialog);
+  }
+  if (!gameActive || !s.fieldwork.report) {
+    if (dialog.open) dialog.close();
+    return;
+  }
+  const report = s.fieldwork.report;
+  dialog.replaceChildren();
+  const title = document.createElement("h2"),
+    sub = document.createElement("p");
+  title.textContent = "After-action report";
+  sub.textContent = `${report.outcome || "Encounter completed"} · ${report.title} · Day ${report.day}`;
+  dialog.append(title, sub);
+  const content = document.createElement("div");
+  content.className = "report-details";
+  for (const [label, lines, empty] of [
+    [
+      "Company condition",
+      report.conditions,
+      "No new injuries or health changes.",
+    ],
+    ["Loot & gains", report.loot, "No loot acquired."],
+    [
+      "Supplies & equipment",
+      report.costs,
+      "No recorded costs or equipment wear.",
+    ],
+  ]) {
+    const section = document.createElement("section"),
+      heading = document.createElement("h3");
+    heading.textContent = label;
+    section.append(heading);
+    for (const text of lines.length ? lines : [empty]) {
+      const p = document.createElement("p");
+      p.textContent = text;
+      section.append(p);
+    }
+    content.append(section);
+  }
+  dialog.append(content);
+  dialog.append(
+    button("Continue adventure", () => {
+      dismissAfterActionReport(s);
+      dialog.close();
+    }),
+  );
+  if (!dialog.open) {
+    heldKeys.clear();
+    stopMovement(s);
+    dialog.showModal();
+  }
+}
+function canvasPoint(event) {
+  const r = canvas.getBoundingClientRect();
+  return {
+    x: view.x + (event.clientX - r.left) / view.scale,
+    y: view.y + (event.clientY - r.top) / view.scale,
+  };
+}
+canvas.addEventListener("pointerdown", (event) => {
+  if (!s.campOpen || drawerOpen || s.fieldwork.report) return;
+  const point = canvasPoint(event),
+    id =
+      pendingFurniture ||
+      Object.keys(s.campFurniture).find((id) => {
+        const p = campFurniturePoint(s, id);
+        return (
+          point.x >= p.x &&
+          point.x <= p.x + 34 &&
+          point.y >= p.y &&
+          point.y <= p.y + 26
+        );
+      });
+  if (!id) return;
+  event.preventDefault();
+  campDrag = { id, x: point.x - 17, y: point.y - 13 };
+  canvas.setPointerCapture(event.pointerId);
+  draw();
+});
+canvas.addEventListener("pointermove", (event) => {
+  if (!campDrag) return;
+  const point = canvasPoint(event);
+  campDrag.x = point.x - 17;
+  campDrag.y = point.y - 13;
+  draw();
+});
+canvas.addEventListener("pointerup", (event) => {
+  if (!campDrag) return;
+  const drag = campDrag;
+  campDrag = null;
+  const reason = furniturePlacementLock(
+    s,
+    drag.id,
+    Math.round(drag.x / 5) * 5,
+    Math.round(drag.y / 5) * 5,
+  );
+  if (reason) note(s, reason);
+  else if (placeCampFurniture(s, drag.id, drag.x, drag.y))
+    pendingFurniture = null;
+  if (canvas.hasPointerCapture(event.pointerId))
+    canvas.releasePointerCapture(event.pointerId);
+  render();
+});
+canvas.addEventListener("pointercancel", () => {
+  campDrag = null;
+  draw();
+});
+function drawCampLayoutOverlay() {
+  if (!pendingFurniture && !campDrag) return;
+  const b = campBounds(s);
+  ctx.save();
+  ctx.strokeStyle = "#e8d495";
+  ctx.setLineDash([5, 4]);
+  ctx.lineWidth = 2;
+  ctx.strokeRect(b.left, b.top, b.right - b.left, b.bottom - b.top);
+  ctx.setLineDash([]);
+  if (campDrag) {
+    const valid = !furniturePlacementLock(
+      s,
+      campDrag.id,
+      Math.round(campDrag.x / 5) * 5,
+      Math.round(campDrag.y / 5) * 5,
+    );
+    ctx.globalAlpha = 0.7;
+    ctx.fillStyle = valid ? "#758f59" : "#b1654d";
+    ctx.fillRect(campDrag.x, campDrag.y, 34, 26);
+  }
+  ctx.restore();
+}
+function drawDungeonHighlights() {
+  const e = s.event;
+  if (e?.kind !== "dungeon") return;
+  ctx.save();
+  ctx.strokeStyle = "#d9cc99";
+  ctx.lineWidth = 2;
+  for (const [dx, dy] of [
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+    [0, -1],
+  ]) {
+    const x = e.x + dx,
+      y = e.y + dy;
+    if (
+      x >= 0 &&
+      x < 9 &&
+      y >= 0 &&
+      y < 7 &&
+      !dungeonWalls(s).some(([a, b]) => a === x && b === y)
+    )
+      ctx.strokeRect(107 + x * 62, 2 + y * 60, 54, 52);
+  }
+  ctx.restore();
 }

@@ -1,3 +1,9 @@
+import {
+  standardBearer,
+  campCapacity,
+  campFurniturePoint,
+  campBounds,
+} from "./game.js";
 // Original, hand-built pixel artwork. All coordinates are logical pixels.
 import {
   dungeonWalls,
@@ -185,7 +191,7 @@ export function drawLandmark(c, p, index = 0) {
     pixel(c, x + 41, y - 6, 2, 17, "#6f5d3d");
     pixel(c, x + 43, y - 6, 8, 6, "#b79552");
     pixel(c, x + 44, y - 5, 5, 1, "#e1cc8f");
-  } else if (p.type === "home") {
+  } else if (["home", "inn"].includes(p.type)) {
     steppedOval(c, x - 38, y - 25, 80, 65, "#a39f71");
     house(c, x - 15, y - 8, "#7d7259", true);
     fence(c, x - 32, y + 35, 65);
@@ -499,6 +505,26 @@ function characterImage(role, coat, step, variant, appearance = {}) {
     pixel(c, 21, 3, 6, 5, "#a5c8c2");
     pixel(c, 22, 4, 3, 2, "#d0e3cc");
   }
+  if (role === "Rogue") {
+    pixel(c, 8, 2, 14, 5, "#646c65");
+    pixel(c, 9, 14, 12, 3, "#686c59");
+    pixel(c, 2, 18, 2, 10, "#c3c8ac");
+    pixel(c, 23, 18, 2, 10, "#c3c8ac");
+  }
+  if (role === "Druid") {
+    pixel(c, 8, 2, 13, 4, "#718451");
+    pixel(c, 9, 0, 3, 4, "#97a464");
+    pixel(c, 17, 1, 3, 4, "#97a464");
+    pixel(c, 23, 5, 2, 25, "#80694a");
+    pixel(c, 20, 3, 8, 5, "#729556");
+  }
+  if (role === "Paladin") {
+    pixel(c, 9, 2, 12, 5, "#b3bba5");
+    pixel(c, 11, 17, 8, 3, "#d7c183");
+    pixel(c, 14, 14, 3, 9, "#d7c183");
+    pixel(c, 2, 15, 6, 13, "#8c997e");
+    pixel(c, 4, 16, 2, 10, "#dcc990");
+  }
   if (role === "Cleric") {
     pixel(c, 10, 17, 9, 3, "#dad1aa");
     pixel(c, 13, 14, 3, 9, "#dad1aa");
@@ -576,6 +602,10 @@ export function drawWagon(c, x, y, hostile = false, cargoType = "mixed") {
   pixel(c, x - 18, y - 3, 35, 17, "#6c573c");
   pixel(c, x - 17, y - 2, 33, 13, "#ae8e59");
   for (let i = 0; i < 5; i++) pixel(c, x - 17, y + i * 3, 33, 1, "#896d47");
+  c.save();
+  c.beginPath();
+  c.rect(x - 17, y - 24, 34, 35);
+  c.clip();
   if (cargoType === "mixed") {
     steppedOval(c, x - 17, y - 18, 34, 26, hostile ? "#a67a5b" : "#d5c697");
     pixel(c, x - 17, y - 3, 34, 4, hostile ? "#88634c" : "#afa177");
@@ -611,6 +641,7 @@ export function drawWagon(c, x, y, hostile = false, cargoType = "mixed") {
       pixel(c, x - 12 + i * 10, y - 10 - (i % 2) * 5, 2, 10, "#ded1ac");
     }
   }
+  c.restore();
   for (const dx of [-11, 9]) {
     pixel(c, x + dx - 3, y + 10, 7, 8, "#454538");
     pixel(c, x + dx - 1, y + 11, 3, 6, "#a39466");
@@ -927,6 +958,10 @@ export function drawBattlefield(c, s) {
           pixel(c, x + 5, y + 20, 47, 14, "#635c42");
           pixel(c, x + 7, y + 23, 42, 3, "#9b8456");
           pixel(c, x + 4, y + 22, 7, 10, "#bd9d68");
+        } else if (tile.kind === "rock") {
+          steppedOval(c, x + 7, y + 9, 44, 35, "#6e786e");
+          steppedOval(c, x + 12, y + 7, 30, 24, "#b4b49a");
+          pixel(c, x + 18, y + 13, 13, 5, "#d0cbb0");
         } else if (tile.kind === "wagon") {
           pixel(c, x + 5, y + 15, 48, 25, "#78664a");
           pixel(c, x + 8, y + 18, 42, 17, "#b4a078");
@@ -1113,6 +1148,21 @@ export function drawCampScene(c, s) {
   }
   c.imageSmoothingEnabled = false;
   c.drawImage(campGround, 0, 0);
+  if (s.fieldwork.campSize) {
+    const b = campBounds(s);
+    steppedOval(
+      c,
+      b.left - 20,
+      b.top - 30,
+      b.right - b.left + 60,
+      b.bottom - b.top + 70,
+      "#b1aa7b",
+    );
+    for (let i = 4; i < campCapacity(s); i++) {
+      pixel(c, 145 + (i - 4) * 30, 225, 20, 26, "#7b815c");
+      pixel(c, 147 + (i - 4) * 30, 228, 16, 20, "#c4b78c");
+    }
+  }
   const tents = s.campUpgrades.tents || 0;
   function tent(x, y, color = "#b8b088", medical = false) {
     pixel(c, x - 5, y + 14, 54, 9, "#899065");
@@ -1244,8 +1294,7 @@ export function drawCampScene(c, s) {
         );
     });
   for (const [id, slot] of Object.entries(s.campFurniture || {})) {
-    const x = 230 + (slot % 3) * 70,
-      y = 155 + Math.floor(slot / 3) * 45;
+    const { x, y } = campFurniturePoint(s, id);
     pixel(
       c,
       x,
@@ -1580,7 +1629,39 @@ export function chestPreview(contents) {
 export function drawFantasyEnemy(c, kind, x, y) {
   c.save();
   pixel(c, x - 11, y + 13, 23, 4, "#46513b66");
-  if (["troll", "spider", "cultist", "knight"].includes(kind)) {
+  if (["necromancer", "shaman", "sorcerer"].includes(kind)) {
+    const coat =
+        kind === "necromancer"
+          ? "#5d6864"
+          : kind === "shaman"
+            ? "#758252"
+            : "#6d6f8a",
+      trim =
+        kind === "necromancer"
+          ? "#c4c1a4"
+          : kind === "shaman"
+            ? "#d0ae70"
+            : "#b6afce";
+    pixel(c, x - 9, y - 21, 18, 12, coat);
+    pixel(c, x - 4, y - 15, 9, 7, "#c0af8b");
+    pixel(c, x - 4, y - 13, 9, 2, "#48493e");
+    pixel(c, x - 9, y - 7, 19, 23, coat);
+    pixel(c, x - 2, y - 7, 4, 23, trim);
+    pixel(c, x + 14, y - 19, 2, 35, "#897250");
+    pixel(c, x + 10, y - 24, 10, 7, trim);
+    if (kind === "necromancer") {
+      pixel(c, x + 12, y - 22, 2, 2, "#434d43");
+      pixel(c, x + 16, y - 22, 2, 2, "#434d43");
+    }
+    if (kind === "shaman") {
+      pixel(c, x - 11, y - 25, 4, 8, trim);
+      pixel(c, x + 7, y - 25, 4, 8, trim);
+    }
+    if (kind === "sorcerer") {
+      pixel(c, x - 4, y - 27, 9, 5, trim);
+      pixel(c, x + 12, y - 22, 6, 3, "#dae0c2");
+    }
+  } else if (["troll", "spider", "cultist", "knight"].includes(kind)) {
     if (kind === "troll") {
       pixel(c, x - 14, y - 14, 28, 25, "#697f58");
       pixel(c, x - 9, y - 26, 20, 15, "#8d9a6d");
@@ -1718,7 +1799,8 @@ export function drawCompanyHome(c, s) {
   c.fillText(`WAYFARER ${h.style === "farm" ? "FARM" : "LODGE"}`, 384, 55);
 }
 
-export function drawCompanyBanner(c, s, x, y, scale = 1) {
+export function drawCompanyBanner(c, s, x, y, scale = 1, preview = false) {
+  if (!preview && !standardBearer(s)) return;
   const h = s.chronicle?.heraldry;
   if (!h) return;
   const fields = {
@@ -1818,4 +1900,57 @@ export function drawLivingPlace(c, s, p, id) {
     });
     drawMapLabel(c, q.helped ? "REBUILT" : "SETTLERS", p.x, p.y - 48, true);
   }
+}
+
+export function drawArcaneLandmark(c, s, p, id) {
+  if (id === 6) {
+    for (const dx of [-47, 47]) {
+      pixel(c, p.x + dx, p.y + 17, 5, 17, "#879c98");
+      pixel(c, p.x + dx - 2, p.y + 10, 9, 8, "#a4c5bd");
+      pixel(c, p.x + dx, p.y + 11, 4, 5, "#dce4c5");
+    }
+  }
+  const sites = { 5: "prism", 8: "restoration", 7: "elder", 11: "dawn" };
+  if (sites[id] && s.explored.includes(id) && !s.arcana.recovered[sites[id]]) {
+    pixel(c, p.x + 22, p.y + 19, 13, 9, "#e0cc97");
+    pixel(c, p.x + 28, p.y + 19, 1, 9, "#8c774e");
+    pixel(c, p.x + 23, p.y + 21, 4, 1, "#967d55");
+    pixel(c, p.x + 30, p.y + 21, 4, 1, "#967d55");
+    drawMapLabel(c, "GRIMOIRE", p.x, p.y + 50, true);
+  }
+}
+
+export function drawArcanePassage(c, s) {
+  pixel(c, 0, 0, 768, 432, "#41493e");
+  pixel(c, 86, 35, 596, 358, "#8c9271");
+  for (let y = 45; y < 380; y += 28)
+    for (let x = 96; x < 670; x += 37)
+      pixel(
+        c,
+        x + (y % 2) * 3,
+        y,
+        32,
+        23,
+        (x + y) % 3 === 0 ? "#a1a584" : "#949978",
+      );
+  pixel(c, 90, 38, 590, 12, "#bdba93");
+  pixel(c, 90, 38, 12, 350, "#697559");
+  pixel(c, 668, 38, 12, 350, "#697559");
+  pixel(c, 350, 128, 65, 40, "#967747");
+  pixel(c, 353, 111, 59, 17, "#b79b63");
+  pixel(c, 350, 128, 65, 5, "#d3bb81");
+  pixel(c, 378, 128, 9, 12, "#5d5a43");
+  for (const p of s.party.filter((p) => !p.dead))
+    drawCharacter(
+      c,
+      230 + p.id * 52,
+      280,
+      p.coat || partyCoats[p.id],
+      0,
+      p.role,
+      p.id,
+      p,
+    );
+  drawMapLabel(c, s.event.title, 384, 70, true);
+  drawCompanyBanner(c, s, 565, 235, 2);
 }

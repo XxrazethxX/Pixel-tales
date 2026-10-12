@@ -87,11 +87,11 @@ test("active exploration mixes trail events with traditional road encounters, pa
   const s = outside();
   s.food = 100;
   s.gold = 500;
-  s.day = 5;
+  s.day = 11;
   s.timeOfDay = 23.9;
   moveTo(s, 800, 480);
   advanceClock(s, DAY_SECONDS / 24);
-  assert.equal(s.day, 6);
+  assert.equal(s.day, 12);
   assert.equal(s.event.kind, "trail");
   assert.equal(s.destination, null);
   const before = JSON.stringify(s);
@@ -243,9 +243,9 @@ test("the journal stays bounded while repeated days still offer fresh encounters
 
 test("traditional courier, storm and camp events remain in the natural exploration cycle", () => {
   for (const [day, title] of [
-    [3, "Strangers in the wilderness"],
-    [9, "Storm over the borderlands"],
-    [15, "An abandoned camp"],
+    [6, "An abandoned camp"],
+    [18, "Storm over the borderlands"],
+    [30, "Strangers in the wilderness"],
   ]) {
     const s = outside();
     s.day = day - 1;

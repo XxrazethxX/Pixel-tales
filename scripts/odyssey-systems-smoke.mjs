@@ -9,7 +9,12 @@ import {
   equipEquipment,
   continueCompanion,
 } from "../src/game.js";
-import { enterGame } from "./smoke-menu.mjs";
+import {
+  enterGame,
+  gameClick,
+  dismissReports,
+  openDetails,
+} from "./smoke-menu.mjs";
 const { chromium } = await import(
   process.env.PLAYWRIGHT_MODULE || "playwright-core"
 );
@@ -24,19 +29,17 @@ try {
     }),
     errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
-  const click = (name) =>
-    page.getByRole("button", { name, exact: true }).click();
+  const click = (name) => gameClick(page, name);
   const state = () =>
     page.evaluate(() => JSON.parse(localStorage.getItem("pixel-tales")));
   const close = async () => {
+    await dismissReports(page);
     const b = page.getByRole("button", { name: "Close panel", exact: true });
     if (await b.isVisible()) await b.click();
   };
-  const details = async (label) => {
-    const el = page.locator("summary").filter({ hasText: label }).first();
-    if (!(await el.evaluate((el) => el.parentElement.open))) await el.click();
-  };
+  const details = (label) => openDetails(page, label);
   const seed = async (s) => {
+    await dismissReports(page);
     const menu = page.getByRole("button", { name: "Main menu", exact: true });
     if (await menu.isVisible()) await menu.click();
     await page.evaluate(

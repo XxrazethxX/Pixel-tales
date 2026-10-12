@@ -1090,3 +1090,165 @@ nav button[data-count]::after {
   font-size: 12px;
   line-height: 1.5;
 }
+
+.spell-choice {
+  display: block;
+  font-size: 12px;
+  line-height: 1.6;
+  padding: 5px 0;
+}
+.spell-choice input {
+  width: auto;
+  accent-color: #68764e;
+  margin-right: 7px;
+}
+
+.category-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 0 0 14px;
+  border-bottom: 1px solid #aa9a74;
+  margin-bottom: 14px;
+}
+.category-nav button {
+  flex: 1 0 25%;
+  padding: 9px;
+}
+.wagon-hold {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 3px;
+  padding: 10px;
+  background: #8d7149;
+  border: 5px solid #6c573c;
+  overflow: hidden;
+}
+.cargo-cell {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  min-width: 0;
+  background: #b7a078;
+  color: #4a4733;
+  font-size: 13px;
+}
+.cargo-cell.occupied {
+  background: #e0cf9c;
+  border: 1px solid #7f6e4f;
+}
+.after-action-report {
+  width: min(540px, calc(100vw - 32px));
+  max-height: min(720px, calc(100dvh - 40px));
+  padding: 24px;
+  border: 3px solid #8f805a;
+  color: #403d2c;
+  background: #eadfbd;
+  box-shadow: 0 12px 70px #15251d80;
+}
+.after-action-report::backdrop {
+  background: #17241dc9;
+}
+.after-action-report h2 {
+  font-family: Georgia, serif;
+  font-size: 26px;
+  margin-top: 0;
+}
+.after-action-report section {
+  border-top: 1px solid #baaa7d;
+  padding-top: 8px;
+}
+.after-action-report p {
+  font-size: 13px;
+  line-height: 1.7;
+}
+.after-action-report button {
+  width: 100%;
+  margin-top: 14px;
+  padding: 12px;
+}
+.dungeon-controls {
+  font-size: 13px;
+  line-height: 1.8;
+}
+.dungeon-controls > div > p {
+  font-family: system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.65;
+  color: #302e22;
+}
+.combat-control-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 5px;
+  background: #e5d6b0ed;
+  border: 1px solid #8e805c;
+}
+.village-intro {
+  line-height: 1.7;
+}
+
+.category-nav button {
+  color: #423e2b;
+  background: #e4d4ae;
+  border: 1px solid #9c8c64;
+}
+.category-nav button.primary {
+  color: #f5e7bc;
+  background: #65714c;
+  border-color: #4f5e3f;
+}
+.report-details {
+  max-height: min(480px, calc(100dvh - 270px));
+  overflow-y: auto;
+  padding-right: 5px;
+}
+.after-action-report p {
+  margin: 7px 0;
+  line-height: 1.5;
+}
+.after-action-report h3 {
+  margin: 9px 0;
+}
+.large-text .after-action-report p {
+  font-size: 15px;
+}
+.large-text .category-nav button {
+  font-size: 14px;
+}
+
+.village-places {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.village-places .venue-card {
+  margin: 0;
+  padding: 10px;
+  min-width: 0;
+}
+.village-places .venue-art {
+  width: calc(100% + 20px);
+  height: auto;
+  margin: -10px -10px 8px;
+}
+.village-places .card-heading {
+  gap: 5px;
+  margin-bottom: 5px;
+}
+.village-places .venue-card p {
+  margin: 6px 0;
+  line-height: 1.55;
+}
+.village-places .venue-card button {
+  padding: 8px 4px;
+  line-height: 1.4;
+}
+.village-places .venue-card:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
+.village-places .venue-card:last-child:nth-child(odd) .venue-art {
+  height: 45px;
+  object-fit: cover;
+}

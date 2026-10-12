@@ -215,7 +215,7 @@ test("older saves migrate safely and corrupted chronicle fields are sanitized", 
   const s = fresh();
   s.version = 18;
   delete s.chronicle;
-  assert.equal(save(s).version, 19);
+  assert.equal(save(s).version, 21);
   assert.ok(save(s).chronicle);
   const raw = fresh();
   raw.chronicle.heraldry = {

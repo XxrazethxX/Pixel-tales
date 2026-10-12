@@ -39,7 +39,7 @@ test("village recruitment previews actual trait costs, rejects unknown offers an
   const s = fresh();
   s.gold = 500;
   const offers = recruitmentOffers(s);
-  assert.equal(offers.length, 3);
+  assert.equal(offers.length, 4);
   assert.equal(offers.find((p) => p.id === "0-veteran").cost, 80);
   assert.equal(recruit(s, "fake"), false);
   assert.ok(recruit(s, "0-veteran"));
@@ -51,7 +51,7 @@ test("village recruitment previews actual trait costs, rejects unknown offers an
   assert.equal(innCost(s), 31);
   assert.equal(attackPower(s, p), 7);
   assert.equal(recruit(s, "0-veteran"), false);
-  assert.equal(recruitmentOffers(s).length, 2);
+  assert.equal(recruitmentOffers(s).length, 3);
   spendHours(s, 16);
   assert.equal(s.gold, 409);
   assert.equal(s.food, 19);
@@ -231,7 +231,7 @@ test("save migration retains personality, bonds and hired offers while sanitizin
   s.lastConversationDay = 1;
   s.party[0].resolve = 20;
   const loaded = restore(JSON.parse(JSON.stringify(s)));
-  assert.equal(loaded.version, 19);
+  assert.equal(loaded.version, 21);
   assert.equal(loaded.party[0].resolve, 20);
   assert.equal(bondValue(loaded, 1, 0), 50);
   assert.equal(loaded.lastConversationDay, 1);

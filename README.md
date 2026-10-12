@@ -2,6 +2,8 @@
 
 An original, playable high-fantasy mercenary-company RPG with compact pixel visuals, tactical combat, company survival, staffed camps, regional trade, faction stories, research, professions, crafting, and character progression. No borrowed game assets. This is an early browser prototype; it is not yet a native Android app or a complete Wartales-scale game.
 
+The latest update, **v0.33**, adds prepared magic and fantasy classes, a flag-bearer unlock, grouped camp and village menus, draggable camp furnishings, camp expansion and crowding, secure lodges, direct dungeon controls, varied battle terrain, and centered after-action reports. The next campaign chapter remains deferred.
+
 ## The visual style
 
 The art uses an original, earthy pixel palette inspired by the compact overworld presentation of Occidental Heroes: olive meadows, stepped tree canopies, warm plaster and timber buildings, and restrained parchment menus. Companions have distinct coats, faces, weapons, and portraits. Covered caravans, market stalls, wells, fences, ruins, mines, riverbanks, and a plank crossing give locations more character. Scenic footpaths do not restrict where you can walk.
@@ -438,7 +440,7 @@ The sites-and-avatars smoke test covers founder appearance, stash searching and 
 - **Playable dungeons:** use Explore dungeon at mines and ruins, then move through the interior grid. Inspect the concealed door, disarm traps, reinforce unstable passages, and mine deposits with a Miner. Defeat the guards before opening the vault; deposits, secrets, and treasure are saved and cannot be repeatedly looted.
 - **Tactical actions:** Archers can set overwatch, Shieldbearers can protect adjacent allies with a shield wall, and companions can spend valor to push adjacent enemies into difficult terrain for extra damage. Preparing an ambush costs food and time and grants a full free company turn before enemies can respond.
 - **Companion stories:** camp conversations offer personal goals with resource costs and permanent rewards. Support or refusal changes loyalty and relationships. Disloyal companions can be released, and refused companions may leave when wages remain unpaid.
-- **Camp furnishing:** build and reposition a shared table, drying rack, and brazier across six spaces. They improve healing, staffed forge output, and storm shelter. Cooking, smithing, and treatment have visible camp activity.
+- **Camp furnishing:** build and drag a shared table, tool rack, and brazier directly onto the camp clearing. Expand camp to create more room and sleeping capacity. They improve healing, staffed forge output, and storm shelter. Cooking, smithing, and treatment have visible camp activity.
 - **Crime and pursuit:** attacking caravans creates witnesses and a wanted level. Stolen cargo sales increase attention, and pursuing Wardens can intercept the company. Village fines clear the warrant and surrender carried trade cargo; faction reputation still remembers your attacks.
 - **Weather and seasons:** rain and storms reduce discovery and enemy visibility, storms increase fatigue unless camp shelter protects you, and cold weather or winter raises daily food needs. Seasons change every seven days in a repeating calendar.
 
@@ -699,7 +701,7 @@ This update adds the five requested systems. The proposed campaign chapter remai
 - **Combat feedback:** original pixel weapon swings, traveling arrows, healing crosses and spell particles accompany damage numbers. Reduced Motion keeps effects stationary. Battle conditions lists statuses and enemy intentions; colored tile outlines mark troll smash areas, knight charges and cultist prayers.
 - **New roaming enemies:** Crag trolls regenerate four health unless burned or standing in fire, and prepare an avoidable area smash. Silkfang spiders spend finite web stocks and poison companions they bite; healing spells cleanse venom. Hollow Star cultists spend finite prayer slots to prepare an ally heal; stun, silence and Counterspell interrupt it without refunding the slot. Iron Oath knights brace behind shields, prepare charges, and lose their three-point shield bonus when two companions engage from adjacent sides. These patrols roam near Redstone Quarry, Whispering Grove, Sunken Chapel and the Watchtower. A conscious Archer or Thief can scout within 125 pixels: one hour, one knowledge, once per patrol.
 - **Lasting wounds:** severe hits and falling unconscious can cause sprains (−1 movement, minimum one), damaged aim (−2 attack), concussion (no level-two magic), or infection (untreated daily health loss and fatigue). Restoring health alone does not erase these wounds. Bandaging costs one medicine and two hours, treats the wound and caps remaining recovery at 24 hours. Herbal care requires a conscious Herbalist, three herbs and three hours, and removes twelve recovery hours. Village surgery costs forty crowns, one medicine and six hours and clears the wound. Fed rest advances treated recovery normally and untreated recovery at quarter speed; empty supplies prevent recovery. Staffed camp and home medical facilities also treat wounds using their existing supplies.
-- **Company identity:** customize banner field, emblem and trim in Company. The banner appears beside the walking company and in camp. Earn Roadwardens through stronghold clearing, League Friends or Grovekeepers through fifteen faction reputation, and Monster Hunters through victories against two distinct new families. Adopted titles appear by the company name. League Friends gives a further five-percent purchase discount while League reputation remains at least fifteen. Faction greetings respond to reputation and earned titles; hostile deeds still matter.
+- **Company identity:** customize banner field, emblem and trim in Company. The banner appears beside the walking company and in camp after unlocking the standard and assigning a conscious bearer (v0.33). Earn Roadwardens through stronghold clearing, League Friends or Grovekeepers through fifteen faction reputation, and Monster Hunters through victories against two distinct new families. Adopted titles appear by the company name. League Friends gives a further five-percent purchase discount while League reputation remains at least fifteen. Faction greetings respond to reputation and earned titles; hostile deeds still matter.
 - **Living world:** nearby raiders reduce village condition at midnight; safe roads gradually restore it. Condition below 35 produces struggling visuals and fifteen-percent higher purchase prices; condition at least 80 adds thriving market details and ten-percent cheaper purchases. Once daily, donate six rations/one hour or repair with twenty crowns/three timber/two hours. Escort deliveries and caravan defenses improve local condition; caravan raids harm it. Friendly caravans visibly detour around nearby bandits and return when the original road becomes safe. Cleared strongholds receive settlers after three days, with new buildings and people. Visit to buy six rations for eight crowns once daily, or permanently rebuild for twenty-five crowns, five timber and four hours.
 
 Save version nineteen migrates older companies and validates heraldry, wounds, village condition, scouting, settlements and route changes. Transient combat effects do not replay after loading.
@@ -707,3 +709,62 @@ Save version nineteen migrates older companies and validates heraldry, wounds, v
 Validation: **457 automated tests**, dedicated desktop/mobile browser checks for heraldry, titles, treatment, village aid, scouting, all four enemy battles, Reduced Motion and settler rebuilding, plus passing regional and companion-system browser regressions. No browser errors.
 
 [Company heraldry preview](docs/screenshots/chronicle-company.png) · [New enemy battle](docs/screenshots/chronicle-battle.png) · [Mobile company management](docs/screenshots/chronicle-mobile.png)
+
+
+## Prepared magic and fantasy classes (v0.33)
+
+**Camp preparation.** Open Camp → Magic to select a caster's prepared spells. Emberfall's academy also supports preparation. Select one to three spells at level one; capacity grows by one every three levels, to a maximum of six. Changing the list costs one hour and preserves spent slots. Combat and exploration share the same slot budget. Older companies retain their existing repertoire until their first preparation.
+
+**Grimoires.** Explore a landmark, then search its archive for a finite grimoire. Emberfall sells additional copies, one of each title per day. Studying consumes a copy, two knowledge and four hours at camp or the academy. Newly learned spells must be prepared.
+
+| Grimoire | Class / spell | Landmark | Academy price |
+| --- | --- | --- | --- |
+| Prism codex | Wizard / Prismatic mantle | Watchtower | 65 crowns |
+| Book of returning light | Cleric / Circle of restoration | Sunken Chapel | 65 crowns |
+| Rootbound folio | Druid / Elder grasp | Whispering Grove | 60 crowns |
+| Dawn oath scripture | Paladin / Spear of dawn | Broken Crown | 70 crowns |
+
+**New combat classes.** Choose Rogue, Druid or Paladin when founding a company, or recruit a Paladin in Greyhaven, Rogue in Saltbridge, or Druid in Emberfall. Professions remain separate: a Rogue can work as a Cook while naturally scouting and picking locks. Rogues move faster and gain extra Backstab damage when an ally engages the target. Druids have rooting spells, bark wards and wolf form: one level-one slot and an action for three enemy turns of stronger, faster melee; animal form prevents casting. Paladins invoke a protective aura for one level-one slot and an action, reducing damage to nearby allies for three enemy turns. Each class also has usable specialization choices and its own purchasable weapon.
+
+**Magical services.** Emberfall's academy offers a daily parcel of four herbs and two mineral reagents for twenty-four crowns/one hour, and one lesson per caster daily: thirty-five crowns/three hours for one knowledge. Temple recovery costs fifteen crowns per depleted caster and two hours. Remote camp meditation still requires two herbs and two rations per depleted caster and six hours. Ordinary rest does not restore magic.
+
+**Enemy spellcasters.** Gravebinders prepare resurrection and can raise each corpse only once. Thorn shamans mark moving wolves for two-turn attack blessings. Rift sorcerers prepare an area eruption that can also harm their allies. Each caster has three spell slots; stun, silence and Counterspell interrupt prepared magic without refunding slots. Resurrection, blessing and burst markers identify the next effect. Scout their roaming patrols to learn their counters.
+
+**Exploration magic.** Prepare Lantern of secrets to reveal nearby landmarks and stash clue carvings; digging and lockpicking remain interactive. At Old Barrow, Echo Cavern and Broken Crown, the lantern also reveals an enterable hidden passage with persistent, selectable chest contents. Root sense uncovers a finite herbal cache at each wilderness landmark. Mist crossing resolves regional travel obstacles; Living bridge handles farmland, coast and mountain obstacles. Cleric Quiet sanctuary and Paladin Consecrated road dispel haunted mist and arcane static. These actions spend slots, any stated reagents and one hour; they avoid detour costs while ordinary time still passes.
+
+[Prepared spells at camp](docs/screenshots/arcana-camp.png) · [Emberfall academy](docs/screenshots/arcana-academy.png) · [Fantasy combat](docs/screenshots/arcana-battle.png) · [Hidden passage on mobile](docs/screenshots/arcana-passage-mobile.png)
+
+## Travel, camp layout and after-action reports (v0.33)
+
+**Company standard.** Company → Company standard, or Camp → Companions: unlock with five renown, four knowledge and forty crowns, then appoint a bearer. The walking and camp flag stays packed away without a conscious assigned bearer. The bearer grants one opening valor. Assignment is locked during combat, and a departing or dead bearer relinquishes the standard. Heraldry previews remain available in Company.
+
+**Wagon hold.** The wagon's cargo artwork is clipped to its physical bed, and its manifest displays every traded unit inside a bounded cargo grid. The company has twenty trade cargo spaces on foot, thirty with a wagon, and forty/fifty after cargo-rack upgrades. Purchase and loot capacity checks remain enforced. Provisions, materials and equipped gear are carried separately.
+
+**Organized camp.** Camp categories are Overview, Build, Jobs, Care, Magic, Companions and Wagon. Overview contains daily costs and rest; Build contains expansions, station upgrades and furnishing blueprints. Choose a furnishing blueprint, then drag it onto a clear part of the actual camp. Green fits; red indicates an occupied or out-of-bounds placement. Building pays its listed wood/crowns and takes two hours. Drag built furniture to relocate it for free. Legacy placements migrate and can be rearranged.
+
+**Expansion and crowding.** A starting camp sleeps four companions. Expand to six spaces for sixty crowns, ten timber and four hours; expand to eight for ninety crowns, fifteen timber and four hours. Each expansion enlarges the cleared placement area and adds visible sleeping space. Every companion beyond capacity reduces rest healing, costs three morale and reduces resolve, with traits affecting the reaction. Crowding applies when resting in a pitched camp; paid lodging supplies proper beds.
+
+**Occasional companion moments.** Personal goals no longer fill every camp menu. Once per day, camp arrival or a new dawn can offer a personal conversation, averaging roughly one in three eligible days. A short Overview prompt lets you hear the selected companion in Companions. Reopening camp cannot reroll it. Active journeys remain in the company journal. Resolving the offered conversation or personal decision produces a report and consumes the opportunity.
+
+**Village places.** Village arrival starts with the five venue cards. Local services groups regional shops, medical care, wagons and magic; Village affairs groups allegiance, aid and local stories. Collapsible sections retain their state while performing actions.
+
+**Secure rest.** Wayfarer Lodge offers guest beds before purchase. Pinewatch Refuge, Saltroad Hostel and Redstone Shelter are new world landmarks. Beds and meals cost four to six crowns per companion, plus the next day's wages and debt. A full day restores health, reduces fatigue and prevents meal starvation without woodland interruptions. Lasting wounds still need treatment and recovery. Paid lodging cannot be used during combat or other encounters.
+
+**Dungeon controls.** Click adjacent floor tiles directly, or move with WASD/arrow keys. Adjacent reachable tiles are highlighted. Click an occupied ore deposit to mine; click the side-room door from nearby to open its lock/rune controls or collect its opened cache. Readable room text stays above a folded Dungeon actions menu; a folded tile-button grid remains available for accessibility. Keyboard controls ignore focused inputs and work in both overworld and dungeon exploration.
+
+**Ambushes and encounters.** Attacking roaming people from natural forest concealment automatically grants the full opening ambush turn. Open-ground attacks require sufficient deliberate concealment or paid Prepare ambush. Natural concealment alone does not grant that opening against wolves, spiders or trolls. Prepare ambush remains available and portable. Automatic road events now occur every six active travel days, with trail events at twelve; distance-based wagon, conversation and regional interruptions occur less often. Deliberate scouting remains available.
+
+**Varied combat.** Forest, road, quarry, ruin and river fights cycle through alternative cover and obstacle arrangements: trees, deadfall, bushes, mud, boulders, broken walls, carts and crossings. Variants preserve traversal and spawning spaces and persist through loading. Movement controls and turn/defense controls are grouped; the ambush finish button explains that another company turn comes before the enemy response.
+
+**Centered reports.** Every completed combat or encounter opens an after-action report in the center of the screen. It lists actual health/injury changes, deaths or departures, level/resolve changes, acquired loot, magical shards and grimoires, consumed supplies, spent spell slots and equipment wear. Long reports scroll within their body while the heading and Continue button remain available. Reports pause travel and patrols, survive reload and close permanently when acknowledged. Dungeon visits aggregate their gains until leaving, with a separate combat report when fighting their guards.
+
+Save version twenty-one migrates older companies and validates the new preparation, grimoire, passage, banner, camp-layout and report ledgers. Validation: **523 automated tests**, dedicated desktop/mobile playthroughs of the magic and camp/travel/report systems, plus passing regional, companion and prior chronicle-system browser regressions. No browser errors.
+
+[Camp building](docs/screenshots/fieldwork-camp-build.png) · [Mobile camp menu](docs/screenshots/fieldwork-camp-mobile.png) · [Direct dungeon exploration](docs/screenshots/fieldwork-dungeon.png) · [After-action report](docs/screenshots/fieldwork-report.png) · [Mobile report](docs/screenshots/fieldwork-report-mobile.png) · [Village menu](docs/screenshots/fieldwork-village.png)
+
+Run the dedicated browser checks against a running development server with Playwright and Chromium installed:
+
+```sh
+GAME_URL=http://127.0.0.1:3000/ PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/arcana-systems-smoke.mjs
+GAME_URL=http://127.0.0.1:3000/ PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/fieldwork-systems-smoke.mjs
+```
