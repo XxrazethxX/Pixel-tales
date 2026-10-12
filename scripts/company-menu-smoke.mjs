@@ -25,7 +25,23 @@ try {
     true,
   );
   assert.equal(await state(), null);
+  assert.equal(await page.evaluate(async () => {
+    const image = new Image();
+    image.src = new URL("assets/main-menu-camp.png", location.href).href;
+    await image.decode();
+    return image.naturalWidth > 1000;
+  }), true);
+  await page.getByRole("button", { name: "Credits", exact: true }).focus();
+  await page.keyboard.press("Enter");
+  assert.match(await page.locator("#menu-content h2").textContent(), /Credits/);
+  await click("Back");
   await page.screenshot({ path: "/tmp/pixel-title-desktop.png" });
+  await click("Credits");
+  assert.match(await page.locator("#menu-content").textContent(), /original AI-generated/);
+  await click("Back");
+  await click("Quit");
+  assert.match(await page.locator("#menu-content").textContent(), /close this browser tab/);
+  await click("Return to menu");
   await click("New Company");
   await page
     .getByLabel("Company name", { exact: true })
@@ -74,7 +90,7 @@ try {
   const paused = await state();
   await page.waitForTimeout(1200);
   assert.deepEqual(await state(), paused);
-  await click("Load");
+  await click("Load Game");
   await click("Save to slot 1");
   assert.equal(
     await page
@@ -108,7 +124,7 @@ try {
   await click("Begin adventure");
   assert.equal((await state()).gold, 180);
   await click("Main menu");
-  await click("Load");
+  await click("Load Game");
   page.once("dialog", (d) => d.accept());
   await click("Load slot 1");
   assert.equal((await state()).companyName, "The Silver Foxes");
@@ -161,7 +177,7 @@ try {
       .isEnabled(),
     true,
   );
-  await unavailable.getByRole("button", { name: "Load", exact: true }).click();
+  await unavailable.getByRole("button", { name: "Load Game", exact: true }).click();
   await unavailable
     .getByRole("button", { name: "Save to slot 1", exact: true })
     .click();

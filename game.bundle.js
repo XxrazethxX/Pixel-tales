@@ -21594,6 +21594,7 @@ function menuShell(title) {
   heldKeys.clear();
   document.body.classList.add("menu-open");
   $("front-menu").hidden = false;
+  $("front-menu").classList.remove("title-home");
   for (const e of document.querySelectorAll(
     "body > header, body > main, body > footer",
   ))
@@ -21658,20 +21659,48 @@ function showFrontMenu() {
         "menu-message",
       ),
     );
-  const controls = menuElement("div", "", "menu-controls");
+  $("front-menu").classList.add("title-home");
+  root.querySelector(".eyebrow").textContent = "THE ASHEN COMPANY";
+  root.querySelector("h2").remove();
+  root.querySelector(".menu-intro").remove();
+  const controls = menuElement("nav", "", "menu-controls");
+  controls.setAttribute("aria-label", "Main menu actions");
   controls.append(
     menuButton("Continue", () => beginPlaying(restore(saved)), !valid),
     menuButton("New Company", showCompanyCreator),
-    menuButton("Load", showLoadMenu),
+    menuButton("Load Game", showLoadMenu),
     menuButton("Settings", showSettingsMenu),
+    menuButton("Credits", showCreditsMenu),
+    menuButton("Quit", showQuitMenu),
   );
+  controls.querySelector("button:not(:disabled)")?.classList.add("menu-primary");
   root.append(controls);
   root.append(
     menuElement(
       "p",
-      "Progress saves in this browser. Manual slots keep separate snapshots.",
+      "A company. A road. A story.",
       "menu-footnote",
     ),
+  );
+}
+function showCreditsMenu() {
+  const root = menuShell("Credits");
+  root.append(
+    menuElement("p", "Pixel Tales · The Ashen Company", "menu-intro"),
+    menuElement("p", "An original high-fantasy company RPG, created for XxrazethxX."),
+    menuElement("p", "Game artwork is drawn locally. The main-menu campsite is original AI-generated concept artwork, adapted into an interactive interface."),
+    menuElement("p", "Inspired by the company adventures of Wartales and the compact overworld presentation of Occidental Heroes. No assets from those games are used."),
+    menuButton("Back", showFrontMenu),
+  );
+}
+function showQuitMenu() {
+  const root = menuShell("Your company is at rest");
+  root.append(
+    menuElement("p", "The adventure is paused. You can close this browser tab to quit.", "menu-intro"),
+    menuElement("p", hasSessionCompany
+      ? "Return through Continue to resume your company. Manual snapshots remain in Load Game."
+      : "Return to the menu whenever you are ready to begin."),
+    menuButton("Return to menu", showFrontMenu),
   );
 }
 function showLoadMenu() {

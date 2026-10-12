@@ -4,6 +4,10 @@ An original, playable high-fantasy mercenary-company RPG with compact pixel visu
 
 The latest update, **v0.33**, adds prepared magic and fantasy classes, a flag-bearer unlock, grouped camp and village menus, draggable camp furnishings, camp expansion and crowding, secure lodges, direct dungeon controls, varied battle terrain, and centered after-action reports. The next campaign chapter remains deferred.
 
+The title screen now brings the campsite concept into the game, with working Continue, New Company, Load Game, Settings, Credits, and Quit controls. It adapts to mobile and keeps existing company saves intact.
+
+[Main menu desktop preview](docs/screenshots/main-menu-desktop.png) · [Main menu mobile preview](docs/screenshots/main-menu-mobile.png)
+
 ## The visual style
 
 The art uses an original, earthy pixel palette inspired by the compact overworld presentation of Occidental Heroes: olive meadows, stepped tree canopies, warm plaster and timber buildings, and restrained parchment menus. Companions have distinct coats, faces, weapons, and portraits. Covered caravans, market stalls, wells, fences, ruins, mines, riverbanks, and a plank crossing give locations more character. Scenic footpaths do not restrict where you can walk.
@@ -12,11 +16,11 @@ The art uses an original, earthy pixel palette inspired by the compact overworld
 
 [Village menu preview](docs/screenshots/village.png) · [Tactical battle preview](docs/screenshots/battle.png) · [Regional trade preview](docs/screenshots/trade.png) · [Story choices on mobile](docs/screenshots/story-mobile.png)
 
-All artwork is drawn locally from `src/art.js`, with cached terrain and sprite images. There are no downloaded game assets, external fonts, or network requests required to render it. The world navigator uses the same terrain artwork. Unexplored land fades through a soft pixel edge; combat uses clearer selection outlines, names, and health tracks.
+Gameplay artwork is drawn locally from `src/art.js`, with cached terrain and sprite images. The main menu uses an original AI-generated campsite backdrop from `assets/main-menu-camp.png`, with accessible HTML controls over it. There are no downloaded game assets, external fonts, or network requests required to render it. The world navigator uses the same terrain artwork. Unexplored land fades through a soft pixel edge; combat uses clearer selection outlines, names, and health tracks.
 
 ## Play
 
-**No installation:** Download the repository ZIP from GitHub's Code menu, extract it completely, and open `index.html` in a JavaScript-enabled browser. Keep `index.html`, `style.css`, and `game.bundle.js` together. The included classic JavaScript bundle works without ES-module imports or remote fonts.
+**No installation:** Download the repository ZIP from GitHub's Code menu, extract it completely, and open `index.html` in a JavaScript-enabled browser. Keep `index.html`, `style.css`, `game.bundle.js`, and the `assets` folder together. The included classic JavaScript bundle works without ES-module imports or remote fonts.
 
 **Development server:** Requires Node.js 18+ and Python 3; no dependencies or secrets.
 

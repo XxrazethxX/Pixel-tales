@@ -1252,3 +1252,75 @@ nav button[data-count]::after {
   height: 45px;
   object-fit: cover;
 }
+
+/* The campsite is scenery; all titles and controls remain real, accessible UI. */
+.front-menu {
+  background: linear-gradient(#111b1833, #111b1866),
+    url("assets/main-menu-camp.png") center / cover no-repeat fixed, #18251e;
+}
+.front-menu.title-home {
+  padding: clamp(20px, 5vh, 60px) clamp(20px, 4vw, 64px);
+}
+.title-home .menu-content {
+  width: min(390px, 100%);
+  max-width: none;
+  margin: 0;
+  padding: clamp(20px, 3vw, 36px);
+  border: 5px double #a08246;
+  background: linear-gradient(135deg, #20271bf5, #101b17ee);
+  box-shadow: 0 0 0 5px #322b1c, 0 16px 50px #0009;
+  color: #e8d5a8;
+  text-align: center;
+}
+.title-home .menu-content h1 {
+  font-family: Georgia, serif;
+  color: #f0db9f;
+  font-size: clamp(30px, 2.7vw, 40px);
+  letter-spacing: 2px;
+  line-height: 1.05;
+  margin: 6px 0 18px;
+  text-shadow: 2px 3px #090f0b;
+}
+.title-home .eyebrow { color: #d2b26c; letter-spacing: 3px; }
+.title-home .menu-controls { gap: 12px; margin: 24px 0; }
+.title-home .menu-controls button {
+  position: relative;
+  min-height: 54px;
+  padding: 10px 20px;
+  border: 4px double #9d814b;
+  background: linear-gradient(#303022, #1d241a);
+  color: #efdcaf;
+  font: 24px Georgia, serif;
+  box-shadow: 0 3px 0 #0b120e;
+}
+.title-home .menu-controls button.menu-primary,
+.title-home .menu-controls button:hover:not(:disabled) {
+  background: linear-gradient(#e5bc64, #b88c42);
+  color: #241f15;
+  border-color: #ecd18b;
+}
+.title-home button:focus-visible { outline: 3px solid #fff0be; outline-offset: 4px; }
+.title-home .menu-controls button:disabled { color: #b2a584; opacity: .65; cursor: default; }
+.title-home .save-preview {
+  padding: 8px;
+  background: #111b1799;
+  border-color: #796b44;
+  color: #d1c29c;
+  font-size: 11px;
+}
+.title-home .menu-footnote { color: #d4b778; font: 15px Georgia, serif; letter-spacing: 1px; }
+.title-home .menu-message { color: #f3c38c; }
+@media (max-width: 600px) {
+  .front-menu { background-position: 62% center; }
+  .front-menu.title-home { padding: 24px 18px; }
+  .title-home .menu-content { margin: auto; padding: 24px; background: #162118ed; }
+  .title-home .menu-content h1 { font-size: 40px; }
+  .title-home .menu-controls button { min-height: 52px; font-size: 22px; }
+}
+@media (max-height: 650px) and (min-width: 601px) {
+  .front-menu.title-home { padding: 18px 30px; }
+  .title-home .menu-content { width: 340px; padding: 16px 24px; }
+  .title-home .menu-content h1 { font-size: 36px; margin-bottom: 10px; }
+  .title-home .menu-controls { gap: 6px; margin: 14px 0; }
+  .title-home .menu-controls button { min-height: 40px; padding: 6px; font-size: 21px; }
+}
