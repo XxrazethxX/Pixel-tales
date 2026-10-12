@@ -20,7 +20,18 @@ The art uses an original, earthy pixel palette inspired by the compact overworld
 
 [Village menu preview](docs/screenshots/village.png) · [Tactical battle preview](docs/screenshots/battle.png) · [Regional trade preview](docs/screenshots/trade.png) · [Story choices on mobile](docs/screenshots/story-mobile.png)
 
-Gameplay artwork is drawn locally from `src/art.js`, with cached terrain and sprite images. The main menu uses original AI-generated campsite artwork from `assets/main-menu-camp.png`, with accessible HTML controls over it. Its pixel-rendered still fallback is `assets/main-menu-pixel-still.png`. There are no borrowed game assets or runtime network requests. The menu’s openly licensed font is bundled locally. The world navigator uses the same terrain artwork. Unexplored land fades through a soft pixel edge; combat uses clearer selection outlines, names, and health tracks.
+Gameplay artwork combines original AI-generated sprite atlases with locally drawn terrain in `src/art.js`. The in-game art pass adds eighteen male/female companion sprites across all nine classes, twelve enemy sprites, and eighteen scenery props. Coats, skin, hair, fantasy ancestry, hairstyles, and equipment details remain customizable. Trees, village buildings, tents, cooking stations, forges, stores, wagons, and dungeon chests now share the menu's earthy palette and sharper silhouettes. Ground textures, dungeon masonry, portraits, and interface headings receive matching detail. Cached native PNG sprites are embedded in `src/art-assets.js` and the game bundle, so gameplay artwork loads without separate asset requests. The main menu uses original AI-generated campsite artwork from `assets/main-menu-camp.png`, with accessible HTML controls over it. Its pixel-rendered still fallback is `assets/main-menu-pixel-still.png`. There are no borrowed game assets or runtime network requests. The menu’s openly licensed font is bundled locally. The world navigator uses the same terrain artwork. Unexplored land fades through a soft pixel edge; combat uses clearer selection outlines, names, and health tracks.
+
+
+[Companion artwork](docs/screenshots/art-companions.png) · [Updated world](docs/screenshots/art-world.png) · [Expanded camp](docs/screenshots/art-built-camp.png) · [Battle](docs/screenshots/art-battle.png) · [Dungeon](docs/screenshots/art-dungeon.png) · [Mobile interface](docs/screenshots/art-company-mobile.png)
+
+Editable sprite sources and baked native atlases are in `assets/game-art/`. Optional artwork rebuilding requires Pillow and NumPy: run `python3 scripts/bake-game-art.py`, then `npm run build`. Normal development and gameplay do not require these Python packages.
+
+Art validation covers all nine classes, gender and appearance differences, world/camp/battle/dungeon rendering, mobile overflow, and embedded sprites with external requests blocked:
+
+```sh
+GAME_URL=http://127.0.0.1:3002/ PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/game-art-quality-smoke.mjs
+```
 
 ## Play
 

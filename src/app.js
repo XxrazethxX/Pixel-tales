@@ -411,8 +411,11 @@ import {
 let gameActive = false;
 let hasSessionCompany = false;
 let menuSettings = { largeText: false, reduceMotion: false, slowDays: false };
-let menuEffectVideo = null, menuPlaybackRequest = 0;
-const menuMotionPreference = window.matchMedia("(prefers-reduced-motion: reduce)");
+let menuEffectVideo = null,
+  menuPlaybackRequest = 0;
+const menuMotionPreference = window.matchMedia(
+  "(prefers-reduced-motion: reduce)",
+);
 try {
   const saved = JSON.parse(localStorage.getItem("pixel-tales-settings"));
   for (const key of Object.keys(menuSettings))
@@ -3397,20 +3400,11 @@ function draw() {
             28 + visual.y * 60,
           );
         else
-          person(
+          drawFantasyEnemy(
+            ctx,
+            e.kind,
             136 + visual.x * 62,
             28 + visual.y * 60,
-            e.kind === "archer"
-              ? "#9b784e"
-              : e.kind === "brute"
-                ? "#765c63"
-                : "#8f5143",
-            0,
-            e.kind === "archer"
-              ? "Archer"
-              : e.kind === "brute"
-                ? "Shieldbearer"
-                : "Swordswoman",
           );
         if (e.kind === "mage")
           drawMapLabel(
@@ -4017,8 +4011,12 @@ canvas.addEventListener("pointermove", (event) => {
 // A complete pre-rendered scene replaces the former procedural overlays.
 // Browsers decode the lightweight loop; the GIF is a downloadable art preview.
 function menuAnimationAllowed() {
-  return !$("front-menu").hidden && !document.hidden &&
-    !menuSettings.reduceMotion && !menuMotionPreference.matches;
+  return (
+    !$("front-menu").hidden &&
+    !document.hidden &&
+    !menuSettings.reduceMotion &&
+    !menuMotionPreference.matches
+  );
 }
 function syncMenuEffects() {
   if (!menuEffectVideo) {
@@ -4047,15 +4045,18 @@ function syncMenuEffects() {
   }
   if (!menuEffectVideo.getAttribute("src"))
     menuEffectVideo.src = "assets/main-menu-loop.mp4";
-  menuEffectVideo.play().then(() => {
-    if (request !== menuPlaybackRequest || !menuAnimationAllowed()) return;
-    menuEffectVideo.hidden = false;
-    menuEffectVideo.dataset.animating = "true";
-  }).catch(() => {
-    if (request !== menuPlaybackRequest) return;
-    menuEffectVideo.hidden = true;
-    menuEffectVideo.dataset.animating = "false";
-  });
+  menuEffectVideo
+    .play()
+    .then(() => {
+      if (request !== menuPlaybackRequest || !menuAnimationAllowed()) return;
+      menuEffectVideo.hidden = false;
+      menuEffectVideo.dataset.animating = "true";
+    })
+    .catch(() => {
+      if (request !== menuPlaybackRequest) return;
+      menuEffectVideo.hidden = true;
+      menuEffectVideo.dataset.animating = "false";
+    });
 }
 menuMotionPreference.addEventListener("change", syncMenuEffects);
 document.addEventListener("visibilitychange", syncMenuEffects);
@@ -4184,33 +4185,45 @@ function showFrontMenu() {
     menuButton("Credits", showCreditsMenu),
     menuButton("Quit", showQuitMenu),
   );
-  controls.querySelector("button:not(:disabled)")?.classList.add("menu-primary");
+  controls
+    .querySelector("button:not(:disabled)")
+    ?.classList.add("menu-primary");
   root.append(controls);
-  root.append(
-    menuElement(
-      "p",
-      "A company. A road. A story.",
-      "menu-footnote",
-    ),
-  );
+  root.append(menuElement("p", "A company. A road. A story.", "menu-footnote"));
 }
 function showCreditsMenu() {
   const root = menuShell("Credits");
   root.append(
     menuElement("p", "Pixel Tales · The Ashen Company", "menu-intro"),
-    menuElement("p", "An original high-fantasy company RPG, created for XxrazethxX."),
-    menuElement("p", "Game artwork is drawn locally. The main-menu campsite is original AI-generated artwork, animated as a complete rendered scene with working interface controls."),
-    menuElement("p", "Inspired by the company adventures of Wartales and the compact overworld presentation of Occidental Heroes. No assets from those games are used."),
+    menuElement(
+      "p",
+      "An original high-fantasy company RPG, created for XxrazethxX.",
+    ),
+    menuElement(
+      "p",
+      "Game artwork is drawn locally. The main-menu campsite is original AI-generated artwork, animated as a complete rendered scene with working interface controls.",
+    ),
+    menuElement(
+      "p",
+      "Inspired by the company adventures of Wartales and the compact overworld presentation of Occidental Heroes. No assets from those games are used.",
+    ),
     menuButton("Back", showFrontMenu),
   );
 }
 function showQuitMenu() {
   const root = menuShell("Your company is at rest");
   root.append(
-    menuElement("p", "The adventure is paused. You can close this browser tab to quit.", "menu-intro"),
-    menuElement("p", hasSessionCompany
-      ? "Return through Continue to resume your company. Manual snapshots remain in Load Game."
-      : "Return to the menu whenever you are ready to begin."),
+    menuElement(
+      "p",
+      "The adventure is paused. You can close this browser tab to quit.",
+      "menu-intro",
+    ),
+    menuElement(
+      "p",
+      hasSessionCompany
+        ? "Return through Continue to resume your company. Manual snapshots remain in Load Game."
+        : "Return to the menu whenever you are ready to begin.",
+    ),
     menuButton("Return to menu", showFrontMenu),
   );
 }
@@ -6694,3 +6707,7 @@ function drawDungeonHighlights() {
   }
   ctx.restore();
 }
+
+window.addEventListener("pixel-art-ready", () => {
+  if (gameActive) render();
+});

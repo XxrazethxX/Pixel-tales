@@ -4,7 +4,8 @@ import {
   campFurniturePoint,
   campBounds,
 } from "./game.js";
-// Original, hand-built pixel artwork. All coordinates are logical pixels.
+// Original generated sprite atlases and hand-built pixel scenery. Logical pixels.
+import { gameArtData } from "./art-assets.js";
 import {
   dungeonWalls,
   dungeonLayout,
@@ -19,12 +20,12 @@ import {
   equippedItem,
 } from "./game.js";
 export const artPalette = {
-  meadow: "#a3a775",
-  grass: "#8c9867",
+  meadow: "#98a16a",
+  grass: "#798957",
   light: "#bbc18a",
   earth: "#8c805b",
   outline: "#393b2b",
-  water: "#709a98",
+  water: "#668c8c",
   bank: "#c1bb86",
   foliage: "#607b49",
   parchment: "#e2d3a9",
@@ -43,6 +44,196 @@ function surface(w, h) {
   image.height = h;
   return image;
 }
+const atlasImages = new Map(),
+  atlasTiles = new Map();
+let atlasLoaded = 0;
+for (const [kind, data] of Object.entries(gameArtData)) {
+  const image = new Image();
+  image.onload = () => {
+    atlasImages.set(kind, image);
+    atlasLoaded++;
+    if (atlasLoaded === 3) {
+      landscape = undefined;
+      campGround = undefined;
+      characterImages.clear();
+      document.body.dataset.gameArt = "ready";
+      window.dispatchEvent(new Event("pixel-art-ready"));
+    }
+  };
+  image.src = `data:image/png;base64,${data.png}`;
+}
+export function gameArtReady() {
+  return atlasLoaded === 3;
+}
+function artTile(kind, index) {
+  const image = atlasImages.get(kind);
+  if (!image) return null;
+  const key = `${kind}:${index}`;
+  if (atlasTiles.has(key)) return atlasTiles.get(key);
+  const data = gameArtData[kind],
+    tile = surface(data.width, data.height);
+  tile
+    .getContext("2d")
+    .drawImage(
+      image,
+      (index % data.columns) * data.width,
+      Math.floor(index / data.columns) * data.height,
+      data.width,
+      data.height,
+      0,
+      0,
+      data.width,
+      data.height,
+    );
+  atlasTiles.set(key, tile);
+  return tile;
+}
+export function drawScenery(c, index, x, groundY, width = 48, height = 48) {
+  const tile = artTile("props", index);
+  if (!tile) return false;
+  c.imageSmoothingEnabled = false;
+  c.drawImage(
+    tile,
+    Math.round(x - width / 2),
+    Math.round(groundY - height),
+    width,
+    height,
+  );
+  return true;
+}
+function artRgb(hex) {
+  return [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+}
+function artTint(rgb, luminosity, strength = 1) {
+  return rgb.map((v) =>
+    Math.max(0, Math.min(255, Math.round(v * luminosity * strength))),
+  );
+}
+const artClassSlots = [
+  "Swordswoman",
+  "Shieldbearer",
+  "Archer",
+  "Spearman",
+  "Wizard",
+  "Cleric",
+  "Rogue",
+  "Druid",
+  "Paladin",
+];
+function detailedCharacter(role, coat, step, variant, appearance) {
+  const slot = Math.max(0, artClassSlots.indexOf(role));
+  const female = appearance.sex
+    ? appearance.sex === "female"
+    : variant % 2 !== 0;
+  const tile = artTile("heroes", slot * 2 + Number(female));
+  if (!tile) return null;
+  const image = surface(tile.width, tile.height),
+    c = image.getContext("2d");
+  c.drawImage(tile, 0, 0);
+  const pixels = c.getImageData(0, 0, image.width, image.height),
+    colors = pixels.data;
+  const cloth = artRgb(coat || "#77846a");
+  const skin = artRgb(
+    appearance.race === "orc" ? "#819867" : appearance.skin || "#c7a17d",
+  );
+  const hair = artRgb(appearance.hair || "#6a4932");
+  for (let y = 0; y < image.height; y++)
+    for (let x = 0; x < image.width; x++) {
+      const k = (y * image.width + x) * 4,
+        r = colors[k],
+        g = colors[k + 1],
+        b = colors[k + 2];
+      if (!colors[k + 3]) continue;
+      let tint = null;
+      if (g > r * 1.12 && g > b && b > r * 0.65)
+        tint = artTint(cloth, Math.max(0.35, Math.min(1.3, (r + g + b) / 230)));
+      else if (
+        y < 17 &&
+        x >= 7 &&
+        x <= 25 &&
+        r > 95 &&
+        r > g * 1.08 &&
+        g > b * 1.15
+      )
+        tint = artTint(skin, Math.max(0.45, Math.min(1.2, (r + g + b) / 470)));
+      else if (y < 13 && x >= 7 && x <= 25 && r > g * 1.1 && g > b && r < 125)
+        tint = artTint(
+          appearance.hairStyle === "bald" && y < 7 ? skin : hair,
+          Math.max(0.5, Math.min(1.5, (r + g + b) / 135)),
+        );
+      if (tint) [colors[k], colors[k + 1], colors[k + 2]] = tint;
+    }
+  c.putImageData(pixels, 0, 0);
+  const head = slot === 4 ? 12 : 8;
+  if (["long", "braid"].includes(appearance.hairStyle)) {
+    pixel(c, 8, head + 2, 1, 10, appearance.hair || "#6a4932");
+    pixel(
+      c,
+      18,
+      head + 2,
+      appearance.hairStyle === "braid" ? 1 : 2,
+      10,
+      appearance.hair || "#6a4932",
+    );
+  }
+  if (appearance.race === "elf") {
+    pixel(c, 7, head + 1, 3, 1, appearance.skin || "#c7a17d");
+    pixel(c, 18, head + 1, 3, 1, appearance.skin || "#c7a17d");
+  }
+  if (appearance.race === "orc") {
+    pixel(c, 11, head + 5, 1, 2, "#eee0ba");
+    pixel(c, 16, head + 5, 1, 2, "#eee0ba");
+  }
+  if (appearance.race === "dwarf") {
+    pixel(c, 10, head + 5, 8, 4, appearance.hair || "#6a4932");
+    pixel(c, 12, head + 9, 4, 2, appearance.hair || "#6a4932");
+    pixel(c, 12, head + 9, 1, 1, "#c6a063");
+  }
+  if (step) {
+    const legs = surface(30, 11),
+      g = legs.getContext("2d");
+    g.drawImage(image, 0, 29, 30, 11, 0, 0, 30, 11);
+    c.clearRect(0, 29, 30, 11);
+    c.drawImage(legs, 0, 0, 15, 11, 0, 29 + step, 15, 11);
+    c.drawImage(legs, 15, 0, 15, 11, 15, 29 - step, 15, 11);
+  }
+  return image;
+}
+const artEnemySlots = {
+  wolf: 0,
+  goblin: 1,
+  skeleton: 2,
+  troll: 3,
+  spider: 4,
+  cultist: 5,
+  knight: 6,
+  necromancer: 7,
+  shaman: 8,
+  sorcerer: 9,
+  mage: 9,
+  brute: 10,
+  raider: 10,
+  bandit: 10,
+  guard: 6,
+  archer: 11,
+};
+function detailedEnemy(c, kind, x, y, step = 0) {
+  const slot = artEnemySlots[kind];
+  if (slot === undefined) return false;
+  const tile = artTile("enemies", slot);
+  if (!tile) return false;
+  const size =
+    kind === "wolf" ? 40 : kind === "troll" || kind === "spider" ? 44 : 36;
+  c.imageSmoothingEnabled = false;
+  c.drawImage(
+    tile,
+    Math.round(x - size / 2),
+    Math.round(y + 16 - size + (step ? 1 : 0)),
+    size,
+    size,
+  );
+  return true;
+}
 function noise(x, y, seed = 0) {
   let n = Math.imul(x + seed * 97, 374761393) ^ Math.imul(y + 31, 668265263);
   n = Math.imul(n ^ (n >>> 13), 1274126177);
@@ -58,6 +249,17 @@ function steppedOval(c, x, y, w, h, color) {
   }
 }
 export function drawTree(c, x, y, variant = 0) {
+  if (
+    drawScenery(
+      c,
+      variant % 4 === 0 ? 0 : variant % 7 === 0 ? 2 : 1,
+      x,
+      y + 22,
+      44,
+      58,
+    )
+  )
+    return;
   const pine = variant % 4 === 0;
   steppedOval(c, x - 11, y + 17, 30, 9, "#778453");
   pixel(c, x - 2, y + 1, 5, 21, "#625139");
@@ -88,6 +290,8 @@ export function drawTree(c, x, y, variant = 0) {
   }
 }
 function rock(c, x, y, size = 1) {
+  if (size > 0 && drawScenery(c, 3, x, y + 4 * size, 18 * size, 16 * size))
+    return;
   pixel(c, x - 6 * size, y - 3 * size, 13 * size, 7 * size, "#787963");
   pixel(c, x - 4 * size, y - 6 * size, 9 * size, 8 * size, "#a9a88a");
   pixel(c, x - 3 * size, y - 6 * size, 5 * size, 2 * size, "#cac5a1");
@@ -95,6 +299,17 @@ function rock(c, x, y, size = 1) {
 }
 function house(c, x, y, roof = "#8c6045", large = false) {
   const width = large ? 38 : 28;
+  if (
+    drawScenery(
+      c,
+      large ? 8 : roof === "#7b7760" ? 7 : 6,
+      x + width / 2,
+      y + 21,
+      width + 14,
+      large ? 62 : 48,
+    )
+  )
+    return;
   pixel(c, x - 2, y + 14, width + 9, 13, "#828455");
   pixel(c, x, y - 8, width, 29, "#655941");
   pixel(c, x + 1, y - 6, width - 2, 24, "#d0be8b");
@@ -151,6 +366,28 @@ function stall(c, x, y) {
 export function drawLandmark(c, p, index = 0) {
   const x = p.x,
     y = p.y;
+  const prop =
+    p.type === "mine" || p.scene === "cave"
+      ? 10
+      : p.type === "ruin"
+        ? index === 5
+          ? 9
+          : 11
+        : p.type === "cache"
+          ? 16
+          : null;
+  if (
+    prop !== null &&
+    drawScenery(
+      c,
+      prop,
+      x,
+      y + 24,
+      prop === 16 ? 38 : 72,
+      prop === 16 ? 34 : 76,
+    )
+  )
+    return;
   if (p.type === "town") {
     steppedOval(c, x - 53, y - 32, 110, 83, "#8d9462");
     steppedOval(c, x - 49, y - 27, 98, 72, "#b5ae7a");
@@ -288,13 +525,23 @@ export function worldArtwork() {
             ? ["#909994", "#899591", "#98a198"][Math.floor(n * 2.99)]
             : region.id === "city"
               ? ["#b0aa87", "#aaa57e", "#b6b08d"][Math.floor(n * 2.99)]
-              : ["#a3a775", "#9da370", "#a8ab79"][Math.floor(n * 2.99)],
+              : ["#98a16a", "#929b64", "#a1a977"][Math.floor(n * 2.99)],
       );
       if (noise(x, y) > 0.7) {
         pixel(c, x + 2, y + 5, 3, 1, highlands ? "#959779" : "#8c9867");
         pixel(c, x + 3, y + 3, 1, 3, highlands ? "#bdb897" : "#b7bb87");
       }
     }
+  // Fine ground details stay quiet under figures, but give the map the same
+  // worn, layered materials as the menu: grass blades, petals and small stones.
+  for (let i = 0; i < 1600; i++) {
+    const x = Math.floor(noise(i, 41) * WORLD.width),
+      y = Math.floor(noise(i, 42) * WORLD.height);
+    if (terrainAt({ x, y }) === "water") continue;
+    pixel(c, x, y, 2, 1, i % 9 ? "#7d8b59" : "#ccb681");
+    if (i % 4 === 0) pixel(c, x + 1, y - 2, 1, 2, "#aeb879");
+    if (i % 17 === 0) pixel(c, x - 1, y - 3, 2, 1, "#d1bd95");
+  }
   // Soft-edged woodland ground, with individual trees layered over it below.
   for (const forest of places.filter((p) => p.type === "forest")) {
     for (let y = forest.y - 82; y < forest.y + 82; y += 4)
@@ -407,6 +654,11 @@ export function worldArtwork() {
 function characterImage(role, coat, step, variant, appearance = {}) {
   const key = `${role}:${coat}:${step}:${variant}:${appearance.sex}:${appearance.skin}:${appearance.hair}:${appearance.hairStyle}:${appearance.race}`;
   if (characterImages.has(key)) return characterImages.get(key);
+  const detailed = detailedCharacter(role, coat, step, variant, appearance);
+  if (detailed) {
+    characterImages.set(key, detailed);
+    return detailed;
+  }
   const image = surface(26, 34),
     c = image.getContext("2d");
   const skin =
@@ -546,16 +798,17 @@ export function drawCharacter(
   appearance = {},
 ) {
   c.imageSmoothingEnabled = false;
+  const image = characterImage(
+    role,
+    coat,
+    step > 0 ? 1 : step < 0 ? -1 : 0,
+    variant,
+    appearance,
+  );
   c.drawImage(
-    characterImage(
-      role,
-      coat,
-      step > 0 ? 1 : step < 0 ? -1 : 0,
-      variant,
-      appearance,
-    ),
-    Math.round(x) - 13,
-    Math.round(y) - 17,
+    image,
+    Math.round(x) - Math.floor(image.width / 2),
+    Math.round(y) - Math.floor(image.height / 2),
   );
 }
 export const partyCoats = [
@@ -581,16 +834,15 @@ export function portraitArtwork(p, s = null) {
       p.id,
       p,
     ),
-    6,
-    1,
-    39,
-    51,
+    0,
+    0,
+    48,
+    64,
   );
   if (s) {
     c.save();
-    c.translate(6, 1);
-    c.scale(1.5, 1.5);
-    drawLoadout(c, s, p, 13, 17);
+    c.scale(1.6, 1.6);
+    drawLoadout(c, s, p, 15, 20);
     c.restore();
   }
   image.className = "companion-portrait";
@@ -598,6 +850,7 @@ export function portraitArtwork(p, s = null) {
   return image;
 }
 export function drawWagon(c, x, y, hostile = false, cargoType = "mixed") {
+  if (cargoType === "mixed" && drawScenery(c, 17, x, y + 18, 54, 56)) return;
   pixel(c, x - 21, y + 10, 43, 8, "#77835688");
   pixel(c, x - 18, y - 3, 35, 17, "#6c573c");
   pixel(c, x - 17, y - 2, 33, 13, "#ae8e59");
@@ -954,23 +1207,29 @@ export function drawBattlefield(c, s) {
           steppedOval(c, x + 10, y + 7, 42, 31, "#4d6540");
           steppedOval(c, x + 15, y + 5, 31, 21, "#7b8c54");
           pixel(c, x + 19, y + 12, 10, 3, "#a0aa70");
+          drawScenery(c, 1, x + 30, y + 47, 50, 48);
         } else if (tile.kind === "log") {
           pixel(c, x + 5, y + 20, 47, 14, "#635c42");
           pixel(c, x + 7, y + 23, 42, 3, "#9b8456");
           pixel(c, x + 4, y + 22, 7, 10, "#bd9d68");
+          drawScenery(c, 4, x + 29, y + 41, 50, 32);
         } else if (tile.kind === "rock") {
           steppedOval(c, x + 7, y + 9, 44, 35, "#6e786e");
           steppedOval(c, x + 12, y + 7, 30, 24, "#b4b49a");
           pixel(c, x + 18, y + 13, 13, 5, "#d0cbb0");
+          drawScenery(c, 3, x + 30, y + 44, 48, 42);
         } else if (tile.kind === "wagon") {
           pixel(c, x + 5, y + 15, 48, 25, "#78664a");
           pixel(c, x + 8, y + 18, 42, 17, "#b4a078");
           pixel(c, x + 5, y + 37, 8, 7, "#48493b");
           pixel(c, x + 43, y + 37, 8, 7, "#48493b");
+          drawScenery(c, 17, x + 29, y + 46, 52, 45);
         } else {
           pixel(c, x + 7, y + 17, 42, 24, "#757767");
           pixel(c, x + 9, y + 15, 39, 6, "#b2b099");
           pixel(c, x + 26, y + 22, 2, 17, "#535d50");
+          for (let row = 0; row < 3; row++)
+            pixel(c, x + 10, y + 24 + row * 6, 34, 1, "#525c53");
         }
       } else if (tile.kind === "bridge") {
         pixel(c, x + 2, y + 4, 56, 46, "#7b7254");
@@ -988,6 +1247,7 @@ export function drawBattlefield(c, s) {
             15,
             "#7c8d5b",
           );
+        drawScenery(c, 5, x + 30, y + 46, 51, 35);
       } else if (tile.kind === "rubble") {
         for (let i = 0; i < 3; i++)
           rock(c, x + 15 + i * 13, y + 39 - (i % 2) * 4, i);
@@ -1065,6 +1325,7 @@ export function fogArtwork(charted) {
 }
 
 export function drawWolf(c, x, y, step = 0) {
+  if (detailedEnemy(c, "wolf", x, y, step)) return;
   x = Math.round(x);
   y = Math.round(y);
   steppedOval(c, x - 14, y + 10, 30, 6, "#58634877");
@@ -1165,6 +1426,13 @@ export function drawCampScene(c, s) {
   }
   const tents = s.campUpgrades.tents || 0;
   function tent(x, y, color = "#b8b088", medical = false) {
+    if (drawScenery(c, 12, x + 20, y + 23, 58, 58)) {
+      if (medical) {
+        pixel(c, x + 11, y - 1, 10, 3, "#a3644d");
+        pixel(c, x + 14, y - 4, 3, 10, "#a3644d");
+      }
+      return;
+    }
     pixel(c, x - 5, y + 14, 54, 9, "#899065");
     for (let row = 0; row < 29; row++) {
       const half = Math.floor(row * 0.8);
@@ -1225,6 +1493,7 @@ export function drawCampScene(c, s) {
     pixel(c, 188 + i * 19, 276, 14, 3, "#b79a60");
     pixel(c, 190 + i * 19, 276, 2, 12, "#6c6240");
   }
+  drawScenery(c, 15, 213, 290, 62, 48);
   drawMapLabel(c, "Company stores", 213, 300);
   if (s.campUpgrades.forge) {
     pixel(c, 435, 276, 45, 18, "#8a8b6c");
@@ -1233,13 +1502,16 @@ export function drawCampScene(c, s) {
     pixel(c, 453, 296, 6, 14, "#655c3f");
     pixel(c, 443, 293, 27, 5, "#747b68");
     pixel(c, 443, 292, 27, 2, "#b3b79c");
+    drawScenery(c, 13, 459, 312, 58, 58);
     drawMapLabel(c, "Portable forge", 459, 325);
   }
   if (s.campUpgrades.watchpost) {
     fence(c, 460, 118, 39);
     pixel(c, 470, 88, 3, 32, "#796846");
-    pixel(c, 473, 89, 15, 10, "#b7a16e");
-    pixel(c, 475, 91, 10, 2, "#d7c58b");
+    pixel(c, 469, 86, 25, 3, "#b99a68");
+    for (let rung = 0; rung < 4; rung++)
+      pixel(c, 473, 103 + rung * 5, 14, 2, "#9c8059");
+    pixel(c, 480, 89, 5, 8, "#d4b270");
 
     drawMapLabel(c, "Watch post", 478, 153);
   }
@@ -1258,6 +1530,7 @@ export function drawCampScene(c, s) {
     pixel(c, 324, 226, 1, 8, "#55563c");
     steppedOval(c, 318, 232, 15, 10, "#535b4e");
     pixel(c, 319, 233, 12, 2, "#9b9f82");
+    drawScenery(c, 14, 325, 256, 44, 48);
   }
   const stations = {
     cook: { x: 344, y: 244 },
@@ -1307,11 +1580,11 @@ export function drawCampScene(c, s) {
     pixel(c, x + 26, y + 14, 3, 9, "#5c5038");
   }
   const pulse = Math.floor(performance.now() / 400) % 2;
-  if (campWorker(s, "cook")) pixel(c, 270, 182 - pulse * 3, 4, 8, "#e0d6b2");
-  if (campWorker(s, "smith")) pixel(c, 167 + pulse * 4, 197, 3, 4, "#e0b45f");
+  if (campWorker(s, "cook")) pixel(c, 325, 218 - pulse * 3, 3, 6, "#e0d6b2");
+  if (campWorker(s, "smith")) pixel(c, 456 + pulse * 4, 279, 2, 3, "#e0b45f");
   if (campWorker(s, "medic")) {
-    pixel(c, 445, 182 - pulse * 2, 10, 3, "#ded9b8");
-    pixel(c, 449, 179, 3, 9, "#ded9b8");
+    pixel(c, 478, 216 - pulse * 2, 8, 2, "#ded9b8");
+    pixel(c, 481, 213, 2, 8, "#ded9b8");
   }
   drawLighting(c, s, c.canvas.width, c.canvas.height);
   // The campfire remains bright after the night overlay.
@@ -1320,7 +1593,91 @@ export function drawCampScene(c, s) {
   pixel(c, 324, 241, 3, 10, "#f1d389");
 }
 
+function detailedLoadout(c, s, p, x, y) {
+  if (!atlasImages.has("heroes")) return false;
+  const gear = Object.fromEntries(
+    ["armor", "helmet", "shield", "weapon"].map((slot) => [
+      slot,
+      equippedItem(s, p, slot),
+    ]),
+  );
+  const metal = (item) =>
+    item.durability === 0
+      ? "#776d59"
+      : item.tier === 3
+        ? "#c9d9d1"
+        : item.tier === 2
+          ? "#b9c6b9"
+          : "#9aa59b";
+  if (gear.armor) {
+    const color = metal(gear.armor);
+    pixel(c, x - 6, y - 4, 4, 2, color);
+    pixel(c, x + 3, y - 3, 3, 2, color);
+    for (let row = 0; row < 3; row++)
+      for (let col = 0; col < 4; col++)
+        pixel(
+          c,
+          x - 4 + col * 2,
+          y + row * 2,
+          1,
+          1,
+          row % 2 ? "#697c75" : color,
+        );
+    pixel(c, x - 3, y + 6, 7, 1, "#a99163");
+  }
+  if (gear.helmet) {
+    pixel(c, x - 4, y - 14, 8, 3, metal(gear.helmet));
+    pixel(c, x - 5, y - 11, 10, 1, "#d5c79b");
+    if (gear.helmet.tier > 1) pixel(c, x, y - 15, 1, 5, "#d0be87");
+  }
+  if (gear.shield) {
+    if (["Shieldbearer", "Paladin"].includes(p.role)) {
+      pixel(c, x + 7, y, 1, 11, metal(gear.shield));
+      pixel(c, x + 8, y + 1, 6, 1, "#d3b677");
+      pixel(c, x + 9, y + 9, 3, 1, metal(gear.shield));
+    } else {
+      pixel(c, x - 14, y + 1, 7, 10, "#4b5b50");
+      pixel(c, x - 13, y + 2, 5, 7, metal(gear.shield));
+      pixel(c, x - 11, y + 4, 1, 4, "#d5bd7c");
+    }
+  }
+  const weapon = gear.weapon;
+  if (weapon) {
+    const steel = metal(weapon);
+    if (p.role === "Spearman") {
+      pixel(c, x - 10, y - 15, 1, 29, "#90714a");
+      pixel(c, x - 11, y - 18, 3, 5, steel);
+    } else if (["Wizard", "Druid"].includes(p.role)) {
+      pixel(c, x + 12, y - 10, 1, 23, "#8e714b");
+      pixel(c, x + 11, y - 15, 3, 1, steel);
+      if (weapon.tier === 3) pixel(c, x + 12, y - 14, 1, 2, "#b9d7dc");
+    } else if (["Cleric", "Shieldbearer"].includes(p.role)) {
+      pixel(c, x - 11, y + 4, 1, 10, "#90714a");
+      pixel(c, x - 13, y + 1, 4, 3, steel);
+    } else if (p.role === "Archer") {
+      pixel(c, x + 11, y - 5, 1, 3, "#b89a64");
+      pixel(c, x + 12, y + 5, 1, 3, "#b89a64");
+    } else if (p.role === "Rogue") {
+      pixel(c, x - 12, y + 7, 1, 5, steel);
+      pixel(c, x + 11, y + 5, 1, 5, steel);
+    } else {
+      for (let i = 0; i < 14; i++)
+        pixel(
+          c,
+          x - 9 + i,
+          y + 2 + Math.floor(i * 0.7),
+          weapon.twoHanded ? 2 : 1,
+          1,
+          steel,
+        );
+    }
+    if (weapon.tier === 3 && weapon.durability > 0)
+      pixel(c, x + 5, y + 10, 1, 1, "#e4e5be");
+  }
+  return true;
+}
 export function drawLoadout(c, s, p, x, y) {
+  if (detailedLoadout(c, s, p, x, y)) return;
   const helmet = equippedItem(s, p, "helmet"),
     shield = equippedItem(s, p, "shield"),
     weapon = equippedItem(s, p, "weapon"),
@@ -1509,6 +1866,39 @@ export function drawDungeonInterior(c, s) {
                 ? "#a39465"
                 : "#92856b",
       );
+      if (wall) {
+        for (let row = 0; row < 6; row++) {
+          const offset = row % 2 ? 8 : 0;
+          pixel(
+            c,
+            108 + x * 62,
+            7 + y * 60 + row * 8,
+            52,
+            1,
+            cave ? "#455c68" : "#3c453d",
+          );
+          for (let col = 0; col < 3; col++)
+            pixel(
+              c,
+              114 + x * 62 + col * 17 + offset,
+              1 + y * 60 + row * 8,
+              1,
+              7,
+              "#3c453d",
+            );
+        }
+        pixel(c, 107 + x * 62, y * 60, 54, 3, "#9d9b7b");
+      } else {
+        for (let k = 0; k < 12; k++) {
+          const px = 109 + x * 62 + Math.floor(noise(x * 23 + k, y) * 48);
+          const py = 4 + y * 60 + Math.floor(noise(y * 29 + k, x) * 44);
+          pixel(c, px, py, 3, 1, flooded ? "#a4b9a8" : "#b3a17d");
+        }
+        if (!flooded) {
+          pixel(c, 108 + x * 62, y * 60 + 55, 53, 1, "#685e4b");
+          pixel(c, 109 + x * 62, y * 60 + 1, 52, 1, "#b4a47e");
+        }
+      }
       if (
         [1, 5].includes(x) &&
         y === 1 &&
@@ -1517,7 +1907,7 @@ export function drawDungeonInterior(c, s) {
       )
         pixel(c, 125 + x * 62, 15 + y * 60, 14, 14, "#c2bca9");
       if (x === 8 && y === 5)
-        pixel(c, 120 + x * 62, 15 + y * 60, 25, 17, "#b89960");
+        drawScenery(c, 16, 136 + x * 62, 41 + y * 60, 33, 27);
       if (
         (x === layout.trap[0] &&
           y === layout.trap[1] &&
@@ -1627,6 +2017,18 @@ export function chestPreview(contents) {
 }
 
 export function drawFantasyEnemy(c, kind, x, y) {
+  if (detailedEnemy(c, kind, x, y)) return;
+  if (["raider", "bandit", "brute", "archer", "guard"].includes(kind)) {
+    drawCharacter(
+      c,
+      x,
+      y,
+      "#845841",
+      0,
+      kind === "archer" ? "Archer" : "Shieldbearer",
+    );
+    return;
+  }
   c.save();
   pixel(c, x - 11, y + 13, 23, 4, "#46513b66");
   if (["necromancer", "shaman", "sorcerer"].includes(kind)) {

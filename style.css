@@ -1380,3 +1380,12 @@ nav button[data-count]::after {
 .front-menu .menu-content h2,
 .front-menu .menu-content > button { font-family: "Silkscreen", monospace; }
 .title-home .menu-content h1 { font-size: 32px; }
+
+/* Shared pixel typography and warm material framing connect play to the title. */
+.brand { font-family: "Silkscreen", monospace; font-size: 16px; letter-spacing: 0; }
+.drawer-heading h2 { font-family: "Silkscreen", monospace; font-size: 17px; line-height: 1.4; }
+.card h3 { color: #534c33; letter-spacing: .25px; }
+.companion-portrait { border: 2px solid #9c8356; box-shadow: 0 0 0 1px #4e5038, 2px 2px #51442c33; image-rendering: pixelated; }
+.map-frame { box-shadow: inset 0 0 0 3px #776b4b, 0 3px 0 #222b20; }
+#drawer { border-color: #927b53; }
+button { border-radius: 0; }
