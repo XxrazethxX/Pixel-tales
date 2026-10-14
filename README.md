@@ -819,3 +819,20 @@ GAME_URL=http://127.0.0.1:3002/ PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_module
 
 
 The ground art pass adds smoothly shaded meadow, forest, haunted, quarry, riverbank and worn-earth textures, with clustered grass, moss, leaf litter, stones and soil patches. Roads include embedded gravel and worn tracks; fields have shaded furrows and individual crop stems. Camp clearings use scuffed earth, and battlefields share continuous material textures beneath a quieter tactical grid. Textures are cached per scene and biome. Movement, cover, terrain costs and saves are unchanged.
+
+
+## Visual consistency fixes (v0.34.1)
+
+Walking now bends the lower legs from a fixed seam rather than translating detached image strips. Robes retain their hems, polearms and shields stay intact, and wolf strides keep their legs attached to the torso. Combat moves companions and equipment together using integer pixel offsets. Attack effects wait for moving attackers to reach their tiles. Paused companies stop walking in place.
+
+Crop parcels now render before tall scenery, with explicit clearance around villages and the farmhouse. Farm beds sit beside the yard, rather than crossing the building. Staggered crop growth and varied grass shapes replace repeated cross-shaped patterns. Village yards use the same worn ground material as other scenes. Camp expansion no longer erases halves of surrounding trees, and idle activity labels no longer overlap companions.
+
+The scenery baking pipeline isolates eighteen complete alpha-connected objects from the original atlas. This preserves overhanging roofs and tree canopies without importing neighboring fragments. Battle obstacles render their detailed sprite once; procedural shapes are retained only as loading fallbacks. Mud uses irregular textured patches, terrain labels fit within their tiles, and rocky/ruined battlefield borders use appropriate scenery.
+
+Validation includes all **534 rules tests**, the art/customization smoke, field-life and fieldwork regressions, and a dedicated visual regression covering **90 walking poses**, fixed upper-body/hip seams, four wolf stride poses, crop/building clearance, paused animation and mobile layout.
+
+```sh
+GAME_URL=http://127.0.0.1:3002/ PLAYWRIGHT_MODULE=/tmp/pixel-browser/node_modules/playwright-core/index.mjs node scripts/visual-quality-smoke.mjs
+```
+
+[Inspect walking poses](docs/screenshots/quality-walking-poses.png) · [Farm and crop placement](docs/screenshots/quality-farm.png) · [Mobile world](docs/screenshots/quality-world-mobile.png)

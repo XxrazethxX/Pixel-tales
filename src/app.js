@@ -641,7 +641,28 @@ function captureCombatFeedback() {
   visualSnapshot = next;
   for (const cue of s.battle.feedback || [])
     if (cue.id > lastCue) {
-      attackEffects.push({ ...cue, start: now });
+      // Let a moving attacker reach its tile before launching the effect.
+      const motion = [...combatMotion.values()].find(
+        (m) => m.to.x === cue.from.x && m.to.y === cue.from.y,
+      );
+      const start = menuSettings.reduceMotion
+        ? now
+        : Math.max(now, motion ? motion.start + motion.duration : now);
+      attackEffects.push({ ...cue, start });
+      for (const effect of combatEffects)
+        if (
+          effect.start === now &&
+          effect.x === cue.to.x &&
+          effect.y === cue.to.y
+        )
+          effect.start = start;
+      for (const fallen of combatFalls.values())
+        if (
+          fallen.start === now &&
+          fallen.x === cue.to.x &&
+          fallen.y === cue.to.y
+        )
+          fallen.start = start;
       lastCue = cue.id;
     }
 }
@@ -665,6 +686,7 @@ function drawCombatEffects() {
   const now = performance.now();
   combatEffects = combatEffects.filter((e) => now - e.start < 950);
   for (const e of combatEffects) {
+    if (now < e.start) continue;
     const t = (now - e.start) / 950,
       x = 136 + e.x * 62,
       y = 28 + e.y * 60;
@@ -3219,10 +3241,20 @@ function rect(x, y, w, h, c) {
   ctx.fillStyle = c;
   ctx.fillRect(x, y, w, h);
 }
-function person(x, y, c, step = 0, role = "", variant = 0, appearance = {}) {
-  fieldEntityPose(x, y, (attackStep) =>
-    drawCharacter(ctx, x, y, c, step || attackStep, role, variant, appearance),
-  );
+function person(
+  x,
+  y,
+  c,
+  step = 0,
+  role = "",
+  variant = 0,
+  appearance = {},
+  equipped = false,
+) {
+  fieldEntityPose(x, y, () => {
+    drawCharacter(ctx, x, y, c, step, role, variant, appearance);
+    if (equipped) drawLoadout(ctx, s, appearance, x, y);
+  });
 }
 const view = { x: 0, y: 0, scale: 1 };
 function draw() {
@@ -3558,14 +3590,7 @@ function draw() {
             s.party[u.id].role,
             u.id,
             s.party[u.id],
-          );
-        if (!u.wildshape)
-          drawLoadout(
-            ctx,
-            s,
-            s.party[u.id],
-            136 + visual.x * 62,
-            28 + visual.y * 60,
+            true,
           );
         ctx.font = "bold 9px monospace";
         ctx.textAlign = "center";
@@ -3722,7 +3747,10 @@ function draw() {
     .sort((a, b) => a.y - b.y)
     .forEach((p) => {
       const step =
-        s.destination && !menuSettings.reduceMotion
+        s.destination &&
+        !s.fieldLife.paused &&
+        !drawerOpen &&
+        !menuSettings.reduceMotion
           ? [0, 1, 2, 1, 0, -1, -2, -1][
               Math.floor(performance.now() / 90 + p.i * 1.7) % 8
             ]
@@ -3735,8 +3763,8 @@ function draw() {
         s.party[p.i].role,
         p.i,
         s.party[p.i],
+        true,
       );
-      drawLoadout(ctx, s, s.party[p.i], p.x, p.y);
     });
   ctx.globalAlpha = 1;
   s.odyssey.prisoners.forEach((prisoner, index) => {
@@ -6137,6 +6165,7 @@ function drawAttackEffects() {
   const now = performance.now();
   attackEffects = attackEffects.filter((e) => now - e.start < 650);
   for (const e of attackEffects) {
+    if (now < e.start) continue;
     const t = (now - e.start) / 650,
       from = { x: 136 + e.from.x * 62, y: 28 + e.from.y * 60 },
       to = { x: 136 + e.to.x * 62, y: 28 + e.to.y * 60 };
@@ -7324,12 +7353,14 @@ function fieldEntityPose(x, y, drawSprite) {
     cue = attackEffects.findLast(
       (e) =>
         Math.hypot(e.from.x * 62 + 136 - x, e.from.y * 60 + 28 - y) < 5 &&
+        now >= e.start &&
         now - e.start < 500,
     );
   const hit = combatEffects.findLast(
     (e) =>
       e.amount < 0 &&
       Math.hypot(e.x * 62 + 136 - x, e.y * 60 + 28 - y) < 5 &&
+      now >= e.start &&
       now - e.start < 380,
   );
   ctx.save();
@@ -7340,15 +7371,17 @@ function fieldEntityPose(x, y, drawSprite) {
       lunge =
         Math.sin(t * Math.PI) *
         (["spell", "heal", "arrow"].includes(cue.type) ? 2 : 7);
-    ctx.translate(Math.cos(angle) * lunge, Math.sin(angle) * lunge);
-    ctx.rotate(Math.sin(t * Math.PI) * 0.08 * (Math.cos(angle) >= 0 ? 1 : -1));
+    ctx.translate(
+      Math.round(Math.cos(angle) * lunge),
+      Math.round(Math.sin(angle) * lunge),
+    );
   }
   if (hit) {
-    ctx.translate(Math.sin((now - hit.start) / 35) * 2, 0);
+    ctx.translate(Math.round(Math.sin((now - hit.start) / 35) * 2), 0);
     ctx.globalAlpha = 0.7;
   }
   ctx.translate(-x, -y);
-  drawSprite(cue ? Math.sin((now - cue.start) / 50) : 0);
+  drawSprite(0);
   ctx.restore();
 }
 function drawFieldLifeWorld() {
@@ -7388,7 +7421,7 @@ function drawFallenCombatants() {
       y = 28 + e.y * 60,
       t = menuSettings.reduceMotion
         ? 1
-        : Math.min(1, (performance.now() - e.start) / 600);
+        : Math.max(0, Math.min(1, (performance.now() - e.start) / 600));
     ctx.save();
     ctx.translate(x, y + 10);
     ctx.rotate((t * Math.PI) / 2);

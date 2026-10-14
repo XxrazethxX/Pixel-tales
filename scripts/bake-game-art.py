@@ -5,7 +5,7 @@ from pathlib import Path
 from io import BytesIO
 import base64
 import json
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
 import numpy as np
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -14,28 +14,60 @@ SPEC = {
     'props': ('scenery-source.png', 6, 3, 64, 64),
     'enemies': ('enemies-source.png', 4, 3, 48, 48),
 }
+def scenery_objects(source):
+    """Isolate each of the 18 disconnected objects, not nominal grid cells.
+
+    Oversized canopies and roofs cross the generated grid. Alpha-connected
+    components preserve those complete silhouettes without importing neighbors.
+    """
+    rgba = np.asarray(source)
+    solid = rgba[..., 3] > 100
+    seen = np.zeros(solid.shape, dtype=bool)
+    objects = []
+    for yy, xx in zip(*np.nonzero(solid)):
+        if seen[yy, xx]: continue
+        stack, points = [(int(yy), int(xx))], []
+        seen[yy, xx] = True
+        while stack:
+            y, x = stack.pop(); points.append((y, x))
+            for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                a, b = y + dy, x + dx
+                if 0 <= a < solid.shape[0] and 0 <= b < solid.shape[1] and solid[a,b] and not seen[a,b]:
+                    seen[a,b] = True; stack.append((a,b))
+        if len(points) < 1000: continue
+        ys, xs = zip(*points)
+        bounds = (max(0,min(xs)-2),max(0,min(ys)-2),min(source.width,max(xs)+3),min(source.height,max(ys)+3))
+        mask = np.zeros(solid.shape, dtype=np.uint8)
+        for y,x in points: mask[y,x] = 255
+        # Keep the object's own antialiased outline, with no neighboring matte.
+        mask = np.asarray(Image.fromarray(mask).filter(ImageFilter.MaxFilter(5)))
+        data = rgba.copy(); data[mask == 0] = 0
+        centre = ((min(xs)+max(xs))/2, (min(ys)+max(ys))/2)
+        objects.append((centre, Image.fromarray(data).crop(bounds)))
+    assert len(objects) == 18, f'Expected 18 distinct scenery objects, found {len(objects)}'
+    ordered = []
+    for low, high in ((0,400),(400,700),(700,source.height)):
+        row = sorted((o for o in objects if low <= o[0][1] < high), key=lambda o:o[0][0])
+        assert len(row) == 6, 'Scenery row must have six isolated objects'
+        ordered.extend(o[1] for o in row)
+    return ordered
+
 manifest = {}
 for kind, (name, columns, rows, width, height) in SPEC.items():
     source = Image.open(ROOT / 'assets/game-art' / name).convert('RGBA')
     atlas = Image.new('RGBA', (columns * width, rows * height))
+    isolated = scenery_objects(source) if kind == 'props' else None
     for index in range(columns * rows):
         col, row = index % columns, index // columns
-        if kind == 'props':
-            # The generated source uses uneven row baselines. These boundaries
-            # separate complete objects instead of cutting roofs/roots or
-            # bringing fragments of the previous row into the next sprite.
-            cuts = [(0,405,680,941), (0,402,674,941), (0,386,700,941),
-                    (0,383,710,941), (0,413,720,941), (0,391,680,941)][col]
-            top, bottom = cuts[row], cuts[row + 1]
-        elif kind == 'heroes':
-            top, bottom = (0,352,684,1024)[row:row + 2]
+        if isolated is not None:
+            cell = isolated[index]
         else:
-            top, bottom = round(row * source.height / rows), round((row + 1) * source.height / rows)
-        right = round((col + 1) * source.width / columns)
-        if kind == 'props' and index == 16:
-            # The wagon lantern crosses into the chest's nominal column.
-            right = 1345
-        cell = source.crop((round(col * source.width / columns), top, right, bottom))
+            if kind == 'heroes':
+                top, bottom = (0,352,684,1024)[row:row + 2]
+            else:
+                top, bottom = round(row * source.height / rows), round((row + 1) * source.height / rows)
+            cell = source.crop((round(col * source.width / columns), top,
+                                round((col + 1) * source.width / columns), bottom))
         rgba = np.asarray(cell).copy()
         rgba[rgba[..., 3] <= 16] = 0
         # Use the actual solid object, ignoring almost-transparent matte noise.

@@ -190,12 +190,31 @@ function detailedCharacter(role, coat, step, variant, appearance) {
     pixel(c, 12, head + 9, 1, 1, "#c6a063");
   }
   if (step) {
-    const legs = surface(30, 11),
-      g = legs.getContext("2d");
-    g.drawImage(image, 0, 29, 30, 11, 0, 0, 30, 11);
-    c.clearRect(0, 29, 30, 11);
-    c.drawImage(legs, 0, 0, 15, 11, 0, 29 + step, 15, 11);
-    c.drawImage(legs, 15, 0, 15, 11, 15, 29 - step, 15, 11);
+    // Bend from a fixed hip/ankle seam. Moving detached strips opens a gap
+    // below the torso and also cuts through shields, robes and polearms.
+    const start = ["Wizard", "Cleric", "Druid"].includes(role) ? 34 : 27;
+    const source = surface(image.width, image.height),
+      g = source.getContext("2d");
+    g.drawImage(image, 0, 0);
+    c.imageSmoothingEnabled = false;
+    for (const [left, width, lift] of [
+      [8, 7, Math.max(0, step)],
+      [15, 7, Math.max(0, -step)],
+    ]) {
+      if (!lift) continue;
+      c.clearRect(left, start, width, image.height - start);
+      c.drawImage(
+        source,
+        left,
+        start,
+        width,
+        image.height - start,
+        left,
+        start,
+        width,
+        image.height - start - lift,
+      );
+    }
   }
   return image;
 }
@@ -227,33 +246,8 @@ function detailedEnemy(c, kind, x, y, step = 0) {
   c.imageSmoothingEnabled = false;
   const left = Math.round(x - size / 2),
     top = Math.round(y + 16 - size);
-  if (kind === "wolf" && step) {
-    const stride = Math.round(step * 2),
-      legY = 35;
-    c.drawImage(tile, 0, 0, 48, legY, left, top, size, (size * legY) / 48);
-    c.drawImage(
-      tile,
-      0,
-      legY,
-      24,
-      13,
-      left + stride,
-      top + (size * legY) / 48,
-      size / 2,
-      (size * 13) / 48,
-    );
-    c.drawImage(
-      tile,
-      24,
-      legY,
-      24,
-      13,
-      left + size / 2 - stride,
-      top + (size * legY) / 48,
-      size / 2,
-      (size * 13) / 48,
-    );
-  } else c.drawImage(tile, left, top, size, size);
+  const pose = enemyWalkPose(tile, kind, step);
+  c.drawImage(pose, left, top, size, size);
   return true;
 }
 function noise(x, y, seed = 0) {
@@ -411,8 +405,12 @@ export function drawLandmark(c, p, index = 0) {
   )
     return;
   if (p.type === "town") {
-    steppedOval(c, x - 53, y - 32, 110, 83, "#8d9462");
-    steppedOval(c, x - 49, y - 27, 98, 72, "#b5ae7a");
+    c.save();
+    c.beginPath();
+    c.ellipse(x + 2, y + 9, 55, 41, 0, 0, Math.PI * 2);
+    c.clip();
+    c.drawImage(groundTexture(128, 96, "camp"), x - 59, y - 40);
+    c.restore();
     for (let i = 0; i < 30; i++)
       pixel(
         c,
@@ -455,12 +453,11 @@ export function drawLandmark(c, p, index = 0) {
     house(c, x - 15, y - 8, "#7d7259", true);
     fence(c, x - 32, y + 35, 65);
   } else if (p.type === "farm") {
+    // Separate small beds beside the yard, never painted across the farmhouse.
+    drawCropPlot(c, { x: x - 60, y: y + 8, w: 24, h: 26 });
+    drawCropPlot(c, { x: x + 39, y: y + 12, w: 26, h: 25 });
     house(c, x - 22, y - 8, "#8e7250");
     fence(c, x - 34, y + 30, 68);
-    for (let i = 0; i < 5; i++) {
-      pixel(c, x - 28 + i * 12, y + 14, 3, 12, "#a99953");
-      pixel(c, x - 31 + i * 12, y + 17, 9, 3, "#cbb270");
-    }
     pixel(c, x + 23, y - 10, 13, 14, "#7d8069");
     pixel(c, x + 25, y - 8, 9, 5, "#343e36");
   } else if (p.scene === "cave") {
@@ -621,12 +618,21 @@ export function worldArtwork() {
     pixel(c, x, 331, 3, 12, "#b4a477");
   pixel(c, bridgeX - 21, 329, 44, 2, "#d0bb86");
   pixel(c, bridgeX - 21, 343, 44, 2, "#776748");
+  // Crops belong to the ground layer, before any trees or buildings.
+  for (const plot of worldCropPlots) drawCropPlot(c, plot);
   for (let i = 0; i < 320; i++) {
     const x = 14 + Math.floor(noise(i, 1) * (WORLD.width - 28));
     const y = 20 + Math.floor(noise(i, 2) * (WORLD.height - 40));
     if (
       Math.abs(x - (475 + Math.sin(y / 65) * 38)) < 28 ||
-      places.some((p) => Math.hypot(p.x - x, p.y - y) < 66)
+      places.some((p) => Math.hypot(p.x - x, p.y - y) < 66) ||
+      worldCropPlots.some(
+        (p) =>
+          x > p.x - 20 &&
+          x < p.x + p.w + 20 &&
+          y > p.y - 25 &&
+          y < p.y + p.h + 25,
+      )
     )
       continue;
     if (terrainAt({ x, y }) === "highlands" || i % 6 === 0)
@@ -645,29 +651,7 @@ export function worldArtwork() {
         trees.push({ x, y, i });
     }
   trees.sort((a, b) => a.y - b.y).forEach((p) => drawTree(c, p.x, p.y, p.i));
-  // Regional landmarks are scenery: fields, scree, ghost lights and city terraces.
-  for (let row = 0; row < 4; row++)
-    for (let col = 0; col < 3; col++) {
-      const x = 52 + col * 78,
-        y = 365 + row * 30;
-      pixel(c, x, y, 65, 22, "#938b60");
-      for (let furrow = 0; furrow < 5; furrow++) {
-        const fx = x + furrow * 12;
-        pixel(c, fx, y + 2, 2, 18, "#756f50");
-        for (let stem = 0; stem < 5; stem++) {
-          const yy = y + 3 + stem * 3,
-            xx = fx + 3 + (stem % 2);
-          pixel(c, xx, yy, 1, 4, "#aaa36b");
-          pixel(c, xx - 1, yy, 3, 1, "#c5b77e");
-          pixel(c, xx + 1, yy + 1, 2, 1, "#b7a568");
-        }
-      }
-      for (let k = 0; k < 30; k++) {
-        const xx = x + Math.floor(noise(k, row * 3 + col) * 65),
-          yy = y + Math.floor(noise(k, 87) * 22);
-        pixel(c, xx, yy, 1, 1, "#aba278");
-      }
-    }
+  // Regional highland scree, ghost lights and city terraces.
   for (let i = 0; i < 70; i++) {
     const x = 520 + Math.floor(noise(i, 1) * 950),
       y = 22 + Math.floor(noise(i, 4) * 106);
@@ -1195,15 +1179,7 @@ export function venueArtwork(venue) {
   return image;
 }
 export function drawBattlefield(c, s) {
-  const style = s ? battlefield(s).style : "meadow",
-    colors = {
-      forest: ["#79885d", "#a8aa7c", "#afb184"],
-      ruin: ["#888770", "#a9a48a", "#b8b194"],
-      quarry: ["#8b7f64", "#b1a17f", "#bdac88"],
-      road: ["#8b8765", "#aea479", "#b8ad82"],
-      river: ["#7d927d", "#9aa88c", "#acb398"],
-      meadow: ["#879064", "#a8aa7c", "#afb184"],
-    }[style];
+  const style = s ? battlefield(s).style : "meadow";
   c.drawImage(groundTexture(768, 432, style), 0, 0);
   c.save();
   c.strokeStyle = "#ddd4a33b";
@@ -1221,27 +1197,31 @@ export function drawBattlefield(c, s) {
           for (let i = 0; i < 4; i++)
             pixel(c, x + 8 + i * 9, y + 12 + i * 8, 16, 2, "#9eb3a1");
         } else if (tile.kind === "tree") {
-          pixel(c, x + 26, y + 26, 8, 20, "#71583e");
-          steppedOval(c, x + 10, y + 7, 42, 31, "#4d6540");
-          steppedOval(c, x + 15, y + 5, 31, 21, "#7b8c54");
-          pixel(c, x + 19, y + 12, 10, 3, "#a0aa70");
-          drawScenery(c, 1, x + 30, y + 47, 50, 48);
+          if (!drawScenery(c, 1, x + 30, y + 47, 50, 48)) {
+            pixel(c, x + 26, y + 26, 8, 20, "#71583e");
+            steppedOval(c, x + 10, y + 7, 42, 31, "#4d6540");
+            steppedOval(c, x + 15, y + 5, 31, 21, "#7b8c54");
+            pixel(c, x + 19, y + 12, 10, 3, "#a0aa70");
+          }
         } else if (tile.kind === "log") {
-          pixel(c, x + 5, y + 20, 47, 14, "#635c42");
-          pixel(c, x + 7, y + 23, 42, 3, "#9b8456");
-          pixel(c, x + 4, y + 22, 7, 10, "#bd9d68");
-          drawScenery(c, 4, x + 29, y + 41, 50, 32);
+          if (!drawScenery(c, 4, x + 29, y + 41, 50, 32)) {
+            pixel(c, x + 5, y + 20, 47, 14, "#635c42");
+            pixel(c, x + 7, y + 23, 42, 3, "#9b8456");
+            pixel(c, x + 4, y + 22, 7, 10, "#bd9d68");
+          }
         } else if (tile.kind === "rock") {
-          steppedOval(c, x + 7, y + 9, 44, 35, "#6e786e");
-          steppedOval(c, x + 12, y + 7, 30, 24, "#b4b49a");
-          pixel(c, x + 18, y + 13, 13, 5, "#d0cbb0");
-          drawScenery(c, 3, x + 30, y + 44, 48, 42);
+          if (!drawScenery(c, 3, x + 30, y + 44, 48, 42)) {
+            steppedOval(c, x + 7, y + 9, 44, 35, "#6e786e");
+            steppedOval(c, x + 12, y + 7, 30, 24, "#b4b49a");
+            pixel(c, x + 18, y + 13, 13, 5, "#d0cbb0");
+          }
         } else if (tile.kind === "wagon") {
-          pixel(c, x + 5, y + 15, 48, 25, "#78664a");
-          pixel(c, x + 8, y + 18, 42, 17, "#b4a078");
-          pixel(c, x + 5, y + 37, 8, 7, "#48493b");
-          pixel(c, x + 43, y + 37, 8, 7, "#48493b");
-          drawScenery(c, 17, x + 29, y + 46, 52, 45);
+          if (!drawScenery(c, 17, x + 29, y + 46, 52, 45)) {
+            pixel(c, x + 5, y + 15, 48, 25, "#78664a");
+            pixel(c, x + 8, y + 18, 42, 17, "#b4a078");
+            pixel(c, x + 5, y + 37, 8, 7, "#48493b");
+            pixel(c, x + 43, y + 37, 8, 7, "#48493b");
+          }
         } else {
           pixel(c, x + 7, y + 17, 42, 24, "#757767");
           pixel(c, x + 9, y + 15, 39, 6, "#b2b099");
@@ -1256,25 +1236,31 @@ export function drawBattlefield(c, s) {
           pixel(c, x + 7, y + 8 + i * 7, 46, 1, "#d0bd8a");
         }
       } else if (tile.kind === "brush") {
-        for (let i = 0; i < 4; i++)
-          steppedOval(
-            c,
-            x + 5 + i * 11,
-            y + 29 - (i % 2) * 4,
-            17,
-            15,
-            "#7c8d5b",
-          );
-        drawScenery(c, 5, x + 30, y + 46, 51, 35);
+        if (!drawScenery(c, 5, x + 30, y + 46, 51, 35)) {
+          for (let i = 0; i < 4; i++)
+            steppedOval(
+              c,
+              x + 5 + i * 11,
+              y + 29 - (i % 2) * 4,
+              17,
+              15,
+              "#7c8d5b",
+            );
+        }
       } else if (tile.kind === "rubble") {
         for (let i = 0; i < 3; i++)
           rock(c, x + 15 + i * 13, y + 39 - (i % 2) * 4, i);
       } else {
-        steppedOval(c, x + 8, y + 22, 42, 22, "#8d8161");
-        pixel(c, x + 17, y + 34, 22, 3, "#a79870");
+        c.drawImage(
+          mudArtwork(
+            Math.floor(noise(tile.x, tile.y, s?.battle?.fieldSeed || 0) * 8),
+          ),
+          x + 3,
+          y + 3,
+        );
       }
       c.fillStyle = "#5b5c3e";
-      c.font = "9px monospace";
+      c.font = "7px monospace";
       c.textAlign = "left";
       c.fillText(
         tile.blocked
@@ -1282,15 +1268,29 @@ export function drawBattlefield(c, s) {
           : tile.kind === "bridge"
             ? "CROSSING"
             : tile.cover
-              ? `COVER ${tile.cover} · COST ${tile.cost}`
+              ? `COVER${tile.cover} COST${tile.cost}`
               : "COST 2",
         x + 5,
         y + 54,
       );
     }
-  drawTree(c, 41, 50, 0);
-  drawTree(c, 65, 94, 2);
-  drawTree(c, 36, 337, 1);
+  if (["quarry", "ruin"].includes(style)) {
+    for (const [x, y] of [
+      [40, 58],
+      [64, 117],
+      [36, 337],
+    ])
+      rock(c, x, y, 2);
+    if (style === "ruin")
+      for (let i = 0; i < 4; i++) {
+        pixel(c, 23 + i * 7, 202 + (i % 2) * 6, 10, 6, "#8d8c78");
+        pixel(c, 23 + i * 7, 202 + (i % 2) * 6, 10, 1, "#b8b297");
+      }
+  } else {
+    drawTree(c, 41, 50, 0);
+    if (style === "forest") drawTree(c, 65, 94, 2);
+    drawTree(c, 36, 337, 1);
+  }
   rock(c, 745, 101, 2);
   rock(c, 731, 356, 2);
 }
@@ -1403,6 +1403,7 @@ export function drawLighting(c, s, width, height) {
   lanternGlow(c, s.position.x, s.position.y, 24, night * 0.35);
 }
 let campGround;
+let campTrees = [];
 export function drawCampScene(c, s, motion = true) {
   if (!campGround) {
     campGround = surface(768, 432);
@@ -1426,7 +1427,7 @@ export function drawCampScene(c, s, motion = true) {
       if (Math.hypot((x - 335) / 245, (y - 225) / 180) > 1.02)
         trees.push({ x, y, i });
     }
-    trees.sort((a, b) => a.y - b.y).forEach((p) => drawTree(g, p.x, p.y, p.i));
+    campTrees = trees.sort((a, b) => a.y - b.y);
     for (let i = 0; i < 8; i++) rock(g, 230 + i * 27, 353 + (i % 2) * 5);
   }
   c.imageSmoothingEnabled = false;
@@ -1453,6 +1454,16 @@ export function drawCampScene(c, s, motion = true) {
       pixel(c, 145 + (i - 4) * 30, 225, 20, 26, "#7b815c");
       pixel(c, 147 + (i - 4) * 30, 228, 16, 20, "#c4b78c");
     }
+  }
+  const bounds = campBounds(s);
+  for (const tree of campTrees) {
+    const inside =
+      s.fieldwork.campSize &&
+      tree.x > bounds.left - 22 &&
+      tree.x < bounds.right + 22 &&
+      tree.y > bounds.top - 35 &&
+      tree.y < bounds.bottom + 15;
+    if (!inside) drawTree(c, tree.x, tree.y, tree.i);
   }
   const tents = s.campUpgrades.tents || 0;
   function tent(x, y, color = "#b8b088", medical = false) {
@@ -1616,7 +1627,7 @@ export function drawCampScene(c, s, motion = true) {
           : s.food > 0 && i % 2 === 0
             ? "Eating"
             : "Socializing";
-      drawMapLabel(c, activity, point.x, point.y + 31);
+      if (duty || sleeping) drawMapLabel(c, activity, point.x, point.y + 31);
       if (duty?.id === "smith") {
         pixel(c, point.x + 8, point.y - 5 + (phase % 2) * 7, 2, 12, "#665439");
         pixel(c, point.x + 5, point.y - 7 + (phase % 2) * 7, 8, 4, "#c0b491");
@@ -1653,7 +1664,7 @@ export function drawCampScene(c, s, motion = true) {
     pixel(c, x + 3, y + 14, 3, 9, "#5c5038");
     pixel(c, x + 26, y + 14, 3, 9, "#5c5038");
   }
-  const pulse = Math.floor(performance.now() / 400) % 2;
+  const pulse = motion ? Math.floor(performance.now() / 400) % 2 : 0;
   if (campWorker(s, "cook")) pixel(c, 325, 218 - pulse * 3, 3, 6, "#e0d6b2");
   if (campWorker(s, "smith")) pixel(c, 456 + pulse * 4, 279, 2, 3, "#e0b45f");
   if (campWorker(s, "medic")) {
@@ -2028,7 +2039,7 @@ export function drawDungeonInterior(c, s) {
 }
 
 export function drawFarmInterior(c, s) {
-  pixel(c, 0, 0, 768, 432, s.travelers?.farmRebuilt ? "#a3ad76" : "#8e986b");
+  c.drawImage(groundTexture(768, 432, "meadow"), 0, 0);
   pixel(c, 90, 48, 300, 275, "#7a674f");
   pixel(c, 103, 60, 274, 250, "#baa17a");
   for (let y = 70; y < 300; y += 18) pixel(c, 105, y, 270, 1, "#a78d69");
@@ -2038,15 +2049,9 @@ export function drawFarmInterior(c, s) {
   for (let i = 0; i < 5; i++) pixel(c, 267, 168 + i * 15, 50, 3, "#987d51");
   pixel(c, 510, 120, 54, 48, "#7b7b65");
   pixel(c, 519, 129, 35, 19, "#3f4d44");
-  for (let x = 455; x < 690; x += 27)
-    for (let y = 230; y < 355; y += 22) {
-      pixel(c, x, y, 4, 14, "#a59651");
-      pixel(c, x - 4, y + 4, 12, 3, "#ceb66f");
-    }
-  if (s.travelers?.farmRebuilt) {
-    for (let x = 455; x < 690; x += 27) pixel(c, x - 3, 227, 10, 4, "#d9c376");
-    drawMapLabel(c, "RESTORED FARM", 540, 365);
-  }
+  drawCropPlot(c, { x: 453, y: 225, w: 105, h: 123 });
+  drawCropPlot(c, { x: 575, y: 231, w: 106, h: 116 });
+  if (s.travelers?.farmRebuilt) drawMapLabel(c, "RESTORED FARM", 540, 365);
   if (s.travelers?.tamsin === "unknown")
     drawCharacter(c, 430, 335, "#ae8a62", 0, "", 3, { sex: "female" });
   drawMapLabel(c, "Ledger", 157, 132);
@@ -2691,11 +2696,16 @@ function paintGround(c, width, height, style) {
           : material === "haunted"
             ? "#647e70"
             : "#73854f";
-      const light = material === "haunted" ? "#a9b9a4" : "#b0bb82";
-      pixel(c, x - 2, y + 2, 5, 1, dark);
-      pixel(c, x, y - 2, 1, 4, dark);
-      pixel(c, x - 2, y, 1, 2, light);
-      pixel(c, x + 2, y - 1, 1, 3, light);
+      const light = material === "haunted" ? "#98aa99" : "#9faa76";
+      const height = 1 + Math.floor(noise(i, 54) * 3),
+        lean = noise(i, 55) > 0.5 ? 1 : -1;
+      pixel(c, x, y - height, 1, height, dark);
+      pixel(c, x + lean, y - height - 1, 1, 1, light);
+      if (r < 0.35) {
+        pixel(c, x - lean * 2, y - 1, 1, 2, dark);
+        pixel(c, x - lean * 3, y - 2, 1, 1, light);
+      }
+      if (r > 0.45) pixel(c, x + 2, y + 1, 2, 1, dark);
       if (r < 0.15) {
         pixel(c, x - 4, y + 1, 1, 2, dark);
         pixel(c, x + 4, y, 1, 3, dark);
@@ -2760,4 +2770,93 @@ function paintGround(c, width, height, style) {
           );
       }
   }
+}
+
+const enemyWalkImages = new Map();
+function enemyWalkPose(tile, kind, step) {
+  if (!step || kind !== "wolf") return tile;
+  const phase = Math.max(-2, Math.min(2, Math.round(step * 2))),
+    key = `${kind}:${phase}`;
+  if (enemyWalkImages.has(key)) return enemyWalkImages.get(key);
+  const image = surface(48, 48),
+    c = image.getContext("2d");
+  c.imageSmoothingEnabled = false;
+  c.drawImage(tile, 0, 0);
+  for (const [left, lift] of [
+    [0, Math.max(0, phase)],
+    [24, Math.max(0, -phase)],
+  ]) {
+    if (!lift) continue;
+    c.clearRect(left, 35, 24, 13);
+    c.drawImage(tile, left, 35, 24, 13, left, 35, 24, 13 - lift);
+  }
+  enemyWalkImages.set(key, image);
+  return image;
+}
+export const worldCropPlots = Object.freeze(
+  [
+    { x: 32, y: 365, w: 95, h: 46 },
+    { x: 149, y: 375, w: 91, h: 52 },
+    { x: 265, y: 361, w: 75, h: 68 },
+    { x: 216, y: 457, w: 89, h: 51 },
+  ].map(Object.freeze),
+);
+function drawCropPlot(c, { x, y, w, h }) {
+  c.save();
+  c.beginPath();
+  c.moveTo(x + 5, y);
+  c.lineTo(x + w - 4, y + 2);
+  c.lineTo(x + w, y + h - 4);
+  c.lineTo(x + w - 5, y + h);
+  c.lineTo(x + 2, y + h - 2);
+  c.lineTo(x, y + 5);
+  c.closePath();
+  c.clip();
+  pixel(c, x, y, w, h, "#8d8761");
+  for (let row = 0, yy = y + 5; yy < y + h; yy += 8, row++) {
+    for (let dx = 0; dx < w; dx += 5)
+      if (noise(dx, yy, 94) > 0.25) pixel(c, x + dx, yy + 4, 3, 1, "#797451");
+    for (let xx = x + 2 + (row % 2) * 2; xx < x + w; xx += 4) {
+      const n = noise(xx, yy, 91),
+        growth = groundNoise(xx, yy, 14, 97);
+      if (n < 0.17 || growth < 0.22) continue;
+      const stem = 3 + Math.floor(n * 4),
+        sx = xx + (Math.floor(n * 3) - 1),
+        sy = yy + Math.floor(noise(xx, yy, 92) * 4) - 2;
+      const head = growth > 0.5 ? "#c4af71" : "#afa16a";
+      pixel(c, sx, sy - stem, 1, stem + 2, "#a4945c");
+      pixel(c, sx, sy - stem - 1, 1, 2, head);
+      pixel(c, sx - 1, sy - stem, 1, 2, head);
+      if (n > 0.55) pixel(c, sx + 1, sy - stem - 1, 1, 1, "#cbb77d");
+      pixel(c, sx + 1, sy - 1, 1, 1, "#a89d62");
+    }
+  }
+  c.restore();
+}
+const mudImages = new Map();
+function mudArtwork(variant) {
+  if (mudImages.has(variant)) return mudImages.get(variant);
+  const image = surface(54, 46),
+    c = image.getContext("2d");
+  for (let y = 4; y < 42; y += 2)
+    for (let x = 3; x < 51; x += 2) {
+      const edge = ((x - 27) / 24) ** 2 + ((y - 25) / 17) ** 2,
+        n = noise(x, y, variant + 101);
+      if (
+        edge > 0.78 + groundNoise(x, y, 9, variant + 111) * 0.45 ||
+        (edge > 0.65 && n < 0.3)
+      )
+        continue;
+      pixel(
+        c,
+        x,
+        y,
+        2,
+        2,
+        ["#8d8161", "#9a8c6a", "#857b5f"][Math.floor(n * 3)],
+      );
+      if (n > 0.95) pixel(c, x, y, 2, 1, "#b2a27b");
+    }
+  mudImages.set(variant, image);
+  return image;
 }
